@@ -679,6 +679,7 @@ function PwaUpdatePrompt() {
 
 type AppRoute =
 	| "landing"
+	| "login"
 	| "app"
 	| "vaults"
 	| "secrets"
@@ -740,6 +741,7 @@ function AppShell({
 	const [busy, setBusy] = useState(false);
 
 	const installed = useMemo(isStandalone, []);
+	const selectedAccount = cloudflareAccounts.find((account) => account.id === selectedAccountId) ?? cloudflareAccounts[0] ?? null;
 	const vaultKeyState = vaultKey ? "Unlocked" : getPasskeyVaultRecord() ? "Locked" : "No key";
 	const pushState = subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline";
 	const cloudflareState = cloudflareToken ? "Connected" : "Disconnected";
@@ -859,18 +861,36 @@ function AppShell({
 		api
 			.exchangeCloudflareCode(code, codeVerifier, cloudflareConfig.redirectUri)
 			.then((accessToken) => {
+				const redirectTo = sessionStorage.getItem("sickrat.cf.redirectTo") || "/app";
 				localStorage.setItem("sickrat.cf.accessToken", accessToken);
 				sessionStorage.removeItem("sickrat.cf.state");
 				sessionStorage.removeItem("sickrat.cf.codeVerifier");
+				sessionStorage.removeItem("sickrat.cf.redirectTo");
 				setCloudflareToken(accessToken);
 				setCloudflareStatus("Cloudflare login complete. Loading accounts...");
-				navigate("/app", { replace: true });
+				navigate(redirectTo, { replace: true });
 			})
 			.catch((error: unknown) =>
 				setCloudflareStatus(error instanceof Error ? error.message : "Cloudflare login failed."),
 			)
 			.finally(() => setBusy(false));
 	}, [cloudflareConfig, isCloudflareCallback, navigate]);
+
+	useEffect(() => {
+		if (route !== "login" || isCloudflareCallback) return;
+		if (cloudflareToken) {
+			navigate("/app", { replace: true });
+			return;
+		}
+		if (cloudflareConfig) void loginWithCloudflare("/app");
+	}, [cloudflareConfig, cloudflareToken, isCloudflareCallback, navigate, route]);
+
+	useEffect(() => {
+		const isProtectedConsoleRoute = route !== "landing" && route !== "login" && route !== "approval" && !isCloudflareCallback;
+		if (!isProtectedConsoleRoute || cloudflareToken || !cloudflareConfig) return;
+		const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+		void loginWithCloudflare(currentPath.startsWith("/app") ? currentPath : "/app");
+	}, [cloudflareConfig, cloudflareToken, isCloudflareCallback, route]);
 
 	useEffect(() => {
 		if (!cloudflareToken) return;
@@ -881,9 +901,13 @@ function AppShell({
 				setSelectedAccountId((current) => current || accounts[0]?.id || "");
 				setCloudflareStatus(accounts.length > 0 ? "Cloudflare login complete. Select an account to create a vault." : "Cloudflare login complete, but no accounts were returned.");
 			})
-			.catch((error: unknown) =>
-				setCloudflareStatus(error instanceof Error ? error.message : "Failed to load Cloudflare accounts."),
-			);
+			.catch((error: unknown) => {
+				localStorage.removeItem("sickrat.cf.accessToken");
+				setCloudflareToken(null);
+				setCloudflareAccounts([]);
+				setSelectedAccountId("");
+				setCloudflareStatus(error instanceof Error ? `Cloudflare session expired: ${error.message}` : "Cloudflare session expired.");
+			});
 	}, [cloudflareToken]);
 
 	useEffect(() => {
@@ -1058,7 +1082,7 @@ function AppShell({
 		}
 	}
 
-	async function loginWithCloudflare() {
+	async function loginWithCloudflare(redirectTo = "/app") {
 		if (!cloudflareConfig?.clientId) {
 			setCloudflareStatus("Cloudflare OAuth client is not configured on this Worker.");
 			return;
@@ -1068,6 +1092,7 @@ function AppShell({
 		const codeChallenge = await sha256Base64Url(codeVerifier);
 		sessionStorage.setItem("sickrat.cf.state", state);
 		sessionStorage.setItem("sickrat.cf.codeVerifier", codeVerifier);
+		sessionStorage.setItem("sickrat.cf.redirectTo", redirectTo);
 
 		const params = new URLSearchParams({
 			response_type: "code",
@@ -1086,11 +1111,13 @@ function AppShell({
 		localStorage.removeItem("sickrat.cf.accessToken");
 		sessionStorage.removeItem("sickrat.cf.state");
 		sessionStorage.removeItem("sickrat.cf.codeVerifier");
+		sessionStorage.removeItem("sickrat.cf.redirectTo");
 		setCloudflareToken(null);
 		setCloudflareAccounts([]);
 		setSelectedAccountId("");
 		setProvisioning(null);
 		setCloudflareStatus("Cloudflare session cleared from this browser.");
+		navigate("/", { replace: true });
 	}
 
 	async function provisionSelectedAccount() {
@@ -1447,6 +1474,62 @@ function AppShell({
 		);
 	}
 
+	if (isCloudflareCallback && !cloudflareToken) {
+		return (
+			<main className="auth-page">
+				<PwaUpdatePrompt />
+				<section className="auth-card">
+					<Link className="brand-lockup" to="/">
+						<span className="brand-mark" aria-hidden="true">
+							<span className="mark-core">SR</span>
+						</span>
+						<span>Sickrat</span>
+					</Link>
+					<div>
+						<p className="eyebrow">Cloudflare callback</p>
+						<h1>Completing login</h1>
+						<p>Finishing the OAuth exchange and returning you to the console.</p>
+					</div>
+					<p className="screen-status">{cloudflareStatus}</p>
+				</section>
+			</main>
+		);
+	}
+
+	if (route === "login" || (route !== "landing" && !isCloudflareCallback && !cloudflareToken)) {
+		const redirectTarget = route === "login" ? "/app" : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+		return (
+			<main className="auth-page">
+				<PwaUpdatePrompt />
+				<section className="auth-card">
+					<Link className="brand-lockup" to="/">
+						<span className="brand-mark" aria-hidden="true">
+							<span className="mark-core">SR</span>
+						</span>
+						<span>Sickrat</span>
+					</Link>
+					<div>
+						<p className="eyebrow">Cloudflare login</p>
+						<h1>Opening your vault console</h1>
+						<p>
+							Sickrat uses your Cloudflare account as the owner boundary. After login, you will return
+							to the console route you opened.
+						</p>
+					</div>
+					<div className="actions">
+						<button disabled={busy || !cloudflareConfig?.clientId} onClick={() => loginWithCloudflare(redirectTarget)}>
+							{cloudflareConfig?.clientId ? "Continue With Cloudflare" : "Preparing Login"}
+						</button>
+						<Link className="button-link secondary-link" to="/">
+							Back Home
+						</Link>
+					</div>
+					<p className="screen-status">{cloudflareStatus}</p>
+				</section>
+			</main>
+		);
+	}
+
 	if (route !== "landing") {
 		const renderCloudflareControls = () => (
 			<section className="console app-panel cloudflare-panel">
@@ -1494,9 +1577,9 @@ function AppShell({
 							</button>
 						</>
 					) : (
-						<button disabled={busy || !cloudflareConfig?.clientId} onClick={loginWithCloudflare}>
-							Log In With Cloudflare
-						</button>
+							<button disabled={busy || !cloudflareConfig?.clientId} onClick={() => loginWithCloudflare("/app/settings")}>
+								Log In With Cloudflare
+							</button>
 					)}
 				</div>
 			</section>
@@ -1625,8 +1708,8 @@ function AppShell({
 				<>
 					<section className="app-command">
 						<div>
-							<p className="eyebrow">Private quarantine console</p>
-							<h1>Sickrat vault control</h1>
+							<p className="eyebrow">Owner console</p>
+							<h1>Dashboard</h1>
 							<p className="lede">
 								Manage encrypted refs, admitted devices, phone approvals, and account-owned Cloudflare
 								resources from one owner console.
@@ -1634,8 +1717,8 @@ function AppShell({
 						</div>
 						<div className="app-status-board" aria-label="Console status">
 							<div>
-								<span>Cloudflare</span>
-								<strong>{cloudflareState}</strong>
+								<span>Account</span>
+								<strong>{selectedAccount?.name ?? "Connected"}</strong>
 							</div>
 							<div>
 								<span>Push</span>
@@ -1650,7 +1733,7 @@ function AppShell({
 					<section className="dashboard-grid">
 						<Link className="dashboard-card" to="/app/vaults">
 							<span>Vault</span>
-							<strong>{cloudflareToken ? "Cloudflare connected" : "Needs login"}</strong>
+							<strong>default</strong>
 							<small>{capabilities?.database.configured ? "D1 binding configured" : "D1 binding missing"}</small>
 						</Link>
 						<Link className="dashboard-card" to="/app/secrets">
@@ -1670,7 +1753,6 @@ function AppShell({
 						</Link>
 					</section>
 					<section className="app-grid">
-						{renderCloudflareControls()}
 						{renderVaultKeyPanel()}
 						<section className="console app-panel">
 							<div>
@@ -1954,21 +2036,36 @@ function AppShell({
 				<PwaUpdatePrompt />
 				<div className="console-shell">
 					<aside className="console-sidebar">
-						<Link className="brand-lockup" to="/">
-							<span className="brand-mark" aria-hidden="true">
-								<span className="mark-core">SR</span>
-							</span>
-							<span>Sickrat</span>
-						</Link>
+						<div className="sidebar-head">
+							<Link className="brand-lockup" to="/">
+								<span className="brand-mark" aria-hidden="true">
+									<span className="mark-core">SR</span>
+								</span>
+								<span>Sickrat</span>
+							</Link>
+							<span className="vault-badge">default vault</span>
+						</div>
 						<nav className="sidebar-nav" aria-label="Console">
-							<NavLink end to="/app">Dashboard</NavLink>
-							<NavLink to="/app/vaults">Vaults</NavLink>
-							<NavLink to="/app/secrets">Secrets</NavLink>
-							<NavLink to="/app/approvals">Approvals</NavLink>
-							<NavLink to="/app/devices">Devices</NavLink>
-							<NavLink to="/app/settings">Settings</NavLink>
+							<NavLink end to="/app"><span aria-hidden="true">DB</span>Dashboard</NavLink>
+							<NavLink to="/app/vaults"><span aria-hidden="true">VT</span>Vaults</NavLink>
+							<NavLink to="/app/secrets"><span aria-hidden="true">SK</span>Server Secrets</NavLink>
+							<NavLink to="/app/approvals"><span aria-hidden="true">GR</span>Approval Grants</NavLink>
+							<NavLink to="/app/devices"><span aria-hidden="true">MC</span>Machines</NavLink>
+							<NavLink to="/app/settings"><span aria-hidden="true">ST</span>Account Settings</NavLink>
 						</nav>
-						<a className="sidebar-skill" href="/skills/sickrat.md">Agent skill</a>
+						<div className="sidebar-footer">
+							<a className="sidebar-skill" href="/skills/sickrat.md">Agent skill</a>
+							<div className="account-chip">
+								<span className="account-avatar">{(selectedAccount?.name ?? "CF").slice(0, 2).toUpperCase()}</span>
+								<div>
+									<strong>{selectedAccount?.name ?? "Cloudflare"}</strong>
+									<span>{selectedAccount?.id ?? "Connected account"}</span>
+								</div>
+							</div>
+							<button className="secondary logout-button" type="button" onClick={logoutCloudflare}>
+								Log Out
+							</button>
+						</div>
 					</aside>
 					<section className="console-main">
 						<header className="console-topbar">
@@ -1977,7 +2074,7 @@ function AppShell({
 								<strong>{window.location.host}</strong>
 							</div>
 							<div className="topbar-status">
-								<span>{cloudflareState}</span>
+								<span>{selectedAccount?.name ?? cloudflareState}</span>
 								<span>{pushState}</span>
 								<span>{installed ? "Installed" : "Browser"}</span>
 								<span>{vaultKeyState}</span>
@@ -2002,7 +2099,7 @@ function AppShell({
 				</Link>
 				<div className="nav-actions">
 					<a href="#how-it-works">How it works</a>
-					<Link to="/app">Log in</Link>
+					<Link to="/login">Log in</Link>
 				</div>
 			</nav>
 
@@ -2019,7 +2116,7 @@ function AppShell({
 						<a className="button-link" href="/skills/sickrat.md">
 							Give your agent the skill
 						</a>
-						<Link className="button-link secondary-link" to="/app">
+						<Link className="button-link secondary-link" to="/login">
 							Log in to console
 						</Link>
 					</div>
@@ -2152,7 +2249,7 @@ Approved. Encrypted grant sealed for this request.`}</pre>
 					<a className="button-link" href="/skills/sickrat.md">
 						Open agent skill
 					</a>
-					<Link className="button-link secondary-link" to="/app">
+					<Link className="button-link secondary-link" to="/login">
 						Log in to console
 					</Link>
 				</div>
@@ -2165,6 +2262,7 @@ function App() {
 	return (
 		<Routes>
 			<Route path="/" element={<AppShell route="landing" />} />
+			<Route path="/login" element={<AppShell route="login" />} />
 			<Route path="/app" element={<AppShell route="app" />} />
 			<Route path="/app/vaults" element={<AppShell route="vaults" />} />
 			<Route path="/app/secrets" element={<AppShell route="secrets" />} />

@@ -1667,7 +1667,121 @@ button.deny {
 	}
 
 	.app-page {
-		padding-top: calc(14px + var(--safe-top));
+		max-width: none;
+		padding: calc(10px + var(--safe-top)) calc(8px + var(--safe-right)) calc(96px + var(--safe-bottom))
+			calc(8px + var(--safe-left));
+	}
+
+	.console-shell {
+		align-items: start;
+		gap: 10px;
+		grid-template-columns: 72px minmax(0, 1fr);
+		min-height: calc(100svh - var(--safe-top) - var(--safe-bottom) - 20px);
+	}
+
+	.console-sidebar {
+		gap: 10px;
+		min-height: calc(100svh - var(--safe-top) - var(--safe-bottom) - 20px);
+		padding: 8px;
+		position: sticky;
+		top: calc(10px + var(--safe-top));
+	}
+
+	.console-sidebar .brand-lockup {
+		justify-content: center;
+	}
+
+	.console-sidebar .brand-lockup > span:not(.brand-mark) {
+		display: none;
+	}
+
+	.console-sidebar .brand-mark {
+		height: 38px;
+	}
+
+	.console-sidebar .mark-core {
+		font-size: 9px;
+		height: 22px;
+		width: 22px;
+	}
+
+	.sidebar-head {
+		justify-items: center;
+		padding-bottom: 8px;
+	}
+
+	.vault-badge,
+	.sidebar-skill,
+	.account-chip div {
+		display: none;
+	}
+
+	.sidebar-nav {
+		gap: 8px;
+		grid-template-columns: 1fr;
+	}
+
+	.sidebar-nav a {
+		border-color: var(--line);
+		font-size: 0;
+		gap: 0;
+		grid-template-columns: 1fr;
+		justify-items: center;
+		min-height: 48px;
+		padding: 8px;
+	}
+
+	.sidebar-nav a span {
+		border-color: transparent;
+		font-size: 10px;
+		height: 30px;
+		width: 30px;
+	}
+
+	.sidebar-footer {
+		gap: 8px;
+		justify-items: center;
+		padding-top: 8px;
+	}
+
+	.account-chip {
+		background: transparent;
+		border-color: transparent;
+		grid-template-columns: 1fr;
+		padding: 0;
+	}
+
+	.account-avatar {
+		height: 42px;
+		width: 42px;
+	}
+
+	.logout-button {
+		font-size: 0;
+		min-height: 42px;
+		padding: 0;
+		width: 100%;
+	}
+
+	.logout-button::before {
+		content: "OUT";
+		font-size: 10px;
+	}
+
+	.console-topbar {
+		position: relative;
+		top: auto;
+	}
+
+	.console-topbar,
+	.route-heading,
+	.app-command {
+		margin-bottom: 10px;
+	}
+
+	.console-topbar strong,
+	.topbar-status span {
+		font-size: 10px;
 	}
 
 	.site-nav {

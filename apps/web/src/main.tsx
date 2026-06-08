@@ -1365,7 +1365,6 @@ function AppShell({
 	if (route === "approval" && requestId) {
 		return (
 			<main className="approval-screen">
-				<PwaUpdatePrompt />
 				<Link className="back-link" to="/app">
 					Back to console
 				</Link>
@@ -1477,7 +1476,6 @@ function AppShell({
 	if (isCloudflareCallback && !cloudflareToken) {
 		return (
 			<main className="auth-page">
-				<PwaUpdatePrompt />
 				<section className="auth-card">
 					<Link className="brand-lockup" to="/">
 						<span className="brand-mark" aria-hidden="true">
@@ -1500,7 +1498,6 @@ function AppShell({
 		const redirectTarget = route === "login" ? "/app" : `${window.location.pathname}${window.location.search}${window.location.hash}`;
 		return (
 			<main className="auth-page">
-				<PwaUpdatePrompt />
 				<section className="auth-card">
 					<Link className="brand-lockup" to="/">
 						<span className="brand-mark" aria-hidden="true">
@@ -2033,7 +2030,6 @@ function AppShell({
 
 		return (
 			<main className="app-page">
-				<PwaUpdatePrompt />
 				<div className="console-shell">
 					<aside className="console-sidebar">
 						<div className="sidebar-head">
@@ -2089,7 +2085,6 @@ function AppShell({
 
 	return (
 		<main className="product-page">
-			<PwaUpdatePrompt />
 			<nav className="site-nav" aria-label="Sickrat">
 				<Link className="brand-lockup" to="/">
 					<span className="brand-mark" aria-hidden="true">
@@ -2260,22 +2255,25 @@ Approved. Encrypted grant sealed for this request.`}</pre>
 
 function App() {
 	return (
-		<Routes>
-			<Route path="/" element={<AppShell route="landing" />} />
-			<Route path="/login" element={<AppShell route="login" />} />
-			<Route path="/app" element={<AppShell route="app" />} />
-			<Route path="/app/vaults" element={<AppShell route="vaults" />} />
-			<Route path="/app/secrets" element={<AppShell route="secrets" />} />
-			<Route path="/app/approvals" element={<AppShell route="approvals" />} />
-			<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />
-			<Route path="/app/devices" element={<AppShell route="devices" />} />
-			<Route path="/app/settings" element={<AppShell route="settings" />} />
-			<Route path="/cf/callback" element={<AppShell route="settings" isCloudflareCallback />} />
-			<Route path="/approve/:requestId" element={<ApprovalRoute />} />
-			<Route path="/secrets" element={<Navigate to="/app/secrets" replace />} />
-			<Route path="/pair" element={<Navigate to="/app/devices" replace />} />
-			<Route path="*" element={<Navigate to="/" replace />} />
-		</Routes>
+		<>
+			<PwaUpdatePrompt />
+			<Routes>
+				<Route path="/" element={<AppShell route="landing" />} />
+				<Route path="/login" element={<AppShell route="login" />} />
+				<Route path="/app" element={<AppShell route="app" />} />
+				<Route path="/app/vaults" element={<AppShell route="vaults" />} />
+				<Route path="/app/secrets" element={<AppShell route="secrets" />} />
+				<Route path="/app/approvals" element={<AppShell route="approvals" />} />
+				<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />
+				<Route path="/app/devices" element={<AppShell route="devices" />} />
+				<Route path="/app/settings" element={<AppShell route="settings" />} />
+				<Route path="/cf/callback" element={<AppShell route="settings" isCloudflareCallback />} />
+				<Route path="/approve/:requestId" element={<ApprovalRoute />} />
+				<Route path="/secrets" element={<Navigate to="/app/secrets" replace />} />
+				<Route path="/pair" element={<Navigate to="/app/devices" replace />} />
+				<Route path="*" element={<Navigate to="/" replace />} />
+			</Routes>
+		</>
 	);
 }
 

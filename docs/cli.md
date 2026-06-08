@@ -1,0 +1,102 @@
+# CLI Design
+
+The CLI should feel familiar to users of tools like the 1Password CLI while adding mobile approval as the core security primitive.
+
+## Commands
+
+```sh
+sickrat login
+sickrat vault create [name]
+sickrat vault list
+sickrat vault use <vault>
+
+sickrat pair <worker-url>
+sickrat request <ref> [--message <why>]
+sickrat inject -i <template> -o <output>
+sickrat run [--env-file <file>] -- <command> [args...]
+```
+
+## Secret References
+
+Secret refs are arbitrary unique strings inside a vault. URI-style refs are optional, not required.
+
+Examples of valid refs:
+
+```text
+leumi
+openai/api-key
+prod/database/url
+sickrat://default/openai/api-key
+```
+
+Future env-file auto-detection should use `sickrat://...` as the explicit marker so the CLI can distinguish literal values from secret references without extra config.
+
+## `run`
+
+`sickrat run` resolves references, requests mobile approval, injects plaintext values into the child process environment, and removes plaintext from CLI-owned buffers after the process exits or fails to spawn.
+
+Agents should include `--message` whenever they request approval so the phone screen explains the work being performed, not only the secret reference.
+
+Example:
+
+```sh
+sickrat run --env-file .env -- npm test
+```
+
+Input `.env`:
+
+```env
+OPENAI_API_KEY=sickrat://default/openai/api-key
+DATABASE_URL=sickrat://prod/database/url
+```
+
+Behavior:
+
+- Parse `.env` without mutating it.
+- Request approval for all referenced secrets as one approval bundle.
+- Spawn the child process with resolved environment values.
+- Mask secret values in CLI diagnostics.
+- Never persist plaintext values to disk.
+
+## `inject`
+
+`sickrat inject` renders templates containing secret references.
+
+Example:
+
+```sh
+sickrat inject -i wrangler.toml.tpl -o wrangler.toml
+```
+
+Template:
+
+```toml
+[vars]
+OPENAI_API_KEY = "sickrat://default/openai/api-key"
+```
+
+The output file contains plaintext, so the CLI must warn by default and support `--stdout` for piping into another process.
+
+## Security Reality Of Env Vars
+
+Environment variables are useful because most tools support them. They are not perfect. After injection, the child process can read the values, and OS-level tooling may expose process environments in some circumstances.
+
+Future safer modes:
+
+- stdin secret delivery
+- short-lived local Unix socket
+- temp files with restrictive permissions
+- command-specific integrations
+- agent protocol integration
+
+## Local CLI State
+
+The CLI stores:
+
+- user-selected Cloudflare account id
+- Worker endpoint
+- device id
+- device private key in the OS keychain when possible
+- non-sensitive cache metadata
+
+The CLI must not store vault root keys or plaintext vault secrets.

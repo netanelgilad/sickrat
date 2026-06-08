@@ -1,0 +1,1576 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { useRegisterSW } from "virtual:pwa-register/react";
+import "./styles.css";
+
+type Capabilities = {
+	ok: true;
+	push: {
+		supported: boolean;
+		configured: boolean;
+		vapidPublicKey: string | null;
+	};
+	database: {
+		configured: boolean;
+	};
+	ios: {
+		requiresHomeScreenInstall: boolean;
+	};
+};
+
+type PushRecord = {
+	id: string;
+	endpoint: string;
+	createdAt: string;
+};
+
+type ApprovalRequest = {
+	id: string;
+	deviceId: string | null;
+	device: string;
+	command: string;
+	message: string | null;
+	secretRefs: string[];
+	status: "pending" | "approved" | "denied";
+	createdAt: string;
+	decidedAt: string | null;
+	ephemeralPublicKey: JsonWebKey | null;
+	grantReadyAt: string | null;
+};
+
+type SecretMetadata = {
+	id: string;
+	ref: string;
+	label: string;
+	kdf: string;
+	createdAt: string;
+	updatedAt: string;
+};
+
+type SecretCiphertext = SecretMetadata & {
+	ciphertext: string;
+	iv: string;
+	salt: string;
+};
+
+type PairingCodeDetails = {
+	code: string;
+	deviceId: string;
+	label: string;
+	expiresAt: string;
+	approvedAt: string | null;
+	expired: boolean;
+};
+
+type CloudflareOAuthConfig = {
+	clientId: string | null;
+	authUrl: string;
+	tokenUrl: string;
+	redirectUri: string;
+	scopes: string[];
+};
+
+type CloudflareAccount = {
+	id: string;
+	name: string;
+};
+
+type ProvisioningStep = {
+	id: "d1" | "secrets-store";
+	label: string;
+	status: "pending" | "success" | "error";
+	detail?: string;
+	error?: string;
+};
+
+type CloudflareProvisioning = {
+	ok: boolean;
+	accountId: string;
+	steps: ProvisioningStep[];
+	resources: Record<string, unknown>;
+	next: string;
+};
+
+type PasskeyVaultRecord = {
+	credentialId: string;
+	salt: string;
+	iv: string;
+	wrappedKey: string;
+	createdAt: string;
+	kdf: "WebAuthn-PRF-HKDF-SHA256:AES-256-GCM:v1";
+};
+
+const api = {
+	async getCapabilities() {
+		const response = await fetch("/api/capabilities");
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as Capabilities;
+	},
+	async saveSubscription(subscription: PushSubscriptionJSON) {
+		const response = await fetch("/api/push/subscribe", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ subscription }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as PushRecord;
+	},
+	async sendTest(id: string) {
+		const response = await fetch("/api/push/test", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ id }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	},
+	async getLatestApproval(endpoint: string) {
+		const response = await fetch("/api/approvals/latest", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ endpoint }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { approval: ApprovalRequest | null }).approval;
+	},
+	async listSecrets() {
+		const response = await fetch("/api/secrets");
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { secrets: SecretMetadata[] }).secrets;
+	},
+	async saveSecret(payload: {
+		ref: string;
+		label: string;
+		ciphertext: string;
+		iv: string;
+		salt: string;
+		kdf: string;
+	}) {
+		const response = await fetch("/api/secrets", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(payload),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { secret: SecretMetadata }).secret;
+	},
+	async resolveSecrets(refs: string[]) {
+		const response = await fetch("/api/secrets/resolve", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ refs }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { secrets: SecretCiphertext[] }).secrets;
+	},
+	async getCloudflareOAuthConfig() {
+		const response = await fetch("/api/cloudflare/oauth-config");
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as CloudflareOAuthConfig;
+	},
+	async exchangeCloudflareCode(code: string, codeVerifier: string, redirectUri: string) {
+		const response = await fetch("/api/cloudflare/oauth-token", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ code, codeVerifier, redirectUri }),
+		});
+		const body = (await response.json()) as { accessToken?: string; error?: string };
+		if (!response.ok || !body.accessToken) throw new Error(body.error ?? "Cloudflare token exchange failed.");
+		return body.accessToken;
+	},
+	async getCloudflareAccounts(accessToken: string) {
+		const response = await fetch("/api/cloudflare/accounts", {
+			headers: { authorization: `Bearer ${accessToken}` },
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { accounts: CloudflareAccount[] }).accounts;
+	},
+	async provisionCloudflare(accessToken: string, accountId: string) {
+		try {
+			const response = await fetch("/api/cloudflare/provision", {
+				method: "POST",
+				headers: {
+					authorization: `Bearer ${accessToken}`,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ accountId }),
+			});
+			const body = (await response.json()) as CloudflareProvisioning | { error?: string };
+			if (!response.ok) throw new Error("error" in body && body.error ? body.error : `Vault creation request failed with ${response.status}.`);
+			return body as CloudflareProvisioning;
+		} catch (error) {
+			throw new Error(error instanceof Error ? error.message : "Vault creation request could not reach the Worker.");
+		}
+	},
+	async getApproval(id: string) {
+		const response = await fetch(`/api/approvals/${encodeURIComponent(id)}`);
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { approval: ApprovalRequest }).approval;
+	},
+	async decideApproval(id: string, action: "approve" | "deny") {
+		const response = await fetch(`/api/approvals/${encodeURIComponent(id)}/${action}`, {
+			method: "POST",
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	},
+	async sendGrant(id: string, grantCiphertext: unknown) {
+		const response = await fetch(`/api/approvals/${encodeURIComponent(id)}/grant`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ grantCiphertext }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	},
+	async getPairingCode(code: string) {
+		const response = await fetch(`/api/devices/pairing-codes/${encodeURIComponent(code)}`);
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as PairingCodeDetails;
+	},
+	async approvePairingCode(code: string) {
+		const response = await fetch(`/api/devices/pairing-codes/${encodeURIComponent(code)}/approve`, { method: "POST" });
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	},
+};
+
+function base64UrlToUint8Array(value: string) {
+	const padding = "=".repeat((4 - (value.length % 4)) % 4);
+	const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+	const raw = window.atob(base64);
+	const output = new Uint8Array(raw.length);
+	for (let i = 0; i < raw.length; i += 1) output[i] = raw.charCodeAt(i);
+	return output;
+}
+
+function bytesToBase64Url(bytes: Uint8Array) {
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return window.btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function randomBase64Url(byteLength: number) {
+	const bytes = new Uint8Array(byteLength);
+	crypto.getRandomValues(bytes);
+	return bytesToBase64Url(bytes);
+}
+
+async function sha256Base64Url(value: string) {
+	const bytes = new TextEncoder().encode(value);
+	const digest = await crypto.subtle.digest("SHA-256", bytes);
+	return bytesToBase64Url(new Uint8Array(digest));
+}
+
+const legacyVaultKeyStorageKey = "sickrat.vault.key";
+const passkeyVaultStorageKey = "sickrat.vault.passkey";
+const passkeyWrapInfo = new TextEncoder().encode("sickrat:vault-key-wrap:v1");
+const passkeyWrapSalt = new TextEncoder().encode("sickrat:webauthn-prf:v1");
+const grantWrapInfo = new TextEncoder().encode("sickrat:cli-grant:v1");
+const grantWrapSalt = new TextEncoder().encode("sickrat:grant-ecdh:v1");
+
+function migrateStorageKey(storage: Storage, oldKey: string, newKey: string, removeOld = false) {
+	const existing = storage.getItem(newKey);
+	const legacy = storage.getItem(oldKey);
+	if (!existing && legacy) storage.setItem(newKey, legacy);
+	if (removeOld && legacy) storage.removeItem(oldKey);
+}
+
+migrateStorageKey(localStorage, "my-secret.vault.key", legacyVaultKeyStorageKey);
+migrateStorageKey(localStorage, "my-secret.vault.passkey", passkeyVaultStorageKey);
+migrateStorageKey(localStorage, "my-secret.cf.accessToken", "sickrat.cf.accessToken");
+migrateStorageKey(sessionStorage, "my-secret.cf.state", "sickrat.cf.state", true);
+migrateStorageKey(sessionStorage, "my-secret.cf.codeVerifier", "sickrat.cf.codeVerifier", true);
+
+async function createVaultKey() {
+	return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+}
+
+function getPasskeyVaultRecord() {
+	const stored = localStorage.getItem(passkeyVaultStorageKey);
+	return stored ? (JSON.parse(stored) as PasskeyVaultRecord) : null;
+}
+
+async function derivePasskeyWrappingKey(prfOutput: ArrayBuffer) {
+	const baseKey = await crypto.subtle.importKey("raw", prfOutput, "HKDF", false, ["deriveKey"]);
+	return crypto.subtle.deriveKey(
+		{ name: "HKDF", hash: "SHA-256", salt: passkeyWrapSalt, info: passkeyWrapInfo },
+		baseKey,
+		{ name: "AES-GCM", length: 256 },
+		false,
+		["encrypt", "decrypt"],
+	);
+}
+
+function getPrfOutput(credential: PublicKeyCredential) {
+	const results = credential.getClientExtensionResults() as {
+		prf?: {
+			enabled?: boolean;
+			results?: {
+				first?: ArrayBuffer;
+			};
+		};
+	};
+	return results.prf?.results?.first ?? null;
+}
+
+async function wrapVaultKey(vaultKey: CryptoKey, wrappingKey: CryptoKey) {
+	const iv = new Uint8Array(12);
+	crypto.getRandomValues(iv);
+	const rawVaultKey = await crypto.subtle.exportKey("raw", vaultKey);
+	const wrapped = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrappingKey, rawVaultKey);
+	return { iv: bytesToBase64Url(iv), wrappedKey: bytesToBase64Url(new Uint8Array(wrapped)) };
+}
+
+async function unwrapVaultKey(record: PasskeyVaultRecord, wrappingKey: CryptoKey) {
+	const raw = await crypto.subtle.decrypt(
+		{ name: "AES-GCM", iv: base64UrlToUint8Array(record.iv) },
+		wrappingKey,
+		base64UrlToUint8Array(record.wrappedKey),
+	);
+	return crypto.subtle.importKey("raw", raw, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+}
+
+async function createPasskeyWrappedVaultKey(existingKey?: CryptoKey | null) {
+	if (!window.PublicKeyCredential) throw new Error("Passkeys are not available in this browser.");
+
+	const salt = new Uint8Array(32);
+	const challenge = new Uint8Array(32);
+	const userId = new Uint8Array(16);
+	crypto.getRandomValues(salt);
+	crypto.getRandomValues(challenge);
+	crypto.getRandomValues(userId);
+
+	const credential = (await navigator.credentials.create({
+		publicKey: {
+			challenge,
+			rp: { name: "Sickrat" },
+			user: {
+				id: userId,
+				name: "sickrat-vault",
+				displayName: "Sickrat Vault",
+			},
+			pubKeyCredParams: [
+				{ type: "public-key", alg: -7 },
+				{ type: "public-key", alg: -257 },
+			],
+			authenticatorSelection: {
+				authenticatorAttachment: "platform",
+				residentKey: "preferred",
+				userVerification: "required",
+			},
+			timeout: 60_000,
+			extensions: {
+				prf: {
+					eval: { first: salt },
+				},
+			},
+		},
+	} as CredentialCreationOptions)) as PublicKeyCredential | null;
+
+	if (!credential) throw new Error("Passkey creation was cancelled.");
+	const prfOutput = getPrfOutput(credential);
+	if (!prfOutput) {
+		throw new Error("This passkey did not return WebAuthn PRF output. Safari 18+ or another PRF-capable browser is required.");
+	}
+
+	const vaultKey = existingKey ?? (await createVaultKey());
+	const wrappingKey = await derivePasskeyWrappingKey(prfOutput);
+	const wrapped = await wrapVaultKey(vaultKey, wrappingKey);
+	const record: PasskeyVaultRecord = {
+		credentialId: bytesToBase64Url(new Uint8Array(credential.rawId)),
+		salt: bytesToBase64Url(salt),
+		iv: wrapped.iv,
+		wrappedKey: wrapped.wrappedKey,
+		createdAt: new Date().toISOString(),
+		kdf: "WebAuthn-PRF-HKDF-SHA256:AES-256-GCM:v1",
+	};
+	localStorage.setItem(passkeyVaultStorageKey, JSON.stringify(record));
+	localStorage.removeItem(legacyVaultKeyStorageKey);
+	return vaultKey;
+}
+
+async function unlockPasskeyVaultKey() {
+	const record = getPasskeyVaultRecord();
+	if (!record) return null;
+
+	const challenge = new Uint8Array(32);
+	crypto.getRandomValues(challenge);
+	const credential = (await navigator.credentials.get({
+		publicKey: {
+			challenge,
+			allowCredentials: [
+				{
+					type: "public-key",
+					id: base64UrlToUint8Array(record.credentialId),
+				},
+			],
+			userVerification: "required",
+			timeout: 60_000,
+			extensions: {
+				prf: {
+					eval: { first: base64UrlToUint8Array(record.salt) },
+				},
+			},
+		},
+	} as CredentialRequestOptions)) as PublicKeyCredential | null;
+
+	if (!credential) throw new Error("Passkey unlock was cancelled.");
+	const prfOutput = getPrfOutput(credential);
+	if (!prfOutput) throw new Error("This browser did not return WebAuthn PRF output for unlock.");
+	const wrappingKey = await derivePasskeyWrappingKey(prfOutput);
+	return unwrapVaultKey(record, wrappingKey);
+}
+
+async function getVaultKeyFingerprint(key: CryptoKey) {
+	const jwk = await crypto.subtle.exportKey("jwk", key);
+	return sha256Base64Url(jwk.k ?? "");
+}
+
+async function encryptSecretValue(value: string, key: CryptoKey) {
+	const iv = new Uint8Array(12);
+	crypto.getRandomValues(iv);
+	const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(value));
+	return {
+		ciphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
+		iv: bytesToBase64Url(iv),
+		salt: await getVaultKeyFingerprint(key),
+		kdf: "AES-256-GCM:local-vault-key:v1",
+	};
+}
+
+async function decryptSecretValue(secret: SecretCiphertext, key: CryptoKey) {
+	if (secret.kdf !== "AES-256-GCM:local-vault-key:v1") {
+		throw new Error(`Unsupported secret encryption format for ${secret.ref}: ${secret.kdf}`);
+	}
+	const plaintext = await crypto.subtle.decrypt(
+		{ name: "AES-GCM", iv: base64UrlToUint8Array(secret.iv) },
+		key,
+		base64UrlToUint8Array(secret.ciphertext),
+	);
+	return new TextDecoder().decode(plaintext);
+}
+
+async function encryptGrantForCli(payload: { secrets: Record<string, string>; approvedAt: string }, cliPublicKey: JsonWebKey) {
+	const cliKey = await crypto.subtle.importKey(
+		"jwk",
+		cliPublicKey,
+		{ name: "ECDH", namedCurve: "P-256" },
+		false,
+		[],
+	);
+	const keyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+	const sharedSecret = await crypto.subtle.deriveBits(
+		{ name: "ECDH", public: cliKey },
+		keyPair.privateKey,
+		256,
+	);
+	const hkdfKey = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveKey"]);
+	const aesKey = await crypto.subtle.deriveKey(
+		{ name: "HKDF", hash: "SHA-256", salt: grantWrapSalt, info: grantWrapInfo },
+		hkdfKey,
+		{ name: "AES-GCM", length: 256 },
+		false,
+		["encrypt"],
+	);
+	const iv = new Uint8Array(12);
+	crypto.getRandomValues(iv);
+	const ciphertext = await crypto.subtle.encrypt(
+		{ name: "AES-GCM", iv },
+		aesKey,
+		new TextEncoder().encode(JSON.stringify(payload)),
+	);
+	return {
+		alg: "ECDH-P256-HKDF-SHA256-AES-256-GCM:v1",
+		ephemeralPublicKey: await crypto.subtle.exportKey("jwk", keyPair.publicKey),
+		iv: bytesToBase64Url(iv),
+		ciphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
+	};
+}
+
+function isStandalone() {
+	return (
+		window.matchMedia("(display-mode: standalone)").matches ||
+		("standalone" in window.navigator && Boolean(window.navigator.standalone))
+	);
+}
+
+function PwaUpdatePrompt() {
+	const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
+	const [updating, setUpdating] = useState(false);
+	const {
+		offlineReady: [offlineReady, setOfflineReady],
+		needRefresh: [needRefresh, setNeedRefresh],
+		updateServiceWorker,
+	} = useRegisterSW({
+		onRegisteredSW(_swUrl, registration) {
+			setRegistration(registration ?? null);
+		},
+	});
+
+	useEffect(() => {
+		if (!registration) return;
+
+		const checkForUpdate = () => {
+			if (document.visibilityState === "visible") {
+				void registration.update();
+			}
+		};
+
+		checkForUpdate();
+		const interval = window.setInterval(checkForUpdate, 30_000);
+		document.addEventListener("visibilitychange", checkForUpdate);
+
+		return () => {
+			window.clearInterval(interval);
+			document.removeEventListener("visibilitychange", checkForUpdate);
+		};
+	}, [registration]);
+
+	if (!offlineReady && !needRefresh) return null;
+
+	const reloadApp = async () => {
+		setUpdating(true);
+		setNeedRefresh(false);
+		setOfflineReady(false);
+		try {
+			await updateServiceWorker(true);
+		} finally {
+			window.setTimeout(() => {
+				const url = new URL(window.location.href);
+				url.searchParams.set("updated", Date.now().toString());
+				window.location.replace(url.toString());
+			}, 300);
+		}
+	};
+
+	return (
+		<div className="update-bar" role="status">
+			<span>{updating ? "Updating..." : offlineReady ? "Ready offline" : "Update available"}</span>
+			<div>
+				{needRefresh ? (
+					<button disabled={updating} onClick={reloadApp}>
+						{updating ? "Reloading" : "Reload"}
+					</button>
+				) : null}
+				<button
+					disabled={updating}
+					onClick={() => {
+						setOfflineReady(false);
+						setNeedRefresh(false);
+					}}
+				>
+					Dismiss
+				</button>
+			</div>
+		</div>
+	);
+}
+
+function App() {
+	const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+	const [status, setStatus] = useState("Loading Cloudflare Worker capabilities...");
+	const [subscription, setSubscription] = useState<PushRecord | null>(null);
+	const [approval, setApproval] = useState<ApprovalRequest | null>(null);
+	const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
+	const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
+	const [secretStatus, setSecretStatus] = useState("Set up a local vault key before adding secrets.");
+	const [secretForm, setSecretForm] = useState({
+		label: "",
+		ref: "",
+		value: "",
+	});
+	const [pairingCode, setPairingCode] = useState("");
+	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
+	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown by the CLI.");
+	const [cloudflareConfig, setCloudflareConfig] = useState<CloudflareOAuthConfig | null>(null);
+	const [cloudflareToken, setCloudflareToken] = useState<string | null>(() => localStorage.getItem("sickrat.cf.accessToken"));
+	const [cloudflareAccounts, setCloudflareAccounts] = useState<CloudflareAccount[]>([]);
+	const [selectedAccountId, setSelectedAccountId] = useState("");
+	const [provisioning, setProvisioning] = useState<CloudflareProvisioning | null>(null);
+	const [cloudflareStatus, setCloudflareStatus] = useState(
+		cloudflareToken ? "Cloudflare session found in this browser." : "Cloudflare login is not connected.",
+	);
+	const [busy, setBusy] = useState(false);
+
+	const installed = useMemo(isStandalone, []);
+	const requestId = useMemo(() => new URLSearchParams(window.location.search).get("request"), []);
+	const screen = useMemo(() => new URLSearchParams(window.location.search).get("screen"), []);
+	const isCloudflareCallback = window.location.pathname === "/cf/callback";
+
+	useEffect(() => {
+		if (!("serviceWorker" in navigator)) return;
+		const handleMessage = (event: MessageEvent) => {
+			const data = event.data as { type?: string; url?: string };
+			if (data.type === "SICKRAT_NAVIGATE" && data.url) {
+				const target = new URL(data.url, window.location.origin);
+				if (target.origin === window.location.origin) window.location.assign(target.href);
+			}
+		};
+		navigator.serviceWorker.addEventListener("message", handleMessage);
+		return () => navigator.serviceWorker.removeEventListener("message", handleMessage);
+	}, []);
+
+	useEffect(() => {
+		api
+			.getCapabilities()
+			.then((next) => {
+				setCapabilities(next);
+				setStatus(next.push.configured ? "Push backend is configured." : "Add VAPID keys to enable remote push.");
+			})
+			.catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Failed to load capabilities."));
+	}, []);
+
+	useEffect(() => {
+		if (getPasskeyVaultRecord()) {
+			setSecretStatus("Vault key is protected by passkey. Unlock before adding secrets.");
+		} else if (localStorage.getItem(legacyVaultKeyStorageKey)) {
+			setSecretStatus("Legacy local vault key found. Create a passkey to protect it.");
+		} else {
+			setSecretStatus("Create a passkey-protected vault key before adding secrets.");
+		}
+	}, []);
+
+	useEffect(() => {
+		api
+			.listSecrets()
+			.then(setSecrets)
+			.catch((error: unknown) => setSecretStatus(error instanceof Error ? error.message : "Failed to load secrets."));
+	}, []);
+
+	useEffect(() => {
+		api
+			.getCloudflareOAuthConfig()
+			.then((config) => {
+				setCloudflareConfig(config);
+				if (!config.clientId) setCloudflareStatus("Cloudflare OAuth client is not configured on this Worker.");
+			})
+			.catch((error: unknown) =>
+				setCloudflareStatus(error instanceof Error ? error.message : "Failed to load Cloudflare OAuth config."),
+			);
+	}, []);
+
+	useEffect(() => {
+		if (!isCloudflareCallback || !cloudflareConfig) return;
+		const params = new URLSearchParams(window.location.search);
+		const error = params.get("error");
+		if (error) {
+			setCloudflareStatus(params.get("error_description") ?? error);
+			return;
+		}
+		const code = params.get("code");
+		const state = params.get("state");
+		const expectedState = sessionStorage.getItem("sickrat.cf.state");
+		const codeVerifier = sessionStorage.getItem("sickrat.cf.codeVerifier");
+		if (!code || !state || state !== expectedState || !codeVerifier || !cloudflareConfig.clientId) {
+			setCloudflareStatus("Cloudflare login callback is missing a valid code, state, or PKCE verifier.");
+			return;
+		}
+
+		setBusy(true);
+		setCloudflareStatus("Completing Cloudflare login...");
+		api
+			.exchangeCloudflareCode(code, codeVerifier, cloudflareConfig.redirectUri)
+			.then((accessToken) => {
+				localStorage.setItem("sickrat.cf.accessToken", accessToken);
+				sessionStorage.removeItem("sickrat.cf.state");
+				sessionStorage.removeItem("sickrat.cf.codeVerifier");
+				setCloudflareToken(accessToken);
+				setCloudflareStatus("Cloudflare login complete. Loading accounts...");
+				window.history.replaceState({}, "", "/");
+			})
+			.catch((error: unknown) =>
+				setCloudflareStatus(error instanceof Error ? error.message : "Cloudflare login failed."),
+			)
+			.finally(() => setBusy(false));
+	}, [cloudflareConfig, isCloudflareCallback]);
+
+	useEffect(() => {
+		if (!cloudflareToken) return;
+		api
+			.getCloudflareAccounts(cloudflareToken)
+			.then((accounts) => {
+				setCloudflareAccounts(accounts);
+				setSelectedAccountId((current) => current || accounts[0]?.id || "");
+				setCloudflareStatus(accounts.length > 0 ? "Cloudflare login complete. Select an account to create a vault." : "Cloudflare login complete, but no accounts were returned.");
+			})
+			.catch((error: unknown) =>
+				setCloudflareStatus(error instanceof Error ? error.message : "Failed to load Cloudflare accounts."),
+			);
+	}, [cloudflareToken]);
+
+	useEffect(() => {
+		if (!capabilities?.push.configured) return;
+		if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+		if (Notification.permission !== "granted") return;
+
+		navigator.serviceWorker.ready
+			.then((registration) => registration.pushManager.getSubscription())
+			.then((existing) => {
+				if (!existing) return;
+				return api.saveSubscription(existing.toJSON());
+			})
+			.then((saved) => {
+				if (!saved) return;
+				setSubscription(saved);
+				setStatus("Push is already enabled on this device.");
+			})
+			.catch((error: unknown) => {
+				setStatus(error instanceof Error ? error.message : "Failed to sync existing push subscription.");
+			});
+	}, [capabilities]);
+
+	useEffect(() => {
+		if (!requestId) return;
+		api
+			.getApproval(requestId)
+			.then((next) => {
+				setApproval(next);
+				setStatus(`Loaded request from ${next.device}.`);
+			})
+			.catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Failed to load request."));
+	}, [requestId]);
+
+	useEffect(() => {
+		if (requestId || !subscription?.endpoint) return;
+
+		let checking = false;
+		const routeToPendingApproval = async () => {
+			if (checking || document.visibilityState !== "visible") return;
+			checking = true;
+			try {
+				const latest = await api.getLatestApproval(subscription.endpoint);
+				if (latest?.status === "pending") {
+					window.location.assign(`/?request=${encodeURIComponent(latest.id)}`);
+				}
+			} catch {
+				// This is only a notification-click fallback; the push setup status should stay stable.
+			} finally {
+				checking = false;
+			}
+		};
+
+		const handleVisibility = () => {
+			void routeToPendingApproval();
+		};
+		window.addEventListener("focus", handleVisibility);
+		document.addEventListener("visibilitychange", handleVisibility);
+
+		return () => {
+			window.removeEventListener("focus", handleVisibility);
+			document.removeEventListener("visibilitychange", handleVisibility);
+		};
+	}, [requestId, subscription]);
+
+	useEffect(() => {
+		if (!subscription?.id) return;
+
+		let socket: WebSocket | null = null;
+		let closed = false;
+		let reconnectTimer = 0;
+		let heartbeatTimer = 0;
+
+		const connect = () => {
+			if (closed) return;
+			const url = new URL("/api/realtime", window.location.href);
+			url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+			url.searchParams.set("subscriptionId", subscription.id);
+			socket = new WebSocket(url);
+
+			socket.addEventListener("open", () => {
+				setStatus("Realtime approval channel connected.");
+				heartbeatTimer = window.setInterval(() => {
+					if (socket?.readyState === WebSocket.OPEN) socket.send("ping");
+				}, 25_000);
+			});
+
+			socket.addEventListener("message", (event) => {
+				if (typeof event.data !== "string" || event.data === "pong") return;
+				try {
+					const message = JSON.parse(event.data) as { type?: string; approval?: ApprovalRequest; url?: string };
+					if (message.type === "approval.requested" && message.approval?.id) {
+						window.location.assign(message.url ?? `/?request=${encodeURIComponent(message.approval.id)}`);
+					}
+				} catch {
+					// Ignore non-JSON realtime messages.
+				}
+			});
+
+			socket.addEventListener("close", () => {
+				window.clearInterval(heartbeatTimer);
+				if (!closed) reconnectTimer = window.setTimeout(connect, 2_000);
+			});
+
+			socket.addEventListener("error", () => {
+				socket?.close();
+			});
+		};
+
+		connect();
+
+		return () => {
+			closed = true;
+			window.clearTimeout(reconnectTimer);
+			window.clearInterval(heartbeatTimer);
+			socket?.close();
+		};
+	}, [subscription?.id]);
+
+	async function enablePush() {
+		if (!capabilities?.push.vapidPublicKey) {
+			setStatus("VAPID keys are missing. Run `npm run vapid` and set Worker secrets.");
+			return;
+		}
+		if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+			setStatus("This browser does not expose Service Worker PushManager.");
+			return;
+		}
+
+		setBusy(true);
+		try {
+			const permission = await Notification.requestPermission();
+			if (permission !== "granted") {
+				setStatus(`Notification permission is ${permission}.`);
+				return;
+			}
+
+			const registration = await navigator.serviceWorker.ready;
+			const existing = await registration.pushManager.getSubscription();
+			const nextSubscription =
+				existing ??
+				(await registration.pushManager.subscribe({
+					userVisibleOnly: true,
+					applicationServerKey: base64UrlToUint8Array(capabilities.push.vapidPublicKey),
+				}));
+
+			const saved = await api.saveSubscription(nextSubscription.toJSON());
+			setSubscription(saved);
+			setStatus("Push subscription saved in Cloudflare D1.");
+		} catch (error) {
+			setStatus(error instanceof Error ? error.message : "Push subscription failed.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function sendTest() {
+		if (!subscription) {
+			setStatus("Enable push first.");
+			return;
+		}
+		setBusy(true);
+		try {
+			await api.sendTest(subscription.id);
+			setStatus("Test push request sent to the browser push endpoint.");
+		} catch (error) {
+			setStatus(error instanceof Error ? error.message : "Test push failed.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function loginWithCloudflare() {
+		if (!cloudflareConfig?.clientId) {
+			setCloudflareStatus("Cloudflare OAuth client is not configured on this Worker.");
+			return;
+		}
+		const state = randomBase64Url(24);
+		const codeVerifier = randomBase64Url(72);
+		const codeChallenge = await sha256Base64Url(codeVerifier);
+		sessionStorage.setItem("sickrat.cf.state", state);
+		sessionStorage.setItem("sickrat.cf.codeVerifier", codeVerifier);
+
+		const params = new URLSearchParams({
+			response_type: "code",
+			client_id: cloudflareConfig.clientId,
+			redirect_uri: cloudflareConfig.redirectUri,
+			scope: cloudflareConfig.scopes.join(" "),
+			state,
+			code_challenge: codeChallenge,
+			code_challenge_method: "S256",
+		});
+		setCloudflareStatus("Redirecting to Cloudflare...");
+		window.location.href = `${cloudflareConfig.authUrl}?${params.toString()}`;
+	}
+
+	function logoutCloudflare() {
+		localStorage.removeItem("sickrat.cf.accessToken");
+		sessionStorage.removeItem("sickrat.cf.state");
+		sessionStorage.removeItem("sickrat.cf.codeVerifier");
+		setCloudflareToken(null);
+		setCloudflareAccounts([]);
+		setSelectedAccountId("");
+		setProvisioning(null);
+		setCloudflareStatus("Cloudflare session cleared from this browser.");
+	}
+
+	async function provisionSelectedAccount() {
+		if (!cloudflareToken) {
+			setCloudflareStatus("Log in with Cloudflare first.");
+			return;
+		}
+		if (!selectedAccountId) {
+			setCloudflareStatus("Select a Cloudflare account first.");
+			return;
+		}
+
+		setBusy(true);
+		setProvisioning({
+			ok: false,
+			accountId: selectedAccountId,
+			steps: [
+				{ id: "d1", label: "D1 database", status: "pending", detail: "Creating or finding sickrat-vault..." },
+				{ id: "secrets-store", label: "Secrets Store", status: "pending", detail: "Creating or finding sickrat..." },
+			],
+			resources: {},
+			next: "",
+		});
+		setCloudflareStatus("Creating account-owned Sickrat vault resources...");
+		try {
+			const result = await api.provisionCloudflare(cloudflareToken, selectedAccountId);
+			setProvisioning(result);
+			setCloudflareStatus(
+				result.ok
+					? "Created or found all account-owned vault resources."
+					: "Vault resource creation completed with errors. See step details below.",
+			);
+		} catch (error) {
+			setCloudflareStatus(error instanceof Error ? error.message : "Cloudflare vault creation failed.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function decide(action: "approve" | "deny") {
+		if (!approval) return;
+		setBusy(true);
+		try {
+			if (action === "approve" && approval.ephemeralPublicKey) {
+				let key = vaultKey;
+				if (!key) {
+					setStatus("Unlocking vault with passkey...");
+					key = await unlockPasskeyVaultKey();
+					if (!key) throw new Error("Unlock the vault before approving this CLI request.");
+					setVaultKey(key);
+				}
+				setStatus("Loading encrypted secrets from Cloudflare...");
+				const encryptedSecrets = await api.resolveSecrets(approval.secretRefs);
+				const plaintextSecrets: Record<string, string> = {};
+				for (const secret of encryptedSecrets) {
+					plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
+				}
+				setStatus("Encrypting ephemeral grant for the CLI...");
+				const grant = await encryptGrantForCli(
+					{ secrets: plaintextSecrets, approvedAt: new Date().toISOString() },
+					approval.ephemeralPublicKey,
+				);
+				await api.sendGrant(approval.id, grant);
+			} else {
+				await api.decideApproval(approval.id, action);
+			}
+			const next = await api.getApproval(approval.id);
+			setApproval(next);
+			setStatus(action === "approve" ? "Approved. The CLI can now decrypt its ephemeral grant." : "Denied. The request is closed.");
+		} catch (error) {
+			setStatus(error instanceof Error ? error.message : "Decision failed.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function loadPairingCode(event: React.FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		const normalized = pairingCode.replace(/\D/g, "");
+		if (normalized.length !== 6) {
+			setPairingStatus("Enter a six-digit pairing code.");
+			return;
+		}
+		setBusy(true);
+		setPairingStatus("Loading pairing request...");
+		try {
+			const details = await api.getPairingCode(normalized);
+			setPairing(details);
+			setPairingStatus(details.expired ? "This pairing code has expired." : `Ready to pair ${details.label}.`);
+		} catch (error) {
+			setPairingStatus(error instanceof Error ? error.message : "Failed to load pairing code.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function approvePairing() {
+		if (!pairing) return;
+		setBusy(true);
+		setPairingStatus("Approving device...");
+		try {
+			await api.approvePairingCode(pairing.code);
+			const details = await api.getPairingCode(pairing.code);
+			setPairing(details);
+			setPairingStatus(`${details.label} is paired and can request approvals.`);
+		} catch (error) {
+			setPairingStatus(error instanceof Error ? error.message : "Failed to approve pairing.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function setupVaultKey() {
+		setBusy(true);
+		setSecretStatus("Creating passkey-protected vault key...");
+		try {
+			let existingKey: CryptoKey | null = null;
+			const legacy = localStorage.getItem(legacyVaultKeyStorageKey);
+			if (legacy) {
+				existingKey = await crypto.subtle.importKey(
+					"jwk",
+					JSON.parse(legacy) as JsonWebKey,
+					{ name: "AES-GCM" },
+					true,
+					["encrypt", "decrypt"],
+				);
+			}
+			const key = await createPasskeyWrappedVaultKey(existingKey);
+			setVaultKey(key);
+			setSecretStatus("Vault key is protected by passkey. New secrets will use this key automatically.");
+		} catch (error) {
+			setSecretStatus(error instanceof Error ? error.message : "Failed to create passkey-protected vault key.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function unlockVaultKey() {
+		setBusy(true);
+		setSecretStatus("Unlocking vault with passkey...");
+		try {
+			const key = await unlockPasskeyVaultKey();
+			if (!key) {
+				setSecretStatus("No passkey-protected vault key exists on this device.");
+				return;
+			}
+			setVaultKey(key);
+			setSecretStatus("Vault unlocked with passkey.");
+		} catch (error) {
+			setSecretStatus(error instanceof Error ? error.message : "Failed to unlock vault.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	function resetVaultKey() {
+		localStorage.removeItem(passkeyVaultStorageKey);
+		localStorage.removeItem(legacyVaultKeyStorageKey);
+		setVaultKey(null);
+		setSecretStatus("Vault key removed from this browser. Existing secrets cannot be decrypted here until recovery exists.");
+	}
+
+	async function saveSecret(event: React.FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!vaultKey) {
+			setSecretStatus("Create a local vault key first.");
+			return;
+		}
+		if (!secretForm.ref.trim() || secretForm.ref.trim() !== secretForm.ref) {
+			setSecretStatus("Secret ref must be a non-empty unique string without leading or trailing spaces.");
+			return;
+		}
+		if (!secretForm.value) {
+			setSecretStatus("Secret value is required.");
+			return;
+		}
+
+		setBusy(true);
+		setSecretStatus("Encrypting secret locally...");
+		try {
+			const encrypted = await encryptSecretValue(secretForm.value, vaultKey);
+			setSecretStatus("Uploading ciphertext to Cloudflare D1...");
+			const saved = await api.saveSecret({
+				ref: secretForm.ref,
+				label: secretForm.label || secretForm.ref,
+				...encrypted,
+			});
+			setSecrets((current) => [saved, ...current.filter((secret) => secret.ref !== saved.ref)]);
+			setSecretForm({ label: "", ref: "", value: "" });
+			setSecretStatus("Secret saved. Only encrypted ciphertext was uploaded.");
+		} catch (error) {
+			setSecretStatus(error instanceof Error ? error.message : "Failed to save secret.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	if (requestId) {
+		return (
+			<main className="approval-screen">
+				<PwaUpdatePrompt />
+				<a className="back-link" href="/">
+					Back
+				</a>
+				{approval ? (
+					<section className="approval">
+						<div className="approval-header">
+							<div>
+								<p className="eyebrow">Secret request</p>
+								<h1>Approve access</h1>
+							</div>
+							<span className={`pill ${approval.status}`}>{approval.status}</span>
+						</div>
+						<div className="request-meta">
+							<div>
+								<span>Device</span>
+								<strong>{approval.device}</strong>
+							</div>
+							<div>
+								<span>Command</span>
+								<strong>{approval.command}</strong>
+							</div>
+							{approval.message ? (
+								<div>
+									<span>Message</span>
+									<strong>{approval.message}</strong>
+								</div>
+							) : null}
+							<div>
+								<span>Created</span>
+								<strong>{new Date(approval.createdAt).toLocaleString()}</strong>
+							</div>
+						</div>
+						<ul className="secret-list">
+							{approval.secretRefs.map((ref) => (
+								<li key={ref}>{ref}</li>
+							))}
+						</ul>
+						<div className="decision-row">
+							<button disabled={busy || approval.status !== "pending"} onClick={() => decide("deny")} className="deny">
+								Deny
+							</button>
+							<button disabled={busy || approval.status !== "pending"} onClick={() => decide("approve")}>
+								Approve
+							</button>
+						</div>
+						<p className="screen-status">{status}</p>
+					</section>
+				) : (
+					<section className="approval loading">
+						<h1>Loading request</h1>
+						<p>{status}</p>
+					</section>
+				)}
+			</main>
+		);
+	}
+
+	if (screen === "secrets") {
+		return (
+			<main className="approval-screen">
+				<PwaUpdatePrompt />
+				<a className="back-link" href="/">
+					Back
+				</a>
+				<section className="approval">
+					<div className="approval-header">
+						<div>
+							<p className="eyebrow">Encrypted vault</p>
+							<h1>Add secret</h1>
+						</div>
+					</div>
+					<div className="vault-panel">
+						<div>
+							<strong>
+								{vaultKey
+									? "Vault unlocked"
+									: getPasskeyVaultRecord()
+										? "Vault locked"
+										: "No passkey vault on this device"}
+							</strong>
+							<span>
+								{vaultKey
+									? "This browser will encrypt new secrets automatically until the app reloads."
+									: getPasskeyVaultRecord()
+										? "Unlock with your platform passkey to add secrets."
+										: "Create a Face ID / passkey-protected vault key before adding secrets."}
+							</span>
+						</div>
+						<div className="actions">
+							{vaultKey ? (
+								<button className="secondary" type="button" disabled={busy} onClick={resetVaultKey}>
+									Reset Key
+								</button>
+							) : getPasskeyVaultRecord() ? (
+								<button type="button" disabled={busy} onClick={unlockVaultKey}>
+									Unlock
+								</button>
+							) : (
+								<button type="button" disabled={busy} onClick={setupVaultKey}>
+									Create Passkey
+								</button>
+							)}
+						</div>
+					</div>
+					<form className="secret-form" onSubmit={saveSecret}>
+						<label>
+							Label
+							<input
+								autoComplete="off"
+								value={secretForm.label}
+								onChange={(event) => setSecretForm((current) => ({ ...current, label: event.target.value }))}
+								placeholder="OpenAI API key"
+							/>
+						</label>
+						<label>
+							Reference
+							<input
+								autoCapitalize="none"
+								autoComplete="off"
+								value={secretForm.ref}
+								onChange={(event) => setSecretForm((current) => ({ ...current, ref: event.target.value }))}
+								placeholder="leumi or prod/database/url"
+							/>
+						</label>
+						<label>
+							Secret value
+							<textarea
+								autoCapitalize="none"
+								autoComplete="off"
+								value={secretForm.value}
+								onChange={(event) => setSecretForm((current) => ({ ...current, value: event.target.value }))}
+								placeholder="Paste secret value"
+								rows={4}
+							/>
+						</label>
+						<button disabled={busy || !vaultKey}>{busy ? "Saving" : "Encrypt And Save"}</button>
+					</form>
+					<p className="screen-status">{secretStatus}</p>
+					<div className="stored-secrets">
+						<h2>Stored References</h2>
+						{secrets.length > 0 ? (
+							<ul className="secret-list">
+								{secrets.map((secret) => (
+									<li key={secret.id}>
+										<strong>{secret.label}</strong>
+										<span>{secret.ref}</span>
+									</li>
+								))}
+							</ul>
+						) : (
+							<p className="screen-status">No secrets stored yet.</p>
+						)}
+					</div>
+				</section>
+			</main>
+		);
+	}
+
+	if (screen === "pair") {
+		return (
+			<main className="approval-screen">
+				<PwaUpdatePrompt />
+				<a className="back-link" href="/">
+					Back
+				</a>
+				<section className="approval">
+					<div className="approval-header">
+						<div>
+							<p className="eyebrow">Device pairing</p>
+							<h1>Pair CLI</h1>
+						</div>
+					</div>
+					<form className="secret-form" onSubmit={loadPairingCode}>
+						<label>
+							Pairing code
+							<input
+								inputMode="numeric"
+								autoComplete="one-time-code"
+								value={pairingCode}
+								onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+								placeholder="482913"
+							/>
+						</label>
+						<button disabled={busy}>{busy ? "Loading" : "Load Device"}</button>
+					</form>
+					{pairing ? (
+						<div className="pairing-card">
+							<div className="request-meta">
+								<div>
+									<span>Device</span>
+									<strong>{pairing.label}</strong>
+								</div>
+								<div>
+									<span>Device ID</span>
+									<strong>{pairing.deviceId}</strong>
+								</div>
+								<div>
+									<span>Expires</span>
+									<strong>{new Date(pairing.expiresAt).toLocaleString()}</strong>
+								</div>
+							</div>
+							<div className="decision-row">
+								<a className="button-link secondary-link" href="/">
+									Cancel
+								</a>
+								<button disabled={busy || pairing.expired || Boolean(pairing.approvedAt)} onClick={approvePairing}>
+									{pairing.approvedAt ? "Paired" : "Approve Device"}
+								</button>
+							</div>
+						</div>
+					) : null}
+					<p className="screen-status">{pairingStatus}</p>
+				</section>
+			</main>
+		);
+	}
+
+	return (
+		<main className="product-page">
+			<PwaUpdatePrompt />
+			<nav className="site-nav" aria-label="Sickrat">
+				<a className="brand-lockup" href="/">
+					<span className="brand-mark">SR</span>
+					<span>Sickrat</span>
+				</a>
+				<div className="nav-actions">
+					<a href="#how-it-works">How it works</a>
+					<a href="#console">Open console</a>
+				</div>
+			</nav>
+
+			<section className="hero product-hero">
+				<div className="hero-copy">
+					<p className="eyebrow">Secrets for agent-run computers</p>
+					<h1>Let agents use secrets without handing them your secrets.</h1>
+					<p className="lede">
+						Sickrat is a personal approval layer for AI agents. Your agent asks for a named secret,
+						your phone gets the request, and the CLI receives a short-lived grant only after you approve.
+						The vault runs in Cloudflare resources you own, and the code is open for inspection.
+					</p>
+					<div className="hero-actions">
+						<a className="button-link" href="/skills/sickrat.md">
+							Give your agent the skill
+						</a>
+						<a className="button-link secondary-link" href="#console">
+							Open your vault
+						</a>
+					</div>
+				</div>
+				<div className="approval-demo" aria-label="Example approval request">
+					<div className="demo-phone">
+						<div className="demo-topline">
+							<span>Request</span>
+							<strong>pending</strong>
+						</div>
+						<h2>Codex wants access</h2>
+						<p>Running tests against your production-like API needs one secret.</p>
+						<div className="demo-secret">
+							<span>Secret</span>
+							<strong>openai/api-key</strong>
+						</div>
+						<div className="demo-buttons">
+							<span>Deny</span>
+							<strong>Approve</strong>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section className="trust-strip" aria-label="Product promises">
+				<span>User-owned vault</span>
+				<span>Mobile approval</span>
+				<span>CLI-native workflow</span>
+				<span>Open-source code</span>
+			</section>
+
+			<section className="story-section" id="how-it-works">
+				<div>
+					<p className="eyebrow">The workflow</p>
+					<h2 className="section-title">Your agent gets a capability, not a permanent credential.</h2>
+				</div>
+				<div className="story-grid">
+					<article>
+						<span className="step-number">01</span>
+						<h3>Point the agent at Sickrat</h3>
+						<p>
+							Give Codex, Claude Code, or any shell-capable agent the Sickrat skill. It learns to ask
+							for named references instead of asking you to paste secrets into chat.
+						</p>
+					</article>
+					<article>
+						<span className="step-number">02</span>
+						<h3>Pair the machine once</h3>
+						<p>
+							The CLI pairs your Mac mini, server, or dev box with your vault. From then on, requests
+							come from a known device with a clear command and requested references.
+						</p>
+					</article>
+					<article>
+						<span className="step-number">03</span>
+						<h3>Approve only what feels right</h3>
+						<p>
+							When the agent needs a secret, Sickrat opens an approval screen on your phone. Approve,
+							deny, or ignore it. The CLI only gets a short-lived grant after approval.
+						</p>
+					</article>
+				</div>
+			</section>
+
+			<section className="cli-section">
+				<div>
+					<p className="eyebrow">The CLI</p>
+					<h2 className="section-title">Made for the moment your agent says: “I need an API key.”</h2>
+					<p className="section-copy">
+						The CLI is the bridge between the agent and your approval app. It pairs the machine,
+						requests references, waits for your decision, and eventually will inject approved values into
+						the exact process that needs them.
+					</p>
+				</div>
+				<div className="terminal-card" aria-label="Sickrat CLI example">
+					<div className="terminal-header">
+						<span></span>
+						<span></span>
+						<span></span>
+					</div>
+					<pre>{`$ sickrat pair https://<your-vault-url>
+Pairing code: 482913
+
+$ sickrat request openai/api-key \\
+  --message "Run the smoke test with the real API"
+Waiting for approval on your phone...
+Approved. Grant expires shortly.`}</pre>
+				</div>
+			</section>
+
+			<section className="agent-cta">
+				<div>
+					<p className="eyebrow">Agent-first setup</p>
+					<h2>Start by giving your agent one instruction file.</h2>
+					<p>
+						The Sickrat skill tells an agent how to pair with your vault URL, how to explain why it
+						needs a secret, and how to avoid turning your chat transcript into a password manager.
+					</p>
+				</div>
+				<div className="actions">
+					<a className="button-link" href="/skills/sickrat.md">
+						Open agent skill
+					</a>
+					<a className="button-link secondary-link" href="#console">
+						Open vault console
+					</a>
+				</div>
+			</section>
+
+			<section className="console-intro" id="console">
+				<p className="eyebrow">Private console</p>
+				<h2 className="section-title">Manage this vault from the same page.</h2>
+				<p className="section-copy">
+					Add encrypted references, pair agent machines, enable push approval, and connect your own
+					Cloudflare account when you are ready to create account-owned resources. Sickrat should not
+					own or operate your secrets.
+				</p>
+			</section>
+
+			<section className="console-grid">
+				<article>
+					<h2>Install</h2>
+					<p className="metric">{installed ? "Home Screen" : "Browser"}</p>
+					<p>{installed ? "This device is running as an installed app." : "Install to Home Screen for iOS push approvals."}</p>
+				</article>
+				<article>
+					<h2>Vault</h2>
+					<p className="metric">{secrets.length}</p>
+					<p>{secrets.length === 1 ? "stored reference" : "stored references"}</p>
+				</article>
+				<article>
+					<h2>Push</h2>
+					<p className="metric">{subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline"}</p>
+					<p>{subscription ? "This device can receive approval requests." : "Enable push before testing mobile approvals."}</p>
+				</article>
+			</section>
+
+			<section className="console">
+				<div>
+					<h2>Secrets</h2>
+					<p>{secretStatus}</p>
+				</div>
+				<div className="actions">
+					<a className="button-link" href="/?screen=secrets">
+						Add Secret
+					</a>
+					<a className="button-link secondary-link" href="/?screen=pair">
+						Pair CLI
+					</a>
+				</div>
+			</section>
+
+			<section className="console">
+				<div>
+					<h2>Cloudflare Account</h2>
+					<p>
+						{cloudflareToken
+							? "Authenticated with Cloudflare. Vault creation calls will use your selected account."
+							: cloudflareConfig?.clientId
+								? "Log in to create Sickrat resources in your Cloudflare account."
+								: "This Worker needs a Cloudflare OAuth client id before login can start."}
+					</p>
+					<p className="panel-status">{cloudflareStatus}</p>
+					{cloudflareAccounts.length > 0 ? (
+						<label className="select-label">
+							Account
+							<select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)}>
+								{cloudflareAccounts.map((account) => (
+									<option key={account.id} value={account.id}>
+										{account.name}
+									</option>
+								))}
+							</select>
+						</label>
+					) : null}
+					{provisioning ? (
+						<div className="provision-result">
+							{provisioning.steps.map((step) => (
+								<div className={`provision-step ${step.status}`} key={step.id}>
+									<strong>{step.label}</strong>
+									<span>{step.error ?? step.detail ?? step.status}</span>
+								</div>
+							))}
+						</div>
+					) : null}
+				</div>
+				<div className="actions">
+					{cloudflareToken ? (
+						<>
+							<button disabled={busy || !selectedAccountId} onClick={provisionSelectedAccount}>
+								{busy ? "Creating" : "Create Vault"}
+							</button>
+							<button className="secondary" disabled={busy} onClick={logoutCloudflare}>
+								Log Out
+							</button>
+						</>
+					) : (
+						<button disabled={busy || !cloudflareConfig?.clientId} onClick={loginWithCloudflare}>
+							Log In
+						</button>
+					)}
+				</div>
+			</section>
+
+			<section className="console">
+				<div>
+					<h2>Push Setup</h2>
+					<p>{status}</p>
+				</div>
+				<div className="actions">
+					<button disabled={busy || Boolean(subscription)} onClick={enablePush}>
+						{subscription ? "Push Enabled" : "Enable Push"}
+					</button>
+					<button disabled={busy || !subscription} onClick={sendTest}>Send Test</button>
+				</div>
+			</section>
+
+		</main>
+	);
+}
+
+createRoot(document.getElementById("root")!).render(
+	<React.StrictMode>
+		<App />
+	</React.StrictMode>,
+);

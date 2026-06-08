@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck CLI
+        run: npm --workspace apps/cli run typecheck
+
+      - name: Typecheck web
+        run: npm --workspace apps/web run typecheck
+
+      - name: Build web
+        run: npm run web:build
+
+      - name: Build CLI
+        run: npm --workspace apps/cli run build

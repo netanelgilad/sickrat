@@ -1,0 +1,14 @@
+
+> web@0.0.0 dev
+> vite dev --host 0.0.0.0
+
+
+  VITE v7.3.5  ready in 745 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://10.0.0.3:5173/
+  ➜  Debug:   http://localhost:5173/__debug
+  ➜  press b + enter to list configured Cloudflare bindings
+  ➜  press e + enter to open local explorer
+  ➜  press t + enter to start tunnel
+  ➜  press h + enter to show help

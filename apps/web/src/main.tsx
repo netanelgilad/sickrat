@@ -597,7 +597,9 @@ function App() {
 	const installed = useMemo(isStandalone, []);
 	const requestId = useMemo(() => new URLSearchParams(window.location.search).get("request"), []);
 	const screen = useMemo(() => new URLSearchParams(window.location.search).get("screen"), []);
-	const isCloudflareCallback = window.location.pathname === "/cf/callback";
+	const pathname = window.location.pathname;
+	const isCloudflareCallback = pathname === "/cf/callback";
+	const isAppRoute = pathname === "/app" || isCloudflareCallback;
 	const missingApprovalRefs = useMemo(() => {
 		if (!approval) return [];
 		const storedRefs = new Set(secrets.map((secret) => secret.ref));
@@ -683,7 +685,7 @@ function App() {
 				sessionStorage.removeItem("sickrat.cf.codeVerifier");
 				setCloudflareToken(accessToken);
 				setCloudflareStatus("Cloudflare login complete. Loading accounts...");
-				window.history.replaceState({}, "", "/");
+				window.history.replaceState({}, "", "/app");
 			})
 			.catch((error: unknown) =>
 				setCloudflareStatus(error instanceof Error ? error.message : "Cloudflare login failed."),
@@ -1140,8 +1142,8 @@ function App() {
 		return (
 			<main className="approval-screen">
 				<PwaUpdatePrompt />
-				<a className="back-link" href="/">
-					Back
+				<a className="back-link" href="/app">
+					Back to console
 				</a>
 				{approval ? (
 					<section className="approval">
@@ -1252,8 +1254,8 @@ function App() {
 		return (
 			<main className="approval-screen">
 				<PwaUpdatePrompt />
-				<a className="back-link" href="/">
-					Back
+				<a className="back-link" href="/app">
+					Back to console
 				</a>
 				<section className="approval">
 					<div className="approval-header">
@@ -1353,8 +1355,8 @@ function App() {
 		return (
 			<main className="approval-screen">
 				<PwaUpdatePrompt />
-				<a className="back-link" href="/">
-					Back
+				<a className="back-link" href="/app">
+					Back to console
 				</a>
 				<section className="approval">
 					<div className="approval-header">
@@ -1393,7 +1395,7 @@ function App() {
 								</div>
 							</div>
 							<div className="decision-row">
-								<a className="button-link secondary-link" href="/">
+								<a className="button-link secondary-link" href="/app">
 									Cancel
 								</a>
 								<button disabled={busy || pairing.expired || Boolean(pairing.approvedAt)} onClick={approvePairing}>
@@ -1403,6 +1405,200 @@ function App() {
 						</div>
 					) : null}
 					<p className="screen-status">{pairingStatus}</p>
+				</section>
+			</main>
+		);
+	}
+
+	if (isAppRoute) {
+		return (
+			<main className="app-page">
+				<PwaUpdatePrompt />
+				<header className="app-shell-header">
+					<a className="brand-lockup" href="/">
+						<span className="brand-mark" aria-hidden="true">
+							<span className="mark-core">SR</span>
+						</span>
+						<span>Sickrat</span>
+					</a>
+					<nav className="app-nav" aria-label="Console">
+						<a href="/app">Console</a>
+						<a href="/?screen=secrets">Add Secret</a>
+						<a href="/?screen=pair">Pair CLI</a>
+						<a href="/skills/sickrat.md">Agent Skill</a>
+					</nav>
+				</header>
+
+				<section className="app-command">
+					<div>
+						<p className="eyebrow">Private quarantine console</p>
+						<h1>Sickrat vault control</h1>
+						<p className="lede">
+							Manage encrypted refs, admitted devices, push approvals, and account-owned Cloudflare
+							resources from this app surface. Sickrat is open source; your vault runs in Cloudflare
+							resources you own.
+						</p>
+					</div>
+					<div className="app-status-board" aria-label="Console status">
+						<div>
+							<span>Install</span>
+							<strong>{installed ? "Home Screen" : "Browser"}</strong>
+						</div>
+						<div>
+							<span>Vault Refs</span>
+							<strong>{secrets.length}</strong>
+						</div>
+						<div>
+							<span>Push</span>
+							<strong>{subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline"}</strong>
+						</div>
+					</div>
+				</section>
+
+				<section className="app-grid">
+					<section className="console app-panel cloudflare-panel">
+						<div>
+							<h2>Cloudflare Vault Setup</h2>
+							<p>
+								{cloudflareToken
+									? "Authenticated with Cloudflare. Vault creation calls will use your selected account."
+									: cloudflareConfig?.clientId
+										? "Log in to create Sickrat resources in your Cloudflare account."
+										: "This Worker needs a Cloudflare OAuth client id before login can start."}
+							</p>
+							<p className="panel-status">{cloudflareStatus}</p>
+							{cloudflareAccounts.length > 0 ? (
+								<label className="select-label">
+									Account
+									<select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)}>
+										{cloudflareAccounts.map((account) => (
+											<option key={account.id} value={account.id}>
+												{account.name}
+											</option>
+										))}
+									</select>
+								</label>
+							) : null}
+							{provisioning ? (
+								<div className="provision-result">
+									{provisioning.steps.map((step) => (
+										<div className={`provision-step ${step.status}`} key={step.id}>
+											<strong>{step.label}</strong>
+											<span>{step.error ?? step.detail ?? step.status}</span>
+										</div>
+									))}
+								</div>
+							) : null}
+						</div>
+						<div className="actions">
+							{cloudflareToken ? (
+								<>
+									<button disabled={busy || !selectedAccountId} onClick={provisionSelectedAccount}>
+										{busy ? "Creating" : "Create Vault"}
+									</button>
+									<button className="secondary" disabled={busy} onClick={logoutCloudflare}>
+										Log Out
+									</button>
+								</>
+							) : (
+								<button disabled={busy || !cloudflareConfig?.clientId} onClick={loginWithCloudflare}>
+									Log In With Cloudflare
+								</button>
+							)}
+						</div>
+					</section>
+
+					<section className="console app-panel">
+						<div>
+							<h2>Local Vault Key</h2>
+							<p>{secretStatus}</p>
+							<div className="vault-panel">
+								<div>
+									<strong>
+										{vaultKey
+											? "Vault unlocked"
+											: getPasskeyVaultRecord()
+												? "Vault locked"
+												: "No passkey vault on this device"}
+									</strong>
+									<span>
+										{vaultKey
+											? "This browser can encrypt new refs until the app reloads."
+											: getPasskeyVaultRecord()
+												? "Unlock with your platform passkey to add secrets."
+												: "Create a passkey-protected vault key before adding secrets."}
+									</span>
+								</div>
+							</div>
+						</div>
+						<div className="actions">
+							{vaultKey ? (
+								<button className="secondary" type="button" disabled={busy} onClick={resetVaultKey}>
+									Reset Key
+								</button>
+							) : getPasskeyVaultRecord() ? (
+								<button type="button" disabled={busy} onClick={unlockVaultKey}>
+									Unlock
+								</button>
+							) : (
+								<button type="button" disabled={busy} onClick={setupVaultKey}>
+									Create Passkey
+								</button>
+							)}
+							<a className="button-link secondary-link" href="/?screen=secrets">
+								Add Secret
+							</a>
+						</div>
+					</section>
+
+					<section className="console app-panel">
+						<div>
+							<h2>Pair CLI</h2>
+							<p>Approve a six-digit pairing code from a Sickrat CLI so that device can request grants.</p>
+						</div>
+						<div className="actions">
+							<a className="button-link" href="/?screen=pair">
+								Pair Device
+							</a>
+						</div>
+					</section>
+
+					<section className="console app-panel">
+						<div>
+							<h2>Push Approvals</h2>
+							<p>{status}</p>
+						</div>
+						<div className="actions">
+							<button disabled={busy || Boolean(subscription)} onClick={enablePush}>
+								{subscription ? "Push Enabled" : "Enable Push"}
+							</button>
+							<button disabled={busy || !subscription} onClick={sendTest}>
+								Send Test
+							</button>
+						</div>
+					</section>
+
+					<section className="console app-panel stored-refs-panel">
+						<div>
+							<h2>Stored References</h2>
+							<p>{secrets.length === 0 ? "No encrypted refs are stored yet." : "Encrypted refs stored in your Sickrat vault."}</p>
+							{secrets.length > 0 ? (
+								<ul className="secret-list">
+									{secrets.map((secret) => (
+										<li key={secret.id}>
+											<strong>{secret.label}</strong>
+											<span>{secret.ref}</span>
+										</li>
+									))}
+								</ul>
+							) : null}
+						</div>
+						<div className="actions">
+							<a className="button-link secondary-link" href="/?screen=secrets">
+								Add Ref
+							</a>
+						</div>
+					</section>
 				</section>
 			</main>
 		);
@@ -1420,7 +1616,7 @@ function App() {
 				</a>
 				<div className="nav-actions">
 					<a href="#how-it-works">How it works</a>
-					<a href="#console">Open console</a>
+					<a href="/app">Log in</a>
 				</div>
 			</nav>
 
@@ -1437,8 +1633,8 @@ function App() {
 						<a className="button-link" href="/skills/sickrat.md">
 							Give your agent the skill
 						</a>
-						<a className="button-link secondary-link" href="#console">
-							Open your vault
+						<a className="button-link secondary-link" href="/app">
+							Log in to console
 						</a>
 					</div>
 				</div>
@@ -1570,120 +1766,11 @@ Approved. Encrypted grant sealed for this request.`}</pre>
 					<a className="button-link" href="/skills/sickrat.md">
 						Open agent skill
 					</a>
-					<a className="button-link secondary-link" href="#console">
-						Open vault console
+					<a className="button-link secondary-link" href="/app">
+						Log in to console
 					</a>
 				</div>
 			</section>
-
-			<section className="console-intro" id="console">
-				<p className="eyebrow">Private quarantine console</p>
-				<h2 className="section-title">Manage the vault from the same control surface.</h2>
-				<p className="section-copy">
-					Add encrypted references, pair agent machines, enable push approval, and connect your own
-					Cloudflare account when you are ready to create account-owned resources. Sickrat should not
-					own or operate your secrets.
-				</p>
-			</section>
-
-			<section className="console-grid">
-				<article>
-					<h2>Install</h2>
-					<p className="metric">{installed ? "Home Screen" : "Browser"}</p>
-					<p>{installed ? "This device is running as an installed app." : "Install to Home Screen for iOS push approvals."}</p>
-				</article>
-				<article>
-					<h2>Vault</h2>
-					<p className="metric">{secrets.length}</p>
-					<p>{secrets.length === 1 ? "stored reference" : "stored references"}</p>
-				</article>
-				<article>
-					<h2>Push</h2>
-					<p className="metric">{subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline"}</p>
-					<p>{subscription ? "This device can receive approval requests." : "Enable push before testing mobile approvals."}</p>
-				</article>
-			</section>
-
-			<section className="console">
-				<div>
-					<h2>Secrets</h2>
-					<p>{secretStatus}</p>
-				</div>
-				<div className="actions">
-					<a className="button-link" href="/?screen=secrets">
-						Add Secret
-					</a>
-					<a className="button-link secondary-link" href="/?screen=pair">
-						Pair CLI
-					</a>
-				</div>
-			</section>
-
-			<section className="console">
-				<div>
-					<h2>Cloudflare Account</h2>
-					<p>
-						{cloudflareToken
-							? "Authenticated with Cloudflare. Vault creation calls will use your selected account."
-							: cloudflareConfig?.clientId
-								? "Log in to create Sickrat resources in your Cloudflare account."
-								: "This Worker needs a Cloudflare OAuth client id before login can start."}
-					</p>
-					<p className="panel-status">{cloudflareStatus}</p>
-					{cloudflareAccounts.length > 0 ? (
-						<label className="select-label">
-							Account
-							<select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)}>
-								{cloudflareAccounts.map((account) => (
-									<option key={account.id} value={account.id}>
-										{account.name}
-									</option>
-								))}
-							</select>
-						</label>
-					) : null}
-					{provisioning ? (
-						<div className="provision-result">
-							{provisioning.steps.map((step) => (
-								<div className={`provision-step ${step.status}`} key={step.id}>
-									<strong>{step.label}</strong>
-									<span>{step.error ?? step.detail ?? step.status}</span>
-								</div>
-							))}
-						</div>
-					) : null}
-				</div>
-				<div className="actions">
-					{cloudflareToken ? (
-						<>
-							<button disabled={busy || !selectedAccountId} onClick={provisionSelectedAccount}>
-								{busy ? "Creating" : "Create Vault"}
-							</button>
-							<button className="secondary" disabled={busy} onClick={logoutCloudflare}>
-								Log Out
-							</button>
-						</>
-					) : (
-						<button disabled={busy || !cloudflareConfig?.clientId} onClick={loginWithCloudflare}>
-							Log In
-						</button>
-					)}
-				</div>
-			</section>
-
-			<section className="console">
-				<div>
-					<h2>Push Setup</h2>
-					<p>{status}</p>
-				</div>
-				<div className="actions">
-					<button disabled={busy || Boolean(subscription)} onClick={enablePush}>
-						{subscription ? "Push Enabled" : "Enable Push"}
-					</button>
-					<button disabled={busy || !subscription} onClick={sendTest}>Send Test</button>
-				</div>
-			</section>
-
 		</main>
 	);
 }

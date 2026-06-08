@@ -244,7 +244,7 @@ async function publishApproval(subscriptionId: string, approval: ReturnType<type
 		body: JSON.stringify({
 			type: "approval.requested",
 			approval,
-			url: `/?request=${encodeURIComponent(approval.id)}`,
+			url: `/approve/${encodeURIComponent(approval.id)}`,
 		}),
 	});
 	return response.ok ? ((await response.json()) as { ok: true; delivered: number }) : null;

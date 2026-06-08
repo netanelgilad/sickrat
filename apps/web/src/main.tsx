@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import "./styles.css";
 
@@ -567,7 +568,23 @@ function PwaUpdatePrompt() {
 	);
 }
 
-function App() {
+type AppRoute = "landing" | "app" | "approval" | "secrets" | "pair";
+
+function ApprovalRoute() {
+	const params = useParams();
+	return <AppShell route="approval" requestId={params.requestId} />;
+}
+
+function AppShell({
+	route,
+	requestId,
+	isCloudflareCallback = false,
+}: {
+	route: AppRoute;
+	requestId?: string;
+	isCloudflareCallback?: boolean;
+}) {
+	const navigate = useNavigate();
 	const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
 	const [status, setStatus] = useState("Loading Cloudflare Worker capabilities...");
 	const [subscription, setSubscription] = useState<PushRecord | null>(null);
@@ -595,11 +612,6 @@ function App() {
 	const [busy, setBusy] = useState(false);
 
 	const installed = useMemo(isStandalone, []);
-	const requestId = useMemo(() => new URLSearchParams(window.location.search).get("request"), []);
-	const screen = useMemo(() => new URLSearchParams(window.location.search).get("screen"), []);
-	const pathname = window.location.pathname;
-	const isCloudflareCallback = pathname === "/cf/callback";
-	const isAppRoute = pathname === "/app" || isCloudflareCallback;
 	const missingApprovalRefs = useMemo(() => {
 		if (!approval) return [];
 		const storedRefs = new Set(secrets.map((secret) => secret.ref));
@@ -612,12 +624,12 @@ function App() {
 			const data = event.data as { type?: string; url?: string };
 			if (data.type === "SICKRAT_NAVIGATE" && data.url) {
 				const target = new URL(data.url, window.location.origin);
-				if (target.origin === window.location.origin) window.location.assign(target.href);
+				if (target.origin === window.location.origin) navigate(`${target.pathname}${target.search}${target.hash}`);
 			}
 		};
 		navigator.serviceWorker.addEventListener("message", handleMessage);
 		return () => navigator.serviceWorker.removeEventListener("message", handleMessage);
-	}, []);
+	}, [navigate]);
 
 	useEffect(() => {
 		api
@@ -685,13 +697,13 @@ function App() {
 				sessionStorage.removeItem("sickrat.cf.codeVerifier");
 				setCloudflareToken(accessToken);
 				setCloudflareStatus("Cloudflare login complete. Loading accounts...");
-				window.history.replaceState({}, "", "/app");
+				navigate("/app", { replace: true });
 			})
 			.catch((error: unknown) =>
 				setCloudflareStatus(error instanceof Error ? error.message : "Cloudflare login failed."),
 			)
 			.finally(() => setBusy(false));
-	}, [cloudflareConfig, isCloudflareCallback]);
+	}, [cloudflareConfig, isCloudflareCallback, navigate]);
 
 	useEffect(() => {
 		if (!cloudflareToken) return;
@@ -749,7 +761,7 @@ function App() {
 			try {
 				const latest = await api.getLatestApproval(subscription.endpoint);
 				if (latest?.status === "pending") {
-					window.location.assign(`/?request=${encodeURIComponent(latest.id)}`);
+					navigate(`/approve/${encodeURIComponent(latest.id)}`);
 				}
 			} catch {
 				// This is only a notification-click fallback; the push setup status should stay stable.
@@ -768,7 +780,7 @@ function App() {
 			window.removeEventListener("focus", handleVisibility);
 			document.removeEventListener("visibilitychange", handleVisibility);
 		};
-	}, [requestId, subscription]);
+	}, [navigate, requestId, subscription]);
 
 	useEffect(() => {
 		if (!subscription?.id) return;
@@ -797,7 +809,8 @@ function App() {
 				try {
 					const message = JSON.parse(event.data) as { type?: string; approval?: ApprovalRequest; url?: string };
 					if (message.type === "approval.requested" && message.approval?.id) {
-						window.location.assign(message.url ?? `/?request=${encodeURIComponent(message.approval.id)}`);
+						const target = new URL(message.url ?? `/approve/${encodeURIComponent(message.approval.id)}`, window.location.origin);
+						navigate(`${target.pathname}${target.search}${target.hash}`);
 					}
 				} catch {
 					// Ignore non-JSON realtime messages.
@@ -822,7 +835,7 @@ function App() {
 			window.clearInterval(heartbeatTimer);
 			socket?.close();
 		};
-	}, [subscription?.id]);
+	}, [navigate, subscription?.id]);
 
 	async function enablePush() {
 		if (!capabilities?.push.vapidPublicKey) {
@@ -1142,9 +1155,9 @@ function App() {
 		return (
 			<main className="approval-screen">
 				<PwaUpdatePrompt />
-				<a className="back-link" href="/app">
+				<Link className="back-link" to="/app">
 					Back to console
-				</a>
+				</Link>
 				{approval ? (
 					<section className="approval">
 						<div className="approval-header">
@@ -1250,13 +1263,13 @@ function App() {
 		);
 	}
 
-	if (screen === "secrets") {
+	if (route === "secrets") {
 		return (
 			<main className="approval-screen">
 				<PwaUpdatePrompt />
-				<a className="back-link" href="/app">
+				<Link className="back-link" to="/app">
 					Back to console
-				</a>
+				</Link>
 				<section className="approval">
 					<div className="approval-header">
 						<div>
@@ -1351,13 +1364,13 @@ function App() {
 		);
 	}
 
-	if (screen === "pair") {
+	if (route === "pair") {
 		return (
 			<main className="approval-screen">
 				<PwaUpdatePrompt />
-				<a className="back-link" href="/app">
+				<Link className="back-link" to="/app">
 					Back to console
-				</a>
+				</Link>
 				<section className="approval">
 					<div className="approval-header">
 						<div>
@@ -1395,9 +1408,9 @@ function App() {
 								</div>
 							</div>
 							<div className="decision-row">
-								<a className="button-link secondary-link" href="/app">
+								<Link className="button-link secondary-link" to="/app">
 									Cancel
-								</a>
+								</Link>
 								<button disabled={busy || pairing.expired || Boolean(pairing.approvedAt)} onClick={approvePairing}>
 									{pairing.approvedAt ? "Paired" : "Approve Device"}
 								</button>
@@ -1410,21 +1423,21 @@ function App() {
 		);
 	}
 
-	if (isAppRoute) {
+	if (route === "app") {
 		return (
 			<main className="app-page">
 				<PwaUpdatePrompt />
 				<header className="app-shell-header">
-					<a className="brand-lockup" href="/">
+					<Link className="brand-lockup" to="/">
 						<span className="brand-mark" aria-hidden="true">
 							<span className="mark-core">SR</span>
 						</span>
 						<span>Sickrat</span>
-					</a>
+					</Link>
 					<nav className="app-nav" aria-label="Console">
-						<a href="/app">Console</a>
-						<a href="/?screen=secrets">Add Secret</a>
-						<a href="/?screen=pair">Pair CLI</a>
+						<Link to="/app">Console</Link>
+						<Link to="/secrets">Add Secret</Link>
+						<Link to="/pair">Pair CLI</Link>
 						<a href="/skills/sickrat.md">Agent Skill</a>
 					</nav>
 				</header>
@@ -1545,9 +1558,9 @@ function App() {
 									Create Passkey
 								</button>
 							)}
-							<a className="button-link secondary-link" href="/?screen=secrets">
+							<Link className="button-link secondary-link" to="/secrets">
 								Add Secret
-							</a>
+							</Link>
 						</div>
 					</section>
 
@@ -1557,9 +1570,9 @@ function App() {
 							<p>Approve a six-digit pairing code from a Sickrat CLI so that device can request grants.</p>
 						</div>
 						<div className="actions">
-							<a className="button-link" href="/?screen=pair">
+							<Link className="button-link" to="/pair">
 								Pair Device
-							</a>
+							</Link>
 						</div>
 					</section>
 
@@ -1594,9 +1607,9 @@ function App() {
 							) : null}
 						</div>
 						<div className="actions">
-							<a className="button-link secondary-link" href="/?screen=secrets">
+							<Link className="button-link secondary-link" to="/secrets">
 								Add Ref
-							</a>
+							</Link>
 						</div>
 					</section>
 				</section>
@@ -1608,15 +1621,15 @@ function App() {
 		<main className="product-page">
 			<PwaUpdatePrompt />
 			<nav className="site-nav" aria-label="Sickrat">
-				<a className="brand-lockup" href="/">
+				<Link className="brand-lockup" to="/">
 					<span className="brand-mark" aria-hidden="true">
 						<span className="mark-core">SR</span>
 					</span>
 					<span>Sickrat</span>
-				</a>
+				</Link>
 				<div className="nav-actions">
 					<a href="#how-it-works">How it works</a>
-					<a href="/app">Log in</a>
+					<Link to="/app">Log in</Link>
 				</div>
 			</nav>
 
@@ -1633,9 +1646,9 @@ function App() {
 						<a className="button-link" href="/skills/sickrat.md">
 							Give your agent the skill
 						</a>
-						<a className="button-link secondary-link" href="/app">
+						<Link className="button-link secondary-link" to="/app">
 							Log in to console
-						</a>
+						</Link>
 					</div>
 				</div>
 				<div className="approval-demo" aria-label="Example approval request">
@@ -1766,17 +1779,33 @@ Approved. Encrypted grant sealed for this request.`}</pre>
 					<a className="button-link" href="/skills/sickrat.md">
 						Open agent skill
 					</a>
-					<a className="button-link secondary-link" href="/app">
+					<Link className="button-link secondary-link" to="/app">
 						Log in to console
-					</a>
+					</Link>
 				</div>
 			</section>
 		</main>
 	);
 }
 
+function App() {
+	return (
+		<Routes>
+			<Route path="/" element={<AppShell route="landing" />} />
+			<Route path="/app" element={<AppShell route="app" />} />
+			<Route path="/cf/callback" element={<AppShell route="app" isCloudflareCallback />} />
+			<Route path="/approve/:requestId" element={<ApprovalRoute />} />
+			<Route path="/secrets" element={<AppShell route="secrets" />} />
+			<Route path="/pair" element={<AppShell route="pair" />} />
+			<Route path="*" element={<Navigate to="/" replace />} />
+		</Routes>
+	);
+}
+
 createRoot(document.getElementById("root")!).render(
 	<React.StrictMode>
-		<App />
+		<BrowserRouter>
+			<App />
+		</BrowserRouter>
 	</React.StrictMode>,
 );

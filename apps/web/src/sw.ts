@@ -59,7 +59,7 @@ self.addEventListener("push", (event) => {
 			const body = approval
 				? `${approval.device} wants ${approval.secretRefs.length} secrets`
 				: "Open Sickrat to review the latest request.";
-			const url = new URL(approval ? `/?request=${encodeURIComponent(approval.id)}` : "/", self.location.origin).href;
+			const url = new URL(approval ? `/approve/${encodeURIComponent(approval.id)}` : "/", self.location.origin).href;
 
 			await self.registration.showNotification(title, {
 				body,

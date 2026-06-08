@@ -113,6 +113,23 @@ main {
 	overflow: hidden;
 }
 
+.product-page,
+.app-page,
+.approval-screen {
+	animation: route-enter 220ms ease-out both;
+}
+
+@keyframes route-enter {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
 .site-nav {
 	align-items: center;
 	border-bottom: 1px solid var(--line);

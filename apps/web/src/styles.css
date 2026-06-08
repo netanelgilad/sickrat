@@ -785,11 +785,22 @@ article h3,
 	width: 30px;
 }
 
-.sidebar-nav a:hover,
 .sidebar-nav a.active {
 	background: rgba(69, 255, 138, 0.1);
 	border-color: rgba(69, 255, 138, 0.52);
 	color: var(--ink);
+}
+
+.sidebar-nav a {
+	-webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.sidebar-nav a:hover {
+		background: rgba(69, 255, 138, 0.1);
+		border-color: rgba(69, 255, 138, 0.52);
+		color: var(--ink);
+	}
 }
 
 .sidebar-skill {

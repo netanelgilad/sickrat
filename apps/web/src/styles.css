@@ -1684,14 +1684,19 @@ button.deny {
 	}
 
 	.console-sidebar {
+		background:
+			linear-gradient(180deg, rgba(69, 255, 138, 0.055), transparent 34%),
+			#050806;
 		border: 0;
 		border-radius: 0;
 		box-shadow: none;
 		gap: 22px;
 		inset: 0;
-		min-height: 100svh;
+		height: 100svh;
+		min-height: 0;
 		opacity: 0;
 		overflow-y: auto;
+		overscroll-behavior: contain;
 		padding: calc(24px + var(--safe-top)) calc(18px + var(--safe-right)) calc(24px + var(--safe-bottom))
 			calc(18px + var(--safe-left));
 		pointer-events: none;
@@ -1709,7 +1714,7 @@ button.deny {
 	}
 
 	.sidebar-scrim {
-		background: rgba(0, 0, 0, 0.5);
+		background: #050806;
 		border: 0;
 		display: block;
 		inset: 0;
@@ -1808,11 +1813,15 @@ button.deny {
 	}
 
 	.console-topbar {
+		background:
+			linear-gradient(180deg, rgba(7, 9, 8, 0.98), rgba(7, 9, 8, 0.9)),
+			var(--black);
 		display: grid;
 		gap: 10px;
 		grid-template-columns: 58px minmax(0, 1fr);
-		position: relative;
-		top: auto;
+		position: sticky;
+		top: calc(8px + var(--safe-top));
+		z-index: 30;
 	}
 
 	.console-topbar > div:first-of-type,

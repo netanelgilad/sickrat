@@ -1029,6 +1029,15 @@ function AppShell({
 		};
 	}, [navigate, subscription?.id]);
 
+	useEffect(() => {
+		if (!sidebarOpen) return;
+		const previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = "hidden";
+		return () => {
+			document.body.style.overflow = previousOverflow;
+		};
+	}, [sidebarOpen]);
+
 	async function enablePush() {
 		if (!capabilities?.push.vapidPublicKey) {
 			setStatus("VAPID keys are missing. Run `npm run vapid` and set Worker secrets.");
@@ -2060,11 +2069,11 @@ function AppShell({
 						</div>
 						<nav className="sidebar-nav" aria-label="Console">
 							<NavLink end to="/app" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">DB</span>Dashboard</NavLink>
-							<NavLink to="/app/vaults" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">VT</span>Vaults</NavLink>
-							<NavLink to="/app/secrets" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">SK</span>Server Secrets</NavLink>
-							<NavLink to="/app/approvals" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">GR</span>Approval Grants</NavLink>
-							<NavLink to="/app/devices" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">MC</span>Machines</NavLink>
-							<NavLink to="/app/settings" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">ST</span>Account Settings</NavLink>
+							<NavLink end to="/app/vaults" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">VT</span>Vaults</NavLink>
+							<NavLink end to="/app/secrets" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">SK</span>Server Secrets</NavLink>
+							<NavLink end to="/app/approvals" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">GR</span>Approval Grants</NavLink>
+							<NavLink end to="/app/devices" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">MC</span>Machines</NavLink>
+							<NavLink end to="/app/settings" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">ST</span>Account Settings</NavLink>
 						</nav>
 						<div className="sidebar-footer">
 							<a className="sidebar-skill" href="/skills/sickrat.md">Agent skill</a>

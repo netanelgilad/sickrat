@@ -724,6 +724,12 @@ article h3,
 	top: var(--shell-top);
 }
 
+.sidebar-toggle,
+.sidebar-close,
+.sidebar-scrim {
+	display: none;
+}
+
 .sidebar-head {
 	border-bottom: 1px solid var(--line);
 	display: grid;
@@ -1673,47 +1679,85 @@ button.deny {
 	}
 
 	.console-shell {
-		align-items: start;
-		gap: 10px;
-		grid-template-columns: 72px minmax(0, 1fr);
+		display: block;
 		min-height: calc(100svh - var(--safe-top) - var(--safe-bottom) - 20px);
 	}
 
 	.console-sidebar {
-		gap: 10px;
-		min-height: calc(100svh - var(--safe-top) - var(--safe-bottom) - 20px);
-		padding: 8px;
-		position: sticky;
-		top: calc(10px + var(--safe-top));
+		border: 0;
+		border-radius: 0;
+		box-shadow: none;
+		gap: 22px;
+		inset: 0;
+		min-height: 100svh;
+		opacity: 0;
+		overflow-y: auto;
+		padding: calc(24px + var(--safe-top)) calc(18px + var(--safe-right)) calc(24px + var(--safe-bottom))
+			calc(18px + var(--safe-left));
+		pointer-events: none;
+		position: fixed;
+		top: 0;
+		transform: translateX(-16px);
+		transition: opacity 180ms ease, transform 180ms ease;
+		z-index: 60;
 	}
 
-	.console-sidebar .brand-lockup {
-		justify-content: center;
+	.console-sidebar.open {
+		opacity: 1;
+		pointer-events: auto;
+		transform: translateX(0);
 	}
 
-	.console-sidebar .brand-lockup > span:not(.brand-mark) {
-		display: none;
-	}
-
-	.console-sidebar .brand-mark {
-		height: 38px;
-	}
-
-	.console-sidebar .mark-core {
-		font-size: 9px;
-		height: 22px;
-		width: 22px;
+	.sidebar-scrim {
+		background: rgba(0, 0, 0, 0.5);
+		border: 0;
+		display: block;
+		inset: 0;
+		min-height: 0;
+		padding: 0;
+		position: fixed;
+		z-index: 59;
 	}
 
 	.sidebar-head {
-		justify-items: center;
-		padding-bottom: 8px;
+		align-items: center;
+		display: grid;
+		gap: 14px;
+		grid-template-columns: 58px 1fr;
+		padding-bottom: 20px;
 	}
 
-	.vault-badge,
-	.sidebar-skill,
-	.account-chip div {
-		display: none;
+	.sidebar-head .brand-lockup,
+	.vault-badge {
+		grid-column: 2;
+	}
+
+	.vault-badge {
+		justify-self: start;
+	}
+
+	.sidebar-close,
+	.sidebar-toggle {
+		align-items: center;
+		aspect-ratio: 1;
+		background: rgba(242, 245, 238, 0.1);
+		border: 1px solid var(--line-strong);
+		border-radius: 50%;
+		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+		color: var(--ink);
+		display: inline-flex;
+		font-family: var(--mono);
+		font-size: 42px;
+		font-weight: 400;
+		justify-content: center;
+		line-height: 1;
+		min-height: 0;
+		padding: 0 3px 5px 0;
+		width: 58px;
+	}
+
+	.sidebar-close {
+		grid-row: 1 / span 2;
 	}
 
 	.sidebar-nav {
@@ -1722,55 +1766,58 @@ button.deny {
 	}
 
 	.sidebar-nav a {
-		border-color: var(--line);
-		font-size: 0;
-		gap: 0;
-		grid-template-columns: 1fr;
-		justify-items: center;
-		min-height: 48px;
-		padding: 8px;
+		border-color: transparent;
+		border-radius: 10px;
+		font-size: 20px;
+		gap: 16px;
+		grid-template-columns: 38px minmax(0, 1fr);
+		min-height: 62px;
+		padding: 12px 14px;
 	}
 
 	.sidebar-nav a span {
-		border-color: transparent;
-		font-size: 10px;
-		height: 30px;
-		width: 30px;
+		font-size: 11px;
+		height: 34px;
+		width: 34px;
 	}
 
 	.sidebar-footer {
-		gap: 8px;
-		justify-items: center;
-		padding-top: 8px;
+		gap: 12px;
+		padding-top: 18px;
 	}
 
 	.account-chip {
-		background: transparent;
-		border-color: transparent;
-		grid-template-columns: 1fr;
-		padding: 0;
+		grid-template-columns: 44px minmax(0, 1fr);
+		padding: 12px;
 	}
 
 	.account-avatar {
-		height: 42px;
-		width: 42px;
+		height: 44px;
+		width: 44px;
 	}
 
 	.logout-button {
-		font-size: 0;
-		min-height: 42px;
-		padding: 0;
+		font-size: 12px;
+		min-height: 52px;
+		padding: 0 18px;
 		width: 100%;
 	}
 
 	.logout-button::before {
-		content: "OUT";
-		font-size: 10px;
+		content: none;
 	}
 
 	.console-topbar {
+		display: grid;
+		gap: 10px;
+		grid-template-columns: 58px minmax(0, 1fr);
 		position: relative;
 		top: auto;
+	}
+
+	.console-topbar > div:first-of-type,
+	.console-topbar .topbar-status {
+		grid-column: 2;
 	}
 
 	.console-topbar,

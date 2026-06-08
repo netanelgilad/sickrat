@@ -739,6 +739,7 @@ function AppShell({
 		cloudflareToken ? "Cloudflare session found in this browser." : "Cloudflare login is not connected.",
 	);
 	const [busy, setBusy] = useState(false);
+	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	const installed = useMemo(isStandalone, []);
 	const selectedAccount = cloudflareAccounts.find((account) => account.id === selectedAccountId) ?? cloudflareAccounts[0] ?? null;
@@ -2031,8 +2032,24 @@ function AppShell({
 		return (
 			<main className="app-page">
 				<div className="console-shell">
-					<aside className="console-sidebar">
+					{sidebarOpen ? (
+						<button
+							className="sidebar-scrim"
+							type="button"
+							aria-label="Close console navigation"
+							onClick={() => setSidebarOpen(false)}
+						/>
+					) : null}
+					<aside className={`console-sidebar ${sidebarOpen ? "open" : ""}`}>
 						<div className="sidebar-head">
+							<button
+								className="sidebar-close"
+								type="button"
+								aria-label="Close console navigation"
+								onClick={() => setSidebarOpen(false)}
+							>
+								‹
+							</button>
 							<Link className="brand-lockup" to="/">
 								<span className="brand-mark" aria-hidden="true">
 									<span className="mark-core">SR</span>
@@ -2042,12 +2059,12 @@ function AppShell({
 							<span className="vault-badge">default vault</span>
 						</div>
 						<nav className="sidebar-nav" aria-label="Console">
-							<NavLink end to="/app"><span aria-hidden="true">DB</span>Dashboard</NavLink>
-							<NavLink to="/app/vaults"><span aria-hidden="true">VT</span>Vaults</NavLink>
-							<NavLink to="/app/secrets"><span aria-hidden="true">SK</span>Server Secrets</NavLink>
-							<NavLink to="/app/approvals"><span aria-hidden="true">GR</span>Approval Grants</NavLink>
-							<NavLink to="/app/devices"><span aria-hidden="true">MC</span>Machines</NavLink>
-							<NavLink to="/app/settings"><span aria-hidden="true">ST</span>Account Settings</NavLink>
+							<NavLink end to="/app" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">DB</span>Dashboard</NavLink>
+							<NavLink to="/app/vaults" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">VT</span>Vaults</NavLink>
+							<NavLink to="/app/secrets" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">SK</span>Server Secrets</NavLink>
+							<NavLink to="/app/approvals" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">GR</span>Approval Grants</NavLink>
+							<NavLink to="/app/devices" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">MC</span>Machines</NavLink>
+							<NavLink to="/app/settings" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">ST</span>Account Settings</NavLink>
 						</nav>
 						<div className="sidebar-footer">
 							<a className="sidebar-skill" href="/skills/sickrat.md">Agent skill</a>
@@ -2065,6 +2082,15 @@ function AppShell({
 					</aside>
 					<section className="console-main">
 						<header className="console-topbar">
+							<button
+								className="sidebar-toggle"
+								type="button"
+								aria-label="Open console navigation"
+								aria-expanded={sidebarOpen}
+								onClick={() => setSidebarOpen(true)}
+							>
+								‹
+							</button>
 							<div>
 								<span>default vault</span>
 								<strong>{window.location.host}</strong>

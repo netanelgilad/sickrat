@@ -728,6 +728,11 @@ textarea {
 	overflow-wrap: anywhere;
 }
 
+.secret-list li.missing {
+	background: rgba(244, 200, 75, 0.18);
+	border-color: rgba(244, 200, 75, 0.95);
+}
+
 .secret-list strong {
 	font-family: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, sans-serif;
 	font-size: 13px;
@@ -735,6 +740,28 @@ textarea {
 
 .secret-list span {
 	color: var(--muted);
+}
+
+.missing-secret-panel {
+	background:
+		linear-gradient(135deg, rgba(244, 200, 75, 0.18), transparent 62%),
+		#fff8e6;
+	border: 1px solid rgba(16, 20, 18, 0.32);
+	border-radius: 8px;
+	margin-top: 18px;
+	padding: 16px;
+}
+
+.missing-secret-panel h2 {
+	font-family: Georgia, "Times New Roman", serif;
+	font-size: 28px;
+	line-height: 1;
+}
+
+.missing-secret-panel p {
+	color: var(--muted);
+	line-height: 1.45;
+	margin: 10px 0 0;
 }
 
 .decision-row {

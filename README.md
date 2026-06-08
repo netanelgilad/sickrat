@@ -108,6 +108,7 @@ sickrat request <ref> [--message <why>]
 ```
 
 Use `--message` when an agent requests a secret so the phone approval screen explains the task, not just the reference name.
+If the requested reference does not exist yet, the approval screen can collect the value, save it into the vault, and approve the original request in one flow.
 
 Planned commands include `run`, `inject`, vault listing, and safer delivery modes beyond environment variables. See [docs/cli.md](docs/cli.md).
 

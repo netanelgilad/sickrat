@@ -580,6 +580,7 @@ function App() {
 		ref: "",
 		value: "",
 	});
+	const [approvalSecretValues, setApprovalSecretValues] = useState<Record<string, string>>({});
 	const [pairingCode, setPairingCode] = useState("");
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
 	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown by the CLI.");
@@ -597,6 +598,11 @@ function App() {
 	const requestId = useMemo(() => new URLSearchParams(window.location.search).get("request"), []);
 	const screen = useMemo(() => new URLSearchParams(window.location.search).get("screen"), []);
 	const isCloudflareCallback = window.location.pathname === "/cf/callback";
+	const missingApprovalRefs = useMemo(() => {
+		if (!approval) return [];
+		const storedRefs = new Set(secrets.map((secret) => secret.ref));
+		return approval.secretRefs.filter((ref) => !storedRefs.has(ref));
+	}, [approval, secrets]);
 
 	useEffect(() => {
 		if (!("serviceWorker" in navigator)) return;
@@ -948,10 +954,41 @@ function App() {
 			if (action === "approve" && approval.ephemeralPublicKey) {
 				let key = vaultKey;
 				if (!key) {
-					setStatus("Unlocking vault with passkey...");
-					key = await unlockPasskeyVaultKey();
-					if (!key) throw new Error("Unlock the vault before approving this CLI request.");
+					if (getPasskeyVaultRecord()) {
+						setStatus("Unlocking vault with passkey...");
+						key = await unlockPasskeyVaultKey();
+					} else {
+						setStatus("Creating a passkey-protected vault key...");
+						key = await createPasskeyWrappedVaultKey();
+					}
+					if (!key) throw new Error("Unlock or create the vault key before approving this CLI request.");
 					setVaultKey(key);
+				}
+				if (missingApprovalRefs.length > 0) {
+					for (const ref of missingApprovalRefs) {
+						const value = approvalSecretValues[ref] ?? "";
+						if (!value) throw new Error(`Enter a value for ${ref} before approving.`);
+					}
+					setStatus("Encrypting new secrets locally...");
+					const savedSecrets: SecretMetadata[] = [];
+					for (const ref of missingApprovalRefs) {
+						const encrypted = await encryptSecretValue(approvalSecretValues[ref], key);
+						const saved = await api.saveSecret({
+							ref,
+							label: ref,
+							...encrypted,
+						});
+						savedSecrets.push(saved);
+					}
+					setSecrets((current) => [
+						...savedSecrets,
+						...current.filter((secret) => !savedSecrets.some((saved) => saved.ref === secret.ref)),
+					]);
+					setApprovalSecretValues((current) => {
+						const next = { ...current };
+						for (const ref of missingApprovalRefs) delete next[ref];
+						return next;
+					});
 				}
 				setStatus("Loading encrypted secrets from Cloudflare...");
 				const encryptedSecrets = await api.resolveSecrets(approval.secretRefs);
@@ -1137,9 +1174,56 @@ function App() {
 						</div>
 						<ul className="secret-list">
 							{approval.secretRefs.map((ref) => (
-								<li key={ref}>{ref}</li>
+								<li className={missingApprovalRefs.includes(ref) ? "missing" : undefined} key={ref}>
+									<strong>{ref}</strong>
+									<span>{missingApprovalRefs.includes(ref) ? "Not in vault yet" : "Stored in vault"}</span>
+								</li>
 							))}
 						</ul>
+						{missingApprovalRefs.length > 0 ? (
+							<div className="missing-secret-panel">
+								<h2>Create missing secrets</h2>
+								<p>
+									The agent requested references that are not in this vault yet. Enter the values here to
+									encrypt and save them, then this same approval will continue.
+								</p>
+								<div className="vault-panel">
+									<div>
+										<strong>
+											{vaultKey
+												? "Vault unlocked"
+												: getPasskeyVaultRecord()
+													? "Vault locked"
+													: "No passkey vault on this device"}
+										</strong>
+										<span>
+											{vaultKey
+												? "New values will be encrypted before upload."
+												: getPasskeyVaultRecord()
+													? "Approving will ask you to unlock with your passkey."
+													: "Approving will first create a passkey-protected vault key."}
+										</span>
+									</div>
+								</div>
+								<div className="secret-form">
+									{missingApprovalRefs.map((ref) => (
+										<label key={ref}>
+											{ref}
+											<textarea
+												autoCapitalize="none"
+												autoComplete="off"
+												value={approvalSecretValues[ref] ?? ""}
+												onChange={(event) =>
+													setApprovalSecretValues((current) => ({ ...current, [ref]: event.target.value }))
+												}
+												placeholder="Paste value to save and approve"
+												rows={3}
+											/>
+										</label>
+									))}
+								</div>
+							</div>
+						) : null}
 						<div className="decision-row">
 							<button disabled={busy || approval.status !== "pending"} onClick={() => decide("deny")} className="deny">
 								Deny

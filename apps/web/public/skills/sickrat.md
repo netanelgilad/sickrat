@@ -33,10 +33,13 @@ sickrat request prod/database/url --message "Apply the requested database migrat
 
 The user receives an approval prompt. After approval, Sickrat returns a short-lived grant for the CLI process.
 
+If the reference does not exist yet, still request it with a clear message. The user can create the missing secret from the approval screen and approve the same request.
+
 ## Agent Behavior
 
 - Explain why the secret is needed before requesting it.
 - Put that explanation in `--message` so it appears on the user's approval screen.
+- It is valid to request a new reference that may not exist yet, but make the need specific and narrow.
 - Request the narrowest secret reference that satisfies the task.
 - Never print secret values unless the user explicitly asks for that in a clearly non-production test.
 - Prefer `sickrat run` or env injection once available, so plaintext only reaches the child process that needs it.

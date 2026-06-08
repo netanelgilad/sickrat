@@ -36,6 +36,7 @@ Future env-file auto-detection should use `sickrat://...` as the explicit marker
 `sickrat run` resolves references, requests mobile approval, injects plaintext values into the child process environment, and removes plaintext from CLI-owned buffers after the process exits or fails to spawn.
 
 Agents should include `--message` whenever they request approval so the phone screen explains the work being performed, not only the secret reference.
+Agents may request a reference that does not exist yet. The PWA should treat that as a just-in-time secret creation flow: collect the value from the user, save it encrypted into the vault, then continue the same approval.
 
 Example:
 

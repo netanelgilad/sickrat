@@ -552,6 +552,15 @@ function mapSecret(row: Pick<SecretRecord, "id" | "ref" | "label" | "kdf" | "cre
 	};
 }
 
+function mapDevice(row: DeviceRecord) {
+	return {
+		id: row.id,
+		label: row.label,
+		createdAt: row.created_at,
+		revokedAt: row.revoked_at,
+	};
+}
+
 async function createDemoApproval(subscriptionId: string, env: EnvWithBindings) {
 	if (!env.DB) throw new Error("D1 binding is not configured.");
 	const id = crypto.randomUUID();
@@ -701,6 +710,27 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 				requiresHomeScreenInstall: true,
 			},
 		});
+	}
+
+	if (url.pathname === "/api/devices" && request.method === "GET") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const result = await env.DB.prepare(
+			"SELECT id, label, public_key, created_at, revoked_at FROM devices ORDER BY created_at DESC LIMIT 100",
+		).all<DeviceRecord>();
+		return json({ devices: result.results.map(mapDevice) });
+	}
+
+	const revokeDeviceMatch = url.pathname.match(/^\/api\/devices\/([^/]+)\/revoke$/);
+	if (revokeDeviceMatch && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = decodeURIComponent(revokeDeviceMatch[1]);
+		const revokedAt = new Date().toISOString();
+		await env.DB.prepare("UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").bind(revokedAt, id).run();
+		const device = await env.DB.prepare("SELECT id, label, public_key, created_at, revoked_at FROM devices WHERE id = ?")
+			.bind(id)
+			.first<DeviceRecord>();
+		if (!device) return json({ error: "Device not found." }, { status: 404 });
+		return json({ ok: true, device: mapDevice(device) });
 	}
 
 	if (url.pathname === "/api/devices/pairing-codes" && request.method === "POST") {
@@ -996,6 +1026,21 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			.bind(subscription.id)
 			.first<ApprovalRequestRecord>();
 		return json({ approval: approval ? mapApproval(approval) : null });
+	}
+
+	if (url.pathname === "/api/approvals" && request.method === "GET") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const status = url.searchParams.get("status");
+		if (status && status !== "pending" && status !== "approved" && status !== "denied") {
+			return json({ error: "Status must be pending, approved, or denied." }, { status: 400 });
+		}
+		const requestedLimit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+		const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 100) : 100;
+		const statement = status
+			? env.DB.prepare(`${approvalSelect} WHERE status = ? ORDER BY created_at DESC LIMIT ?`).bind(status, limit)
+			: env.DB.prepare(`${approvalSelect} ORDER BY created_at DESC LIMIT ?`).bind(limit);
+		const result = await statement.all<ApprovalRequestRecord>();
+		return json({ approvals: result.results.map(mapApproval) });
 	}
 
 	if (url.pathname.startsWith("/api/approvals/") && !url.pathname.endsWith("/grant") && request.method === "GET") {

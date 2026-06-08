@@ -661,6 +661,311 @@ article h3,
 	padding-top: 16px;
 }
 
+.console-shell {
+	display: grid;
+	gap: 16px;
+	grid-template-columns: 236px minmax(0, 1fr);
+	min-height: calc(100vh - 58px);
+}
+
+.console-sidebar {
+	align-self: start;
+	background:
+		linear-gradient(180deg, rgba(69, 255, 138, 0.08), transparent 32%),
+		rgba(10, 15, 12, 0.94);
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	box-shadow: var(--shadow);
+	display: grid;
+	gap: 20px;
+	padding: 14px;
+	position: sticky;
+	top: 16px;
+}
+
+.sidebar-nav {
+	display: grid;
+	gap: 6px;
+}
+
+.sidebar-nav a,
+.sidebar-skill {
+	border: 1px solid transparent;
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 12px;
+	font-weight: 900;
+	padding: 12px 10px;
+	text-decoration: none;
+	text-transform: uppercase;
+}
+
+.sidebar-nav a:hover,
+.sidebar-nav a.active {
+	background: rgba(69, 255, 138, 0.1);
+	border-color: rgba(69, 255, 138, 0.52);
+	color: var(--ink);
+}
+
+.sidebar-skill {
+	border-color: var(--line);
+	margin-top: 8px;
+	text-align: center;
+}
+
+.console-main {
+	min-width: 0;
+}
+
+.console-topbar {
+	align-items: center;
+	background: rgba(7, 9, 8, 0.82);
+	border: 1px solid var(--line);
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+	margin-bottom: 14px;
+	padding: 12px 14px;
+	position: sticky;
+	top: 16px;
+	z-index: 9;
+}
+
+.console-topbar div:first-child {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+
+.console-topbar span,
+.console-topbar strong {
+	font-family: var(--mono);
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.console-topbar span {
+	color: var(--muted);
+	font-size: 11px;
+}
+
+.console-topbar strong {
+	color: var(--green);
+	font-size: 13px;
+	overflow-wrap: anywhere;
+}
+
+.topbar-status {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 7px;
+	justify-content: flex-end;
+}
+
+.topbar-status span {
+	background: rgba(242, 245, 238, 0.04);
+	border: 1px solid var(--line);
+	border-radius: 2px;
+	color: var(--ink);
+	padding: 7px 8px;
+}
+
+.route-panel {
+	animation: route-enter 220ms ease-out both;
+}
+
+.route-heading {
+	border-bottom: 1px solid var(--line);
+	margin-bottom: 16px;
+	padding: 18px 0 20px;
+}
+
+.route-heading h1 {
+	font-size: clamp(42px, 6vw, 76px);
+}
+
+.route-heading p:not(.eyebrow) {
+	color: var(--muted);
+	font-size: 17px;
+	line-height: 1.5;
+	margin: 12px 0 0;
+	max-width: 720px;
+}
+
+.dashboard-grid {
+	display: grid;
+	gap: 12px;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	margin-top: 18px;
+}
+
+.dashboard-card {
+	background:
+		linear-gradient(145deg, rgba(69, 255, 138, 0.1), transparent 58%),
+		var(--panel);
+	border: 1px solid var(--line-strong);
+	border-radius: 4px;
+	color: var(--ink);
+	display: grid;
+	gap: 8px;
+	min-height: 158px;
+	padding: 16px;
+	text-decoration: none;
+}
+
+.dashboard-card:hover {
+	border-color: var(--green);
+}
+
+.dashboard-card span,
+.dashboard-card small {
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 11px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.dashboard-card strong {
+	color: var(--green);
+	font-family: var(--mono);
+	font-size: clamp(22px, 3vw, 32px);
+	line-height: 1.05;
+	overflow-wrap: anywhere;
+	text-transform: uppercase;
+}
+
+.dashboard-card small {
+	align-self: end;
+	line-height: 1.35;
+	text-transform: none;
+}
+
+.segmented-control {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 0 0 14px;
+}
+
+.segmented-control button {
+	min-height: 38px;
+}
+
+.segmented-control button.active {
+	background: var(--green);
+	color: #031009;
+}
+
+.approval-list,
+.device-list {
+	display: grid;
+	gap: 8px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.approval-list a,
+.device-list li {
+	background: rgba(242, 245, 238, 0.035);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	color: var(--ink);
+	display: grid;
+	gap: 8px;
+	padding: 13px;
+	text-decoration: none;
+}
+
+.approval-list a {
+	grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1fr) auto;
+	align-items: center;
+}
+
+.approval-list a:hover,
+.device-list li:hover {
+	border-color: rgba(69, 255, 138, 0.58);
+}
+
+.approval-list strong,
+.approval-list small,
+.approval-list time,
+.device-list strong,
+.device-list span,
+.device-list small,
+.mini-status {
+	font-family: var(--mono);
+	overflow-wrap: anywhere;
+}
+
+.approval-list strong,
+.device-list strong {
+	font-size: 13px;
+}
+
+.approval-list small,
+.approval-list time,
+.device-list span,
+.device-list small,
+.mini-status {
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 800;
+}
+
+.device-list li {
+	align-items: center;
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.device-list div {
+	display: grid;
+	gap: 5px;
+	min-width: 0;
+}
+
+.device-list button {
+	min-height: 38px;
+}
+
+.install-card {
+	background: rgba(242, 245, 238, 0.035);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	display: grid;
+	gap: 10px;
+	margin-top: 12px;
+	padding: 12px;
+}
+
+.install-card.installed {
+	border-color: rgba(69, 255, 138, 0.65);
+}
+
+.install-card strong {
+	color: var(--ink);
+	font-family: var(--mono);
+	font-size: 13px;
+	text-transform: uppercase;
+}
+
+.install-card span {
+	color: var(--muted);
+	line-height: 1.4;
+}
+
+.install-card button {
+	justify-self: start;
+}
+
+.approval-header.compact h2 {
+	font-family: var(--mono);
+	font-size: 18px;
+	line-height: 1.1;
+	text-transform: uppercase;
+}
+
 .app-shell-header {
 	align-items: center;
 	background: rgba(7, 9, 8, 0.82);
@@ -1154,8 +1459,35 @@ button.deny {
 	.story-section,
 	.cli-section,
 	.app-command,
-	.app-grid {
+	.app-grid,
+	.console-shell,
+	.dashboard-grid {
 		grid-template-columns: 1fr;
+	}
+
+	.console-sidebar {
+		position: relative;
+		top: auto;
+	}
+
+	.sidebar-nav {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	.sidebar-nav a,
+	.sidebar-skill {
+		text-align: center;
+	}
+
+	.console-topbar {
+		align-items: stretch;
+		flex-direction: column;
+		position: relative;
+		top: auto;
+	}
+
+	.topbar-status {
+		justify-content: flex-start;
 	}
 
 	.product-hero {
@@ -1206,6 +1538,8 @@ button.deny {
 	.trust-strip,
 	.console-grid,
 	.app-status-board,
+	.approval-list a,
+	.device-list li,
 	.stored-refs-panel .secret-list {
 		grid-template-columns: 1fr;
 	}

@@ -21,6 +21,12 @@
 	--cyan: #8fe7ff;
 	--shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
 	--mono: ui-monospace, "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+	--safe-top: env(safe-area-inset-top, 0px);
+	--safe-right: env(safe-area-inset-right, 0px);
+	--safe-bottom: env(safe-area-inset-bottom, 0px);
+	--safe-left: env(safe-area-inset-left, 0px);
+	--shell-edge: 16px;
+	--shell-top: calc(var(--shell-edge) + var(--safe-top));
 }
 
 * {
@@ -34,6 +40,7 @@ html {
 body {
 	margin: 0;
 	min-height: 100vh;
+	min-height: 100svh;
 	background:
 		linear-gradient(rgba(69, 255, 138, 0.035) 1px, transparent 1px),
 		linear-gradient(90deg, rgba(69, 255, 138, 0.028) 1px, transparent 1px),
@@ -106,7 +113,8 @@ a {
 main {
 	margin: 0 auto;
 	max-width: 1180px;
-	padding: 22px 22px calc(42px + env(safe-area-inset-bottom));
+	padding: calc(22px + var(--safe-top)) calc(22px + var(--safe-right)) calc(42px + var(--safe-bottom))
+		calc(22px + var(--safe-left));
 }
 
 .product-page {
@@ -658,14 +666,14 @@ article h3,
 
 .app-page {
 	max-width: 1240px;
-	padding-top: 16px;
+	padding-top: var(--shell-top);
 }
 
 .console-shell {
 	display: grid;
 	gap: 16px;
 	grid-template-columns: 236px minmax(0, 1fr);
-	min-height: calc(100vh - 58px);
+	min-height: calc(100svh - var(--shell-top) - var(--safe-bottom));
 }
 
 .console-sidebar {
@@ -680,7 +688,7 @@ article h3,
 	gap: 20px;
 	padding: 14px;
 	position: sticky;
-	top: 16px;
+	top: var(--shell-top);
 }
 
 .sidebar-nav {
@@ -727,7 +735,7 @@ article h3,
 	margin-bottom: 14px;
 	padding: 12px 14px;
 	position: sticky;
-	top: 16px;
+	top: var(--shell-top);
 	z-index: 9;
 }
 
@@ -1263,8 +1271,9 @@ textarea {
 
 .approval-screen {
 	min-height: 100vh;
+	min-height: 100svh;
 	max-width: 780px;
-	padding-top: calc(18px + env(safe-area-inset-top));
+	padding-top: calc(18px + var(--safe-top));
 }
 
 .back-link {
@@ -1438,9 +1447,9 @@ button.deny {
 	gap: 12px;
 	justify-content: space-between;
 	position: fixed;
-	left: max(12px, env(safe-area-inset-left));
-	right: max(12px, env(safe-area-inset-right));
-	bottom: max(12px, env(safe-area-inset-bottom));
+	left: max(12px, var(--safe-left));
+	right: max(12px, var(--safe-right));
+	bottom: max(12px, var(--safe-bottom));
 	z-index: 20;
 	padding: 12px;
 }
@@ -1512,7 +1521,12 @@ button.deny {
 
 @media (max-width: 760px) {
 	main {
-		padding: 16px 16px calc(96px + env(safe-area-inset-bottom));
+		padding: calc(16px + var(--safe-top)) calc(16px + var(--safe-right)) calc(96px + var(--safe-bottom))
+			calc(16px + var(--safe-left));
+	}
+
+	.app-page {
+		padding-top: calc(14px + var(--safe-top));
 	}
 
 	.site-nav {

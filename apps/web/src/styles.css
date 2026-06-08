@@ -35,12 +35,14 @@
 
 html {
 	scroll-behavior: smooth;
+	scrollbar-width: none;
 }
 
 body {
 	margin: 0;
 	min-height: 100vh;
 	min-height: 100svh;
+	-ms-overflow-style: none;
 	background:
 		linear-gradient(rgba(69, 255, 138, 0.035) 1px, transparent 1px),
 		linear-gradient(90deg, rgba(69, 255, 138, 0.028) 1px, transparent 1px),
@@ -48,6 +50,15 @@ body {
 		radial-gradient(circle at 6% 34%, rgba(255, 77, 91, 0.11), transparent 24rem),
 		linear-gradient(180deg, #090c0a 0%, #050605 100%);
 	background-size: 42px 42px, 42px 42px, auto, auto, auto;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+.app-page::-webkit-scrollbar,
+.console-sidebar::-webkit-scrollbar {
+	display: none;
+	height: 0;
+	width: 0;
 }
 
 body::before {
@@ -667,6 +678,7 @@ article h3,
 .app-page {
 	max-width: 1240px;
 	padding-top: var(--shell-top);
+	scrollbar-width: none;
 }
 
 .auth-page {
@@ -721,6 +733,7 @@ article h3,
 	min-height: calc(100svh - var(--shell-top) - var(--safe-bottom));
 	padding: 14px;
 	position: sticky;
+	scrollbar-width: none;
 	top: var(--shell-top);
 }
 

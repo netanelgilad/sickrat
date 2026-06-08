@@ -1685,7 +1685,7 @@ button.deny {
 
 	.app-page {
 		max-width: none;
-		padding: calc(10px + var(--safe-top)) calc(8px + var(--safe-right)) calc(96px + var(--safe-bottom))
+		padding: 0 calc(8px + var(--safe-right)) calc(96px + var(--safe-bottom))
 			calc(8px + var(--safe-left));
 	}
 
@@ -1825,13 +1825,17 @@ button.deny {
 
 	.console-topbar {
 		background:
-			linear-gradient(180deg, rgba(7, 9, 8, 0.98), rgba(7, 9, 8, 0.9)),
+			linear-gradient(180deg, #050806, rgba(7, 9, 8, 0.98) calc(var(--safe-top) + 18px), rgba(7, 9, 8, 0.94)),
 			var(--black);
+		border-color: rgba(211, 229, 211, 0.28);
 		display: grid;
 		gap: 10px;
 		grid-template-columns: 58px minmax(0, 1fr);
+		margin-left: calc(-8px - var(--safe-left));
+		margin-right: calc(-8px - var(--safe-right));
+		padding: calc(10px + var(--safe-top)) calc(8px + var(--safe-right)) 12px calc(8px + var(--safe-left));
 		position: sticky;
-		top: calc(8px + var(--safe-top));
+		top: 0;
 		z-index: 30;
 	}
 
@@ -1844,6 +1848,11 @@ button.deny {
 	.route-heading,
 	.app-command {
 		margin-bottom: 10px;
+	}
+
+	.route-heading,
+	.app-command {
+		margin-top: 18px;
 	}
 
 	.console-topbar strong,

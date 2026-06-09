@@ -591,7 +591,7 @@ function InstallPrompt() {
 				<span>
 					{iosSafari
 						? "Tap Share, then Add to Home Screen. Open Sickrat from the new icon to enable phone approvals."
-						: "iOS installs web apps from Safari. Open sickrat.dev in Safari, then use Share -> Add to Home Screen."}
+						: "iOS installs web apps from Safari. Open app.sickrat.dev in Safari, then use Share -> Add to Home Screen."}
 				</span>
 			</div>
 		);
@@ -678,7 +678,6 @@ function PwaUpdatePrompt() {
 }
 
 type AppRoute =
-	| "landing"
 	| "login"
 	| "app"
 	| "vaults"
@@ -862,7 +861,7 @@ function AppShell({
 		api
 			.exchangeCloudflareCode(code, codeVerifier, cloudflareConfig.redirectUri)
 			.then((accessToken) => {
-				const redirectTo = sessionStorage.getItem("sickrat.cf.redirectTo") || "/app";
+				const redirectTo = sessionStorage.getItem("sickrat.cf.redirectTo") || "/";
 				localStorage.setItem("sickrat.cf.accessToken", accessToken);
 				sessionStorage.removeItem("sickrat.cf.state");
 				sessionStorage.removeItem("sickrat.cf.codeVerifier");
@@ -880,17 +879,17 @@ function AppShell({
 	useEffect(() => {
 		if (route !== "login" || isCloudflareCallback) return;
 		if (cloudflareToken) {
-			navigate("/app", { replace: true });
+			navigate("/", { replace: true });
 			return;
 		}
-		if (cloudflareConfig) void loginWithCloudflare("/app");
+		if (cloudflareConfig) void loginWithCloudflare("/");
 	}, [cloudflareConfig, cloudflareToken, isCloudflareCallback, navigate, route]);
 
 	useEffect(() => {
-		const isProtectedConsoleRoute = route !== "landing" && route !== "login" && route !== "approval" && !isCloudflareCallback;
+		const isProtectedConsoleRoute = route !== "login" && route !== "approval" && !isCloudflareCallback;
 		if (!isProtectedConsoleRoute || cloudflareToken || !cloudflareConfig) return;
 		const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-		void loginWithCloudflare(currentPath.startsWith("/app") ? currentPath : "/app");
+		void loginWithCloudflare(currentPath);
 	}, [cloudflareConfig, cloudflareToken, isCloudflareCallback, route]);
 
 	useEffect(() => {
@@ -1092,7 +1091,7 @@ function AppShell({
 		}
 	}
 
-	async function loginWithCloudflare(redirectTo = "/app") {
+	async function loginWithCloudflare(redirectTo = "/") {
 		if (!cloudflareConfig?.clientId) {
 			setCloudflareStatus("Cloudflare OAuth client is not configured on this Worker.");
 			return;
@@ -1375,7 +1374,7 @@ function AppShell({
 	if (route === "approval" && requestId) {
 		return (
 			<main className="approval-screen">
-				<Link className="back-link" to="/app">
+				<Link className="back-link" to="/">
 					Back to console
 				</Link>
 				{approval ? (
@@ -1504,8 +1503,8 @@ function AppShell({
 		);
 	}
 
-	if (route === "login" || (route !== "landing" && !isCloudflareCallback && !cloudflareToken)) {
-		const redirectTarget = route === "login" ? "/app" : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+	if (route === "login" || (!isCloudflareCallback && !cloudflareToken)) {
+		const redirectTarget = route === "login" ? "/" : `${window.location.pathname}${window.location.search}${window.location.hash}`;
 		return (
 			<main className="auth-page">
 				<section className="auth-card">
@@ -1527,9 +1526,9 @@ function AppShell({
 						<button disabled={busy || !cloudflareConfig?.clientId} onClick={() => loginWithCloudflare(redirectTarget)}>
 							{cloudflareConfig?.clientId ? "Continue With Cloudflare" : "Preparing Login"}
 						</button>
-						<Link className="button-link secondary-link" to="/">
+						<a className="button-link secondary-link" href="https://sickrat.dev">
 							Back Home
-						</Link>
+						</a>
 					</div>
 					<p className="screen-status">{cloudflareStatus}</p>
 				</section>
@@ -1537,7 +1536,7 @@ function AppShell({
 		);
 	}
 
-	if (route !== "landing") {
+	{
 		const renderCloudflareControls = () => (
 			<section className="console app-panel cloudflare-panel">
 				<div>
@@ -1584,7 +1583,7 @@ function AppShell({
 							</button>
 						</>
 					) : (
-							<button disabled={busy || !cloudflareConfig?.clientId} onClick={() => loginWithCloudflare("/app/settings")}>
+							<button disabled={busy || !cloudflareConfig?.clientId} onClick={() => loginWithCloudflare("/settings")}>
 								Log In With Cloudflare
 							</button>
 					)}
@@ -1738,22 +1737,22 @@ function AppShell({
 						</div>
 					</section>
 					<section className="dashboard-grid">
-						<Link className="dashboard-card" to="/app/vaults">
+						<Link className="dashboard-card" to="/vaults">
 							<span>Vault</span>
 							<strong>default</strong>
 							<small>{capabilities?.database.configured ? "D1 binding configured" : "D1 binding missing"}</small>
 						</Link>
-						<Link className="dashboard-card" to="/app/secrets">
+						<Link className="dashboard-card" to="/secrets">
 							<span>Secrets</span>
 							<strong>{secrets.length}</strong>
 							<small>Encrypted refs stored in D1</small>
 						</Link>
-						<Link className="dashboard-card" to="/app/approvals">
+						<Link className="dashboard-card" to="/approvals">
 							<span>Pending approvals</span>
 							<strong>{pendingApprovals.length}</strong>
 							<small>Approve a grant, not a permanent credential</small>
 						</Link>
-						<Link className="dashboard-card" to="/app/devices">
+						<Link className="dashboard-card" to="/devices">
 							<span>Active devices</span>
 							<strong>{activeDevices.length}</strong>
 							<small>Paired CLIs that can request access</small>
@@ -1890,7 +1889,7 @@ function AppShell({
 					<ul className="approval-list">
 						{approvals.map((item) => (
 							<li key={item.id}>
-								<Link to={`/app/approvals/${encodeURIComponent(item.id)}`}>
+								<Link to={`/approvals/${encodeURIComponent(item.id)}`}>
 									<span className={`pill ${item.status}`}>{item.status}</span>
 									<strong>{item.command}</strong>
 									<small>{item.message ?? `${item.secretRefs.length} refs requested`}</small>
@@ -1952,7 +1951,7 @@ function AppShell({
 										Open Approval
 									</Link>
 								) : null}
-								<Link className="button-link secondary-link" to="/app/approvals">
+								<Link className="button-link secondary-link" to="/approvals">
 									Back To Approvals
 								</Link>
 							</div>
@@ -2068,15 +2067,15 @@ function AppShell({
 							<span className="vault-badge">default vault</span>
 						</div>
 						<nav className="sidebar-nav" aria-label="Console">
-							<NavLink end to="/app" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">DB</span>Dashboard</NavLink>
-							<NavLink end to="/app/vaults" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">VT</span>Vaults</NavLink>
-							<NavLink end to="/app/secrets" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">SK</span>Server Secrets</NavLink>
-							<NavLink end to="/app/approvals" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">GR</span>Approval Grants</NavLink>
-							<NavLink end to="/app/devices" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">MC</span>Machines</NavLink>
-							<NavLink end to="/app/settings" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">ST</span>Account Settings</NavLink>
+							<NavLink end to="/" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">DB</span>Dashboard</NavLink>
+							<NavLink end to="/vaults" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">VT</span>Vaults</NavLink>
+							<NavLink end to="/secrets" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">SK</span>Server Secrets</NavLink>
+							<NavLink end to="/approvals" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">GR</span>Approval Grants</NavLink>
+							<NavLink end to="/devices" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">MC</span>Machines</NavLink>
+							<NavLink end to="/settings" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">ST</span>Account Settings</NavLink>
 						</nav>
 						<div className="sidebar-footer">
-							<a className="sidebar-skill" href="/skills/sickrat.md">Agent skill</a>
+							<a className="sidebar-skill" href="https://sickrat.dev/skills/sickrat.md">Agent skill</a>
 							<div className="account-chip">
 								<span className="account-avatar">{(selectedAccount?.name ?? "CF").slice(0, 2).toUpperCase()}</span>
 								<div>
@@ -2118,174 +2117,6 @@ function AppShell({
 		);
 	}
 
-	return (
-		<main className="product-page">
-			<nav className="site-nav" aria-label="Sickrat">
-				<Link className="brand-lockup" to="/">
-					<span className="brand-mark" aria-hidden="true">
-						<span className="mark-core">SR</span>
-					</span>
-					<span>Sickrat</span>
-				</Link>
-				<div className="nav-actions">
-					<a href="#how-it-works">How it works</a>
-					<Link to="/login">Log in</Link>
-				</div>
-			</nav>
-
-			<section className="hero product-hero">
-				<div className="hero-copy">
-					<p className="eyebrow">Agent credential quarantine</p>
-					<h1>Contain every secret request before it reaches the agent.</h1>
-					<p className="lede">
-						Sickrat is an open-source quarantine console for AI agents. Agents ask for named references,
-						your phone inspects the event, and the CLI receives a short-lived encrypted grant only after
-						you release it. The vault runs on Cloudflare resources you own.
-					</p>
-					<div className="hero-actions">
-						<a className="button-link" href="/skills/sickrat.md">
-							Give your agent the skill
-						</a>
-						<Link className="button-link secondary-link" to="/login">
-							Log in to console
-						</Link>
-					</div>
-				</div>
-				<div className="approval-demo" aria-label="Example approval request">
-					<div className="demo-console">
-						<div className="demo-frame">
-							<div className="demo-topline">
-								<span>Event SR-QTN-482913</span>
-								<strong>pending release</strong>
-							</div>
-							<div className="demo-alert">
-								<span className="hazard-mark" aria-hidden="true">!</span>
-								<div>
-									<h2>Codex requests credential access</h2>
-									<p>Approve only if this command and message match the task you intended.</p>
-								</div>
-							</div>
-							<div className="demo-meta-grid">
-								<div>
-									<span>Device</span>
-									<strong>mac-mini.lab</strong>
-								</div>
-								<div>
-									<span>Command</span>
-									<strong>npm run smoke:prod</strong>
-								</div>
-								<div>
-									<span>Message</span>
-									<strong>Run smoke test with the real API</strong>
-								</div>
-								<div>
-									<span>Secret refs</span>
-									<strong>openai/api-key</strong>
-								</div>
-							</div>
-							<div className="grant-meter">
-								<div>
-									<span>Grant TTL after release</span>
-									<strong>00:02:00</strong>
-								</div>
-								<div className="ttl-track" aria-hidden="true">
-									<span></span>
-								</div>
-							</div>
-							<div className="demo-buttons">
-								<span>Deny</span>
-								<strong>Release grant</strong>
-							</div>
-						</div>
-					</div>
-				</div>
-			</section>
-
-			<section className="trust-strip" aria-label="Product promises">
-				<span>User-owned Cloudflare vault</span>
-				<span>Phone approval gate</span>
-				<span>Short-lived CLI grants</span>
-				<span>Open-source inspection</span>
-			</section>
-
-			<section className="story-section" id="how-it-works">
-				<div>
-					<p className="eyebrow">Containment protocol</p>
-					<h2 className="section-title">Your agent gets a timed capability, not a permanent credential.</h2>
-				</div>
-				<div className="story-grid">
-					<article>
-						<span className="step-number">01</span>
-						<h3>Name the hazardous material</h3>
-						<p>
-							Give Codex, Claude Code, or any shell-capable agent the Sickrat skill. It learns to request
-							named references instead of pulling raw credentials into chat.
-						</p>
-					</article>
-					<article>
-						<span className="step-number">02</span>
-						<h3>Admit known devices</h3>
-						<p>
-							The CLI pairs your Mac mini, server, or dev box with your vault. Each future request carries
-							a known device, command, message, and requested secret refs.
-						</p>
-					</article>
-					<article>
-						<span className="step-number">03</span>
-						<h3>Release a short grant</h3>
-						<p>
-							When the agent needs a secret, Sickrat opens an approval screen on your phone. Approve,
-							deny, or ignore it. The CLI only receives encrypted material after release.
-						</p>
-					</article>
-				</div>
-			</section>
-
-			<section className="cli-section">
-				<div>
-					<p className="eyebrow">The CLI airlock</p>
-					<h2 className="section-title">Built for the moment your agent says: "I need an API key."</h2>
-					<p className="section-copy">
-						The CLI sits between autonomous work and hazardous credentials. It pairs the machine, requests
-						references, waits for your phone decision, then receives a sealed grant for the process that needs it.
-					</p>
-				</div>
-				<div className="terminal-card" aria-label="Sickrat CLI example">
-					<div className="terminal-header">
-						<span></span>
-						<span></span>
-						<span></span>
-					</div>
-					<pre>{`$ sickrat pair https://<your-vault-url>
-Pairing code: 482913
-
-$ sickrat request openai/api-key \\
-  --message "Run the smoke test with the real API"
-Waiting for approval on your phone...
-Approved. Encrypted grant sealed for this request.`}</pre>
-				</div>
-			</section>
-
-			<section className="agent-cta">
-				<div>
-					<p className="eyebrow">Agent operating procedure</p>
-					<h2>Start by giving your agent one instruction file.</h2>
-					<p>
-						The Sickrat skill tells an agent how to pair with your vault URL, how to explain why it
-						needs a secret, and how to keep raw credentials out of the conversation.
-					</p>
-				</div>
-				<div className="actions">
-					<a className="button-link" href="/skills/sickrat.md">
-						Open agent skill
-					</a>
-					<Link className="button-link secondary-link" to="/login">
-						Log in to console
-					</Link>
-				</div>
-			</section>
-		</main>
-	);
 }
 
 function App() {
@@ -2293,19 +2124,24 @@ function App() {
 		<>
 			<PwaUpdatePrompt />
 			<Routes>
-				<Route path="/" element={<AppShell route="landing" />} />
+				<Route path="/" element={<AppShell route="app" />} />
 				<Route path="/login" element={<AppShell route="login" />} />
-				<Route path="/app" element={<AppShell route="app" />} />
-				<Route path="/app/vaults" element={<AppShell route="vaults" />} />
-				<Route path="/app/secrets" element={<AppShell route="secrets" />} />
-				<Route path="/app/approvals" element={<AppShell route="approvals" />} />
-				<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />
-				<Route path="/app/devices" element={<AppShell route="devices" />} />
-				<Route path="/app/settings" element={<AppShell route="settings" />} />
+				<Route path="/vaults" element={<AppShell route="vaults" />} />
+				<Route path="/secrets" element={<AppShell route="secrets" />} />
+				<Route path="/approvals" element={<AppShell route="approvals" />} />
+				<Route path="/approvals/:requestId" element={<ApprovalDetailRoute />} />
+				<Route path="/devices" element={<AppShell route="devices" />} />
+				<Route path="/settings" element={<AppShell route="settings" />} />
 				<Route path="/cf/callback" element={<AppShell route="settings" isCloudflareCallback />} />
 				<Route path="/approve/:requestId" element={<ApprovalRoute />} />
-				<Route path="/secrets" element={<Navigate to="/app/secrets" replace />} />
-				<Route path="/pair" element={<Navigate to="/app/devices" replace />} />
+				<Route path="/app" element={<Navigate to="/" replace />} />
+				<Route path="/app/vaults" element={<Navigate to="/vaults" replace />} />
+				<Route path="/app/secrets" element={<Navigate to="/secrets" replace />} />
+				<Route path="/app/approvals" element={<Navigate to="/approvals" replace />} />
+				<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />
+				<Route path="/app/devices" element={<Navigate to="/devices" replace />} />
+				<Route path="/app/settings" element={<Navigate to="/settings" replace />} />
+				<Route path="/pair" element={<Navigate to="/devices" replace />} />
 				<Route path="*" element={<Navigate to="/" replace />} />
 			</Routes>
 		</>

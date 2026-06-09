@@ -8,5 +8,6 @@ build/
 !.env.example
 target/
 .wrangler/
+.astro/
 .expo/
 coverage/

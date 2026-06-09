@@ -1,0 +1,166 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+
+const appUrl = "https://app.sickrat.dev";
+---
+
+<BaseLayout>
+	<main class="product-page">
+		<nav class="site-nav" aria-label="Sickrat">
+			<a class="brand-lockup" href="/">
+				<span class="brand-mark" aria-hidden="true">
+					<span class="mark-core">SR</span>
+				</span>
+				<span>Sickrat</span>
+			</a>
+			<div class="nav-actions">
+				<a href="#how-it-works">How it works</a>
+				<a href={appUrl}>Log in</a>
+			</div>
+		</nav>
+
+		<section class="hero product-hero">
+			<div class="hero-copy">
+				<p class="eyebrow">Agent credential quarantine</p>
+				<h1>Contain every secret request before it reaches the agent.</h1>
+				<p class="lede">
+					Sickrat is an open-source quarantine console for AI agents. Agents ask for named references,
+					your phone inspects the event, and the CLI receives a short-lived encrypted grant only after
+					you release it. The vault runs on Cloudflare resources you own.
+				</p>
+				<div class="hero-actions">
+					<a class="button-link" href="/skills/sickrat.md">Give your agent the skill</a>
+					<a class="button-link secondary-link" href={appUrl}>Log in to console</a>
+				</div>
+			</div>
+			<div class="approval-demo" aria-label="Example approval request">
+				<div class="demo-console">
+					<div class="demo-frame">
+						<div class="demo-topline">
+							<span>Event SR-QTN-482913</span>
+							<strong>pending release</strong>
+						</div>
+						<div class="demo-alert">
+							<span class="hazard-mark" aria-hidden="true">!</span>
+							<div>
+								<h2>Codex requests credential access</h2>
+								<p>Approve only if this command and message match the task you intended.</p>
+							</div>
+						</div>
+						<div class="demo-meta-grid">
+							<div>
+								<span>Device</span>
+								<strong>mac-mini.lab</strong>
+							</div>
+							<div>
+								<span>Command</span>
+								<strong>npm run smoke:prod</strong>
+							</div>
+							<div>
+								<span>Message</span>
+								<strong>Run smoke test with the real API</strong>
+							</div>
+							<div>
+								<span>Secret refs</span>
+								<strong>openai/api-key</strong>
+							</div>
+						</div>
+						<div class="grant-meter">
+							<div>
+								<span>Grant TTL after release</span>
+								<strong>00:02:00</strong>
+							</div>
+							<div class="ttl-track" aria-hidden="true">
+								<span></span>
+							</div>
+						</div>
+						<div class="demo-buttons">
+							<span>Deny</span>
+							<strong>Release grant</strong>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="trust-strip" aria-label="Product promises">
+			<span>User-owned Cloudflare vault</span>
+			<span>Phone approval gate</span>
+			<span>Short-lived CLI grants</span>
+			<span>Open-source inspection</span>
+		</section>
+
+		<section class="story-section" id="how-it-works">
+			<div>
+				<p class="eyebrow">Containment protocol</p>
+				<h2 class="section-title">Your agent gets a timed capability, not a permanent credential.</h2>
+			</div>
+			<div class="story-grid">
+				<article>
+					<span class="step-number">01</span>
+					<h3>Name the hazardous material</h3>
+					<p>
+						Give Codex, Claude Code, or any shell-capable agent the Sickrat skill. It learns to request
+						named references instead of pulling raw credentials into chat.
+					</p>
+				</article>
+				<article>
+					<span class="step-number">02</span>
+					<h3>Admit known devices</h3>
+					<p>
+						The CLI pairs your Mac mini, server, or dev box with your vault. Each future request carries
+						a known device, command, message, and requested secret refs.
+					</p>
+				</article>
+				<article>
+					<span class="step-number">03</span>
+					<h3>Release a short grant</h3>
+					<p>
+						When the agent needs a secret, Sickrat opens an approval screen on your phone. Approve,
+						deny, or ignore it. The CLI only receives encrypted material after release.
+					</p>
+				</article>
+			</div>
+		</section>
+
+		<section class="cli-section">
+			<div>
+				<p class="eyebrow">The CLI airlock</p>
+				<h2 class="section-title">Built for the moment your agent says: "I need an API key."</h2>
+				<p class="section-copy">
+					The CLI sits between autonomous work and hazardous credentials. It pairs the machine, requests
+					references, waits for your phone decision, then receives a sealed grant for the process that needs it.
+				</p>
+			</div>
+			<div class="terminal-card" aria-label="Sickrat CLI example">
+				<div class="terminal-header">
+					<span></span>
+					<span></span>
+					<span></span>
+				</div>
+				<pre>{`$ sickrat pair https://app.sickrat.dev
+Pairing code: 482913
+
+$ sickrat request openai/api-key \\
+  --message "Run the smoke test with the real API"
+Waiting for approval on your phone...
+Approved. Encrypted grant sealed for this request.`}</pre>
+			</div>
+		</section>
+
+		<section class="agent-cta">
+			<div>
+				<p class="eyebrow">Agent operating procedure</p>
+				<h2>Start by giving your agent one instruction file.</h2>
+				<p>
+					The Sickrat skill tells an agent how to pair with your vault URL, how to explain why it
+					needs a secret, and how to keep raw credentials out of the conversation.
+				</p>
+			</div>
+			<div class="actions">
+				<a class="button-link" href="/skills/sickrat.md">Open agent skill</a>
+				<a class="button-link secondary-link" href={appUrl}>Log in to console</a>
+			</div>
+		</section>
+	</main>
+</BaseLayout>

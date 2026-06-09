@@ -2,7 +2,7 @@
 
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? process.argv[2];
 const token = process.env.CLOUDFLARE_API_TOKEN;
-const origin = process.env.SICKRAT_ORIGIN ?? "https://sickrat.dev";
+const origin = process.env.SICKRAT_ORIGIN ?? "https://app.sickrat.dev";
 const clientName = process.env.SICKRAT_OAUTH_CLIENT_NAME ?? "Sickrat";
 
 if (!accountId) {

@@ -1,0 +1,21 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "sickrat-site",
+	"compatibility_date": "2026-06-09",
+	"assets": {
+		"directory": "./dist/client"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"routes": [
+		{
+			"pattern": "sickrat.dev",
+			"custom_domain": true
+		},
+		{
+			"pattern": "www.sickrat.dev",
+			"custom_domain": true
+		}
+	]
+}

@@ -62,7 +62,7 @@ Usage:
 Examples:
   sickrat login
   sickrat vault create personal
-  sickrat pair https://sickrat.dev
+  sickrat pair https://app.sickrat.dev
   sickrat request leumi --message "Reconcile today's bank transactions"
 `;
 	(exitCode === 0 ? console.log : console.error)(output);

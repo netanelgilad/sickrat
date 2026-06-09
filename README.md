@@ -9,7 +9,8 @@ Sickrat is not a hosted multi-tenant secrets service. The current prototype prov
 This repository is an early prototype. The active code in this repo currently includes:
 
 - `apps/cli`: a Bun/TypeScript CLI named `sickrat`
-- `apps/web`: a React/Vite PWA backed by a Cloudflare Worker
+- `apps/site`: an Astro public product site deployed to `sickrat.dev`
+- `apps/web`: a React/Vite PWA console and Cloudflare Worker deployed to `app.sickrat.dev`
 - `packages/protocol`: shared TypeScript protocol helpers and envelope definitions
 - `docs`: architecture, CLI, provisioning, protocol, and threat-model notes
 
@@ -32,7 +33,8 @@ See [docs/architecture.md](docs/architecture.md) and [docs/threat-model.md](docs
 ```text
 apps/
   cli/             Bun/TypeScript CLI
-  web/             React PWA and Cloudflare Worker entrypoints
+  site/            Astro public product site for sickrat.dev
+  web/             React PWA console and Cloudflare Worker entrypoints for app.sickrat.dev
 packages/
   protocol/        Shared request/response and crypto envelope helpers
 docs/
@@ -68,6 +70,12 @@ Run the web app and Worker locally:
 npm run web
 ```
 
+Run the public Astro site locally:
+
+```sh
+npm run site
+```
+
 Run the CLI from source:
 
 ```sh
@@ -78,7 +86,9 @@ Type-check and build the workspaces:
 
 ```sh
 npm --workspace apps/cli run typecheck
+npm --workspace apps/site run typecheck
 npm --workspace apps/web run typecheck
+npm run site:build
 npm run web:build
 ```
 
@@ -88,6 +98,13 @@ Build the PWA/Worker bundle:
 
 ```sh
 npm run web:build
+```
+
+Deploy the public site and app console:
+
+```sh
+npm run site:deploy
+npm run web:deploy
 ```
 
 Build the CLI for the current machine:
@@ -132,7 +149,7 @@ printf '%s' '<returned-client-id>' | npx wrangler secret put CF_OAUTH_CLIENT_ID
 npm run web:deploy
 ```
 
-The generated OAuth client is configured for Authorization Code with PKCE, `token_endpoint_auth_method: none`, redirect URI `https://sickrat.dev/cf/callback`, and the Cloudflare scopes needed by the current provisioning prototype.
+The generated OAuth client is configured for Authorization Code with PKCE, `token_endpoint_auth_method: none`, redirect URI `https://app.sickrat.dev/cf/callback`, and the Cloudflare scopes needed by the current provisioning prototype.
 
 ## Releases
 

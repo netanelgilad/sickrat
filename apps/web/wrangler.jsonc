@@ -23,11 +23,7 @@
 	},
 	"routes": [
 		{
-			"pattern": "sickrat.dev",
-			"custom_domain": true
-		},
-		{
-			"pattern": "www.sickrat.dev",
+			"pattern": "app.sickrat.dev",
 			"custom_domain": true
 		}
 	],

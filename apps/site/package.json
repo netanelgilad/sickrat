@@ -1,0 +1,23 @@
+{
+  "name": "site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "astro build",
+    "deploy": "astro build && wrangler deploy",
+    "dev": "astro dev",
+    "preview": "astro preview",
+    "start": "astro dev",
+    "typecheck": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/cloudflare": "^13.0.0",
+    "astro": "^6.0.0"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.9",
+    "@types/node": "^25.9.2",
+    "wrangler": "^4.98.0"
+  }
+}

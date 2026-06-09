@@ -1,7 +1,5 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
-
-const appUrl = "https://app.sickrat.dev";
 ---
 
 <BaseLayout>
@@ -15,7 +13,7 @@ const appUrl = "https://app.sickrat.dev";
 			</a>
 			<div class="nav-actions">
 				<a href="#how-it-works">How it works</a>
-				<a href={appUrl}>Log in</a>
+				<a href="/skills/sickrat.md">Agent skill</a>
 			</div>
 		</nav>
 
@@ -30,7 +28,7 @@ const appUrl = "https://app.sickrat.dev";
 				</p>
 				<div class="hero-actions">
 					<a class="button-link" href="/skills/sickrat.md">Give your agent the skill</a>
-					<a class="button-link secondary-link" href={appUrl}>Log in to console</a>
+					<a class="button-link secondary-link" href="#how-it-works">How setup works</a>
 				</div>
 			</div>
 			<div class="approval-demo" aria-label="Example approval request">
@@ -138,7 +136,13 @@ const appUrl = "https://app.sickrat.dev";
 					<span></span>
 					<span></span>
 				</div>
-				<pre>{`$ sickrat pair https://app.sickrat.dev
+				<pre>{`$ sickrat login
+Opening Cloudflare login...
+
+$ sickrat vault create default
+Vault URL: https://sickrat-default.<you>.workers.dev
+
+$ sickrat pair https://sickrat-default.<you>.workers.dev
 Pairing code: 482913
 
 $ sickrat request openai/api-key \\
@@ -159,7 +163,7 @@ Approved. Encrypted grant sealed for this request.`}</pre>
 			</div>
 			<div class="actions">
 				<a class="button-link" href="/skills/sickrat.md">Open agent skill</a>
-				<a class="button-link secondary-link" href={appUrl}>Log in to console</a>
+				<a class="button-link secondary-link" href="#how-it-works">Read setup flow</a>
 			</div>
 		</section>
 	</main>

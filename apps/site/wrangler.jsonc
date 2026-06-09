@@ -8,6 +8,12 @@
 	"observability": {
 		"enabled": true
 	},
+	"kv_namespaces": [
+		{
+			"binding": "SESSION",
+			"id": "1c7b831c7ca14bf2a6190e5c3e8bf65a"
+		}
+	],
 	"routes": [
 		{
 			"pattern": "sickrat.dev",

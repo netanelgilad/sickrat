@@ -48,7 +48,7 @@ sickrat vault create default
 - Durable Object binding for realtime approval delivery
 - vault-specific VAPID push keys
 
-Do not create or use a shared Sickrat service account. Do not send the user to `app.sickrat.dev` as their vault. Use the vault URL printed by `sickrat vault create`, usually shaped like:
+Do not create or use a shared Sickrat service account. Use the vault URL printed by `sickrat vault create`, usually shaped like:
 
 ```text
 https://sickrat-default.<user-subdomain>.workers.dev

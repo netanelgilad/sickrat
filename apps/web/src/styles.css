@@ -1149,7 +1149,7 @@ article h3,
 	margin: 0 auto;
 	max-width: 620px;
 	overflow: hidden;
-	padding: clamp(22px, 5vw, 38px);
+	padding: clamp(18px, 5vw, 38px);
 	position: relative;
 	width: min(100%, 620px);
 }
@@ -1176,10 +1176,10 @@ article h3,
 }
 
 .install-gate-copy h1 {
-	font-size: clamp(46px, 13vw, 88px);
-	line-height: 0.9;
+	font-size: clamp(36px, 10vw, 76px);
+	line-height: 0.94;
 	margin: 0;
-	max-width: 9ch;
+	max-width: 11ch;
 	text-transform: uppercase;
 }
 
@@ -1211,8 +1211,8 @@ article h3,
 	background: rgba(242, 245, 238, 0.04);
 	border: 1px solid var(--line);
 	display: grid;
-	gap: 6px 14px;
-	grid-template-columns: auto minmax(0, 1fr);
+	gap: 14px;
+	grid-template-columns: 44px minmax(0, 1fr);
 	padding: 14px;
 }
 
@@ -1233,17 +1233,23 @@ article h3,
 	width: 42px;
 }
 
+.install-steps div {
+	min-width: 0;
+}
+
 .install-steps strong,
 .install-steps small {
 	display: block;
 	font-family: var(--mono);
-	overflow-wrap: anywhere;
+	overflow-wrap: break-word;
 }
 
 .install-steps strong {
 	color: var(--ink);
 	font-size: 14px;
+	line-height: 1.25;
 	text-transform: uppercase;
+	word-break: normal;
 }
 
 .install-steps small {

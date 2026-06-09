@@ -686,18 +686,28 @@ function InstalledPwaGate({ children }: { children: React.ReactNode }) {
 					<ol className="install-steps" aria-label="Install steps">
 						<li>
 							<span>01</span>
-							<strong>{iosSafari ? "Tap Share" : "Open this page in Safari"}</strong>
-							<small>{iosSafari ? "Use the Safari share button in the browser toolbar." : "iOS only installs PWAs from Safari."}</small>
+							<div>
+								<strong>Open the share menu</strong>
+								<small>
+									{iosSafari
+										? "Tap the Share button in Safari."
+										: "In Chrome on iPhone, tap Share from the browser menu."}
+								</small>
+							</div>
 						</li>
 						<li>
 							<span>02</span>
-							<strong>Add to Home Screen</strong>
-							<small>Choose Add to Home Screen from the share sheet.</small>
+							<div>
+								<strong>Add to Home Screen</strong>
+								<small>Choose Add to Home Screen from the iOS share sheet.</small>
+							</div>
 						</li>
 						<li>
 							<span>03</span>
-							<strong>Open Sickrat</strong>
-							<small>Launch the new icon, then log in with Cloudflare.</small>
+							<div>
+								<strong>Open Sickrat</strong>
+								<small>Launch the new icon, then log in with Cloudflare.</small>
+							</div>
 						</li>
 					</ol>
 				) : (

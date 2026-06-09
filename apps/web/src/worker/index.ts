@@ -60,6 +60,8 @@ type EnvWithBindings = Env & {
 	CF_OAUTH_CLIENT_ID?: string;
 	VAPID_PUBLIC_KEY?: string;
 	VAPID_PRIVATE_KEY?: string;
+	SICKRAT_VAULT_NAME?: string;
+	SICKRAT_DEPLOYED_BY?: string;
 };
 
 type CloudflareAccount = {
@@ -705,6 +707,10 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			},
 			database: {
 				configured: Boolean(env.DB),
+			},
+			vault: {
+				name: env.SICKRAT_VAULT_NAME ?? "default",
+				deployedBy: env.SICKRAT_DEPLOYED_BY ?? "unknown",
 			},
 			ios: {
 				requiresHomeScreenInstall: true,

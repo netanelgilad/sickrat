@@ -23,11 +23,16 @@ sickrat request <ref>
 `vault create` chooses the Cloudflare account automatically when only one account is available. If multiple accounts are available it prompts in an interactive terminal, or accepts `--account-id` in non-interactive agent runs. It currently creates or finds:
 
 - D1 database: `sickrat-<vault>-vault`
-- Secrets Store: `sickrat-<vault>`
+- Worker/PWA deployment: `sickrat-<vault>` on the account's `workers.dev` subdomain
+- Durable Object namespace binding: `APPROVAL_HUB`
+- Worker asset binding for the PWA shell
+- Vault-specific VAPID keys as Worker vars
+
+It intentionally does not create a Secrets Store today. Secret values are encrypted in the PWA before upload; D1 stores ciphertext, metadata, devices, approvals, subscriptions, and audit-adjacent records. Cloudflare Secrets Store should be added only when Sickrat has operational secrets that the Worker itself must read. It should not be used as the primary vault database unless we explicitly decide to make Cloudflare-managed plaintext secret material part of the product model.
 
 Secret references are arbitrary unique strings within a vault. `leumi`, `prod/database/url`, and `sickrat://default/openai/api-key` are all valid. Future env-file auto-detection should use `sickrat://...` as the explicit marker, but direct `sickrat request <ref>` does not require a URI scheme.
 
-The next control-plane step is deploying a per-user Worker/PWA and binding it to those account-owned resources.
+The CLI writes the deployed vault URL into `~/.sickrat/config.json` so the next routine command can pair against that vault.
 
 ## CLI Secret Add Direction
 

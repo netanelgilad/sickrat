@@ -2,8 +2,9 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { homedir, hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { canonicalApprovalPayload, type ApprovalRequestCreate, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
 
@@ -23,6 +24,17 @@ type Config = {
 		tokenType: string;
 		loggedInAt: string;
 	};
+	vaults?: Array<{
+		name: string;
+		slug: string;
+		accountId: string;
+		accountName: string;
+		scriptName: string;
+		d1Name: string;
+		d1Id: string;
+		workerUrl: string;
+		createdAt: string;
+	}>;
 };
 
 type CloudflareAccount = {
@@ -36,16 +48,19 @@ type CloudflareD1Database = {
 	created_at?: string;
 };
 
-type CloudflareSecretsStore = {
-	id: string;
-	name: string;
-	created?: string;
-	modified?: string;
+type CloudflareWorkersSubdomain = {
+	subdomain?: string;
+	enabled?: boolean;
+	previews_enabled?: boolean;
 };
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const configPath = join(homedir(), ".sickrat", "config.json");
+const sourcePath = fileURLToPath(import.meta.url);
+const repoRoot = resolve(dirname(sourcePath), "../../..");
+const webWorkspace = join(repoRoot, "apps/web");
+const webWorkerBuildDir = join(webWorkspace, "dist/sickrat");
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
@@ -62,7 +77,7 @@ Usage:
 Examples:
   sickrat login
   sickrat vault create personal
-  sickrat pair https://app.sickrat.dev
+  sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
   sickrat request leumi --message "Reconcile today's bank transactions"
 `;
 	(exitCode === 0 ? console.log : console.error)(output);
@@ -177,6 +192,24 @@ function openBrowser(url: string) {
 	child.unref();
 }
 
+async function runCommand(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
+	return await new Promise<void>((resolve, reject) => {
+		const child = spawn(command, args, {
+			cwd: options.cwd,
+			env: options.env,
+			stdio: "inherit",
+		});
+		child.once("error", reject);
+		child.once("exit", (code, signal) => {
+			if (code === 0) {
+				resolve();
+				return;
+			}
+			reject(new Error(`${command} ${args.join(" ")} failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}.`));
+		});
+	});
+}
+
 async function readCloudflareApi<T>(path: string, accessToken: string, init: RequestInit = {}) {
 	const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
 		...init,
@@ -219,7 +252,6 @@ async function cloudflareLogin(args: string[]) {
 		"account-settings.read",
 		"user-details.read",
 		"d1.write",
-		"secrets-store.write",
 		"workers-scripts.read",
 		"workers-scripts.write",
 	];
@@ -368,7 +400,7 @@ function getVaultResourceNames(vaultName: string | undefined) {
 	return {
 		...vault,
 		d1Name: `sickrat-${vault.slug}-vault`,
-		secretsStoreName: `sickrat-${vault.slug}`,
+		scriptName: `sickrat-${vault.slug}`,
 	};
 }
 
@@ -387,19 +419,125 @@ async function ensureD1Database(accountId: string, accessToken: string, database
 	return { database, created: true };
 }
 
-async function ensureSecretsStore(accountId: string, accessToken: string, storeName: string) {
-	const stores = await readCloudflareApi<CloudflareSecretsStore[]>(
-		`/accounts/${accountId}/secrets_store/stores?per_page=50`,
-		accessToken,
-	);
-	const existing = stores.find((store) => store.name === storeName);
-	if (existing) return { store: existing, created: false };
+function base64UrlToBase64(value: string) {
+	const padding = "=".repeat((4 - (value.length % 4)) % 4);
+	return `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+}
 
-	const store = await readCloudflareApi<CloudflareSecretsStore>(`/accounts/${accountId}/secrets_store/stores`, accessToken, {
-		method: "POST",
-		body: JSON.stringify({ name: storeName }),
+async function generateVapidKeys() {
+	const keyPair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+	const publicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+	const privateKey = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+	if (!publicKey.x || !publicKey.y || !privateKey.d) throw new Error("Failed to generate VAPID key material.");
+
+	const x = Buffer.from(base64UrlToBase64(publicKey.x), "base64");
+	const y = Buffer.from(base64UrlToBase64(publicKey.y), "base64");
+	return {
+		publicKey: bytesToBase64Url(new Uint8Array(Buffer.concat([Buffer.from([0x04]), x, y]))),
+		privateKey: privateKey.d,
+	};
+}
+
+async function readWorkersSubdomain(accountId: string, accessToken: string) {
+	try {
+		const result = await readCloudflareApi<CloudflareWorkersSubdomain>(`/accounts/${accountId}/workers/subdomain`, accessToken);
+		return result.subdomain ?? null;
+	} catch {
+		return null;
+	}
+}
+
+async function writeVaultWranglerConfig(input: {
+	accountId: string;
+	scriptName: string;
+	d1Name: string;
+	d1Id: string;
+	vapidPublicKey: string;
+	vapidPrivateKey: string;
+	vaultName: string;
+}) {
+	const config = {
+		$schema: "node_modules/wrangler/config-schema.json",
+		name: input.scriptName,
+		account_id: input.accountId,
+		main: "index.js",
+		compatibility_date: "2026-06-06",
+		compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+		assets: {
+			not_found_handling: "single-page-application",
+			binding: "ASSETS",
+			run_worker_first: ["/api/*"],
+			directory: "../client",
+		},
+		vars: {
+			VAPID_PUBLIC_KEY: input.vapidPublicKey,
+			VAPID_PRIVATE_KEY: input.vapidPrivateKey,
+			SICKRAT_VAULT_NAME: input.vaultName,
+			SICKRAT_DEPLOYED_BY: "sickrat-cli",
+		},
+		observability: {
+			enabled: true,
+		},
+		upload_source_maps: true,
+		no_bundle: true,
+		d1_databases: [
+			{
+				binding: "DB",
+				database_name: input.d1Name,
+				database_id: input.d1Id,
+			},
+		],
+		durable_objects: {
+			bindings: [
+				{
+					name: "APPROVAL_HUB",
+					class_name: "ApprovalHub",
+				},
+			],
+		},
+		migrations: [
+			{
+				tag: "v1",
+				new_sqlite_classes: ["ApprovalHub"],
+			},
+		],
+	};
+	const configPath = join(webWorkerBuildDir, `${input.scriptName}.wrangler.json`);
+	await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+	return configPath;
+}
+
+async function deployVaultWorker(input: {
+	accessToken: string;
+	accountId: string;
+	scriptName: string;
+	d1Name: string;
+	d1Id: string;
+	vaultName: string;
+}) {
+	console.error("Building vault PWA and Worker bundle...");
+	await runCommand("npm", ["--workspace", "apps/web", "run", "build"], { cwd: repoRoot });
+
+	console.error("Generating vault-specific VAPID keys...");
+	const vapid = await generateVapidKeys();
+	const wranglerConfigPath = await writeVaultWranglerConfig({
+		accountId: input.accountId,
+		scriptName: input.scriptName,
+		d1Name: input.d1Name,
+		d1Id: input.d1Id,
+		vapidPublicKey: vapid.publicKey,
+		vapidPrivateKey: vapid.privateKey,
+		vaultName: input.vaultName,
 	});
-	return { store, created: true };
+
+	console.error(`Deploying private vault Worker ${input.scriptName}...`);
+	await runCommand("npx", ["wrangler", "deploy", "--config", wranglerConfigPath], {
+		cwd: webWorkerBuildDir,
+		env: {
+			...process.env,
+			CLOUDFLARE_API_TOKEN: input.accessToken,
+		},
+	});
 }
 
 async function createVault(args: string[]) {
@@ -412,10 +550,40 @@ async function createVault(args: string[]) {
 	const d1 = await ensureD1Database(account.id, cloudflare.accessToken, vault.d1Name);
 	console.log(`D1\t${d1.created ? "created" : "exists"}\t${d1.database.name}\t${d1.database.uuid}`);
 
-	const secretsStore = await ensureSecretsStore(account.id, cloudflare.accessToken, vault.secretsStoreName);
-	console.log(`Secrets Store\t${secretsStore.created ? "created" : "exists"}\t${secretsStore.store.name}\t${secretsStore.store.id}`);
+	await deployVaultWorker({
+		accessToken: cloudflare.accessToken,
+		accountId: account.id,
+		scriptName: vault.scriptName,
+		d1Name: vault.d1Name,
+		d1Id: d1.database.uuid,
+		vaultName: vault.name,
+	});
 
-	console.error("Vault resources are ready. Worker deployment/binding handoff is the next control-plane step.");
+	const subdomain = await readWorkersSubdomain(account.id, cloudflare.accessToken);
+	const workerUrl = subdomain ? `https://${vault.scriptName}.${subdomain}.workers.dev` : `https://${vault.scriptName}.workers.dev`;
+	const config = await readConfig();
+	const nextVault = {
+		name: vault.name,
+		slug: vault.slug,
+		accountId: account.id,
+		accountName: account.name,
+		scriptName: vault.scriptName,
+		d1Name: vault.d1Name,
+		d1Id: d1.database.uuid,
+		workerUrl,
+		createdAt: new Date().toISOString(),
+	};
+	const otherVaults = (config.vaults ?? []).filter((existing) => existing.accountId !== account.id || existing.slug !== vault.slug);
+	await writeConfig({
+		...config,
+		workerUrl,
+		vaults: [...otherVaults, nextVault],
+	});
+
+	console.log(`Worker\tdeployed\t${vault.scriptName}`);
+	console.log(`Vault URL\t${workerUrl}`);
+	console.error(`Open ${workerUrl} on your phone, add it to the Home Screen, then run:`);
+	console.error(`  sickrat pair ${workerUrl}`);
 }
 
 async function pair(args: string[]) {

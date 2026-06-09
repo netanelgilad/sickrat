@@ -14,6 +14,10 @@ type Capabilities = {
 	database: {
 		configured: boolean;
 	};
+	vault: {
+		name: string;
+		deployedBy: string;
+	};
 	ios: {
 		requiresHomeScreenInstall: boolean;
 	};
@@ -867,10 +871,10 @@ function AppShell({
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	const installed = useMemo(isStandalone, []);
-	const selectedAccount = cloudflareAccounts.find((account) => account.id === selectedAccountId) ?? cloudflareAccounts[0] ?? null;
 	const vaultKeyState = vaultKey ? "Unlocked" : getPasskeyVaultRecord() ? "Locked" : "No key";
 	const pushState = subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline";
-	const cloudflareState = cloudflareToken ? "Connected" : "Disconnected";
+	const cloudflareState = capabilities?.vault.deployedBy === "sickrat-cli" ? "CLI provisioned" : cloudflareToken ? "Connected" : "Standalone";
+	const vaultName = capabilities?.vault.name ?? "default";
 	const activeDevices = devices.filter((device) => !device.revokedAt);
 	const pendingApprovals = approvals.filter((item) => item.status === "pending");
 	const filteredSecrets = secrets.filter((secret) => {
@@ -958,11 +962,9 @@ function AppShell({
 			.getCloudflareOAuthConfig()
 			.then((config) => {
 				setCloudflareConfig(config);
-				if (!config.clientId) setCloudflareStatus("Cloudflare OAuth client is not configured on this Worker.");
+				if (!config.clientId) setCloudflareStatus("Cloudflare control-plane login is handled by the Sickrat CLI.");
 			})
-			.catch((error: unknown) =>
-				setCloudflareStatus(error instanceof Error ? error.message : "Failed to load Cloudflare OAuth config."),
-			);
+			.catch(() => setCloudflareStatus("Cloudflare control-plane login is handled by the Sickrat CLI."));
 	}, []);
 
 	useEffect(() => {
@@ -1003,20 +1005,8 @@ function AppShell({
 	}, [cloudflareConfig, isCloudflareCallback, navigate]);
 
 	useEffect(() => {
-		if (route !== "login" || isCloudflareCallback) return;
-		if (cloudflareToken) {
-			navigate("/", { replace: true });
-			return;
-		}
-		if (cloudflareConfig) void loginWithCloudflare("/");
-	}, [cloudflareConfig, cloudflareToken, isCloudflareCallback, navigate, route]);
-
-	useEffect(() => {
-		const isProtectedConsoleRoute = route !== "login" && route !== "approval" && !isCloudflareCallback;
-		if (!isProtectedConsoleRoute || cloudflareToken || !cloudflareConfig) return;
-		const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-		void loginWithCloudflare(currentPath);
-	}, [cloudflareConfig, cloudflareToken, isCloudflareCallback, route]);
+		if (route === "login" && !isCloudflareCallback) navigate("/", { replace: true });
+	}, [isCloudflareCallback, navigate, route]);
 
 	useEffect(() => {
 		if (!cloudflareToken) return;
@@ -1629,8 +1619,7 @@ function AppShell({
 		);
 	}
 
-	if (route === "login" || (!isCloudflareCallback && !cloudflareToken)) {
-		const redirectTarget = route === "login" ? "/" : `${window.location.pathname}${window.location.search}${window.location.hash}`;
+	if (route === "login") {
 		return (
 			<main className="auth-page">
 				<section className="auth-card">
@@ -1641,22 +1630,17 @@ function AppShell({
 						<span>Sickrat</span>
 					</Link>
 					<div>
-						<p className="eyebrow">Cloudflare login</p>
-						<h1>Opening your vault console</h1>
-						<p>
-							Sickrat uses your Cloudflare account as the owner boundary. After login, you will return
-							to the console route you opened.
-						</p>
+						<p className="eyebrow">CLI provisioned</p>
+						<h1>Open your vault console</h1>
+						<p>This vault is owned by the Cloudflare account that deployed it with the Sickrat CLI.</p>
 					</div>
 					<div className="actions">
-						<button disabled={busy || !cloudflareConfig?.clientId} onClick={() => loginWithCloudflare(redirectTarget)}>
-							{cloudflareConfig?.clientId ? "Continue With Cloudflare" : "Preparing Login"}
-						</button>
+						<Link className="button-link" to="/">Open Console</Link>
 						<a className="button-link secondary-link" href="https://sickrat.dev">
 							Back Home
 						</a>
 					</div>
-					<p className="screen-status">{cloudflareStatus}</p>
+					<p className="screen-status">Cloudflare login and vault creation now happen in the CLI.</p>
 				</section>
 			</main>
 		);
@@ -1666,53 +1650,27 @@ function AppShell({
 		const renderCloudflareControls = () => (
 			<section className="console app-panel cloudflare-panel">
 				<div>
-					<h2>Cloudflare-Owned Vault</h2>
-					<p>
-						{cloudflareToken
-							? "Authenticated with Cloudflare. Vault creation calls use the account you select here."
-							: cloudflareConfig?.clientId
-								? "Log in to create Sickrat resources in your Cloudflare account."
-								: "This Worker needs a Cloudflare OAuth client id before login can start."}
-					</p>
-					<p className="panel-status">{cloudflareStatus}</p>
-					{cloudflareAccounts.length > 0 ? (
-						<label className="select-label">
-							Account
-							<select value={selectedAccountId} onChange={(event) => setSelectedAccountId(event.target.value)}>
-								{cloudflareAccounts.map((account) => (
-									<option key={account.id} value={account.id}>
-										{account.name}
-									</option>
-								))}
-							</select>
-						</label>
-					) : null}
-					{provisioning ? (
-						<div className="provision-result">
-							{provisioning.steps.map((step) => (
-								<div className={`provision-step ${step.status}`} key={step.id}>
-									<strong>{step.label}</strong>
-									<span>{step.error ?? step.detail ?? step.status}</span>
-								</div>
-							))}
+					<h2>CLI Control Plane</h2>
+					<p>This vault was deployed by `sickrat vault create`. Cloudflare account access stays in the CLI; this PWA manages secrets, devices, and approvals for the deployed vault.</p>
+					<div className="request-meta">
+						<div>
+							<span>Vault</span>
+							<strong>{capabilities?.vault.name ?? "default"}</strong>
 						</div>
-					) : null}
+						<div>
+							<span>Origin</span>
+							<strong>{window.location.origin}</strong>
+						</div>
+						<div>
+							<span>D1</span>
+							<strong>{capabilities?.database.configured ? "Configured" : "Missing binding"}</strong>
+						</div>
+					</div>
 				</div>
 				<div className="actions">
-					{cloudflareToken ? (
-						<>
-							<button disabled={busy || !selectedAccountId} onClick={provisionSelectedAccount}>
-								{busy ? "Creating" : "Create Vault"}
-							</button>
-							<button className="secondary" disabled={busy} onClick={logoutCloudflare}>
-								Log Out
-							</button>
-						</>
-					) : (
-							<button disabled={busy || !cloudflareConfig?.clientId} onClick={() => loginWithCloudflare("/settings")}>
-								Log In With Cloudflare
-							</button>
-					)}
+					<a className="button-link secondary-link" href="https://sickrat.dev/skills/sickrat.md">
+						Agent Skill
+					</a>
 				</div>
 			</section>
 		);
@@ -1860,7 +1818,7 @@ function AppShell({
 						<div className="app-status-board" aria-label="Console status">
 							<div>
 								<span>Account</span>
-								<strong>{selectedAccount?.name ?? "Connected"}</strong>
+								<strong>{cloudflareState}</strong>
 							</div>
 							<div>
 								<span>Push</span>
@@ -1875,7 +1833,7 @@ function AppShell({
 					<section className="dashboard-grid">
 						<Link className="dashboard-card" to="/vaults">
 							<span>Vault</span>
-							<strong>default</strong>
+							<strong>{vaultName}</strong>
 							<small>{capabilities?.database.configured ? "D1 binding configured" : "D1 binding missing"}</small>
 						</Link>
 						<Link className="dashboard-card" to="/secrets">
@@ -1923,9 +1881,9 @@ function AppShell({
 			routeContent = (
 				<section className="route-panel">
 					<div className="route-heading">
-						<p className="eyebrow">Cloudflare-owned deployment</p>
+						<p className="eyebrow">User-owned deployment</p>
 						<h1>Vaults</h1>
-						<p>Vaults are Sickrat deployments in your Cloudflare account. This prototype manages the current deployed vault first.</p>
+						<p>Vaults are isolated Sickrat deployments created by the CLI in your Cloudflare account.</p>
 					</div>
 					<div className="app-grid">
 						<section className="console app-panel">
@@ -1934,7 +1892,7 @@ function AppShell({
 								<div className="request-meta">
 									<div>
 										<span>Name</span>
-										<strong>default</strong>
+										<strong>{vaultName}</strong>
 									</div>
 									<div>
 										<span>Origin</span>
@@ -2143,7 +2101,7 @@ function AppShell({
 					<div className="route-heading">
 						<p className="eyebrow">Console operations</p>
 						<h1>Settings</h1>
-						<p>Manage Cloudflare login, install state, push approvals, and the local vault key.</p>
+						<p>Manage install state, push approvals, and the local vault key for this CLI-provisioned vault.</p>
 					</div>
 					<div className="app-grid">
 						{renderCloudflareControls()}
@@ -2200,7 +2158,7 @@ function AppShell({
 								</span>
 								<span>Sickrat</span>
 							</Link>
-							<span className="vault-badge">default vault</span>
+							<span className="vault-badge">{vaultName} vault</span>
 						</div>
 						<nav className="sidebar-nav" aria-label="Console">
 							<NavLink end to="/" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">DB</span>Dashboard</NavLink>
@@ -2213,15 +2171,12 @@ function AppShell({
 						<div className="sidebar-footer">
 							<a className="sidebar-skill" href="https://sickrat.dev/skills/sickrat.md">Agent skill</a>
 							<div className="account-chip">
-								<span className="account-avatar">{(selectedAccount?.name ?? "CF").slice(0, 2).toUpperCase()}</span>
+								<span className="account-avatar">SR</span>
 								<div>
-									<strong>{selectedAccount?.name ?? "Cloudflare"}</strong>
-									<span>{selectedAccount?.id ?? "Connected account"}</span>
+									<strong>{vaultName} vault</strong>
+									<span>{window.location.host}</span>
 								</div>
 							</div>
-							<button className="secondary logout-button" type="button" onClick={logoutCloudflare}>
-								Log Out
-							</button>
 						</div>
 					</aside>
 					<section className="console-main">

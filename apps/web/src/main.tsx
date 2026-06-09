@@ -1834,6 +1834,16 @@ function AppShell({
 			</>
 		);
 
+		const currentPageTitle =
+			route === "app"
+				? "Dashboard"
+				: route === "approval-detail"
+					? "Request detail"
+					: route === "devices"
+						? "Machines"
+						: route === "settings"
+							? "Settings"
+							: route.charAt(0).toUpperCase() + route.slice(1);
 		let routeContent: React.ReactNode;
 		if (route === "app") {
 			routeContent = (
@@ -2225,15 +2235,9 @@ function AppShell({
 							>
 								‹
 							</button>
-							<div>
-								<span>default vault</span>
-								<strong>{window.location.host}</strong>
-							</div>
-							<div className="topbar-status">
-								<span>{selectedAccount?.name ?? cloudflareState}</span>
-								<span>{pushState}</span>
-								<span>{installed ? "Installed" : "Browser"}</span>
-								<span>{vaultKeyState}</span>
+							<div className="topbar-title">
+								<span>Main menu</span>
+								<strong>{currentPageTitle}</strong>
 							</div>
 						</header>
 						{routeContent}

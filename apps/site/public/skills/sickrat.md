@@ -48,11 +48,7 @@ sickrat vault create default
 - Durable Object binding for realtime approval delivery
 - vault-specific VAPID push keys
 
-Do not create or use a shared Sickrat service account. Use the vault URL printed by `sickrat vault create`, usually shaped like:
-
-```text
-https://sickrat-default.<user-subdomain>.workers.dev
-```
+Do not create or use a shared Sickrat service account. Use the vault URL printed by `sickrat vault create`.
 
 After vault creation, tell the user to open that vault URL on their phone and add it to the Home Screen. The first launch of the installed PWA asks the user to enable push notifications. Wait for the user to confirm that the PWA is installed and push is enabled before running `sickrat pair`.
 

@@ -50,7 +50,7 @@ sickrat vault create default
 
 Do not create or use a shared Sickrat service account. Use the vault URL printed by `sickrat vault create`.
 
-After vault creation, tell the user to open that vault URL on their phone and add it to the Home Screen. The first launch of the installed PWA asks the user to enable push notifications. Wait for the user to confirm that the PWA is installed and push is enabled before running `sickrat pair`.
+After vault creation, tell the user to open that vault URL on their phone and add it to the Home Screen. If the CLI prints a `Vault QR` image path, show that image to the user so they can scan it from their phone. The first launch of the installed PWA asks the user to enable push notifications. Wait for the user to confirm that the PWA is installed and push is enabled before running `sickrat pair`.
 
 ## Pair This Machine
 

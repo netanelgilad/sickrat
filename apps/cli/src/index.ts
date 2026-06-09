@@ -8,6 +8,7 @@ import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { canonicalApprovalPayload, type ApprovalRequestCreate, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
+import QRCode from "qrcode";
 
 type Config = {
 	workerUrl?: string;
@@ -62,7 +63,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.0";
+const cliVersion = "0.1.1";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -166,6 +167,18 @@ async function downloadReleaseWebArtifact(): Promise<WebArtifact> {
 	} finally {
 		await rm(tempDir, { recursive: true, force: true });
 	}
+}
+
+async function writeVaultUrlQrCode(workerUrl: string, slug: string) {
+	const tempDir = await mkdtemp(join(tmpdir(), `sickrat-vault-${slug}-`));
+	const qrPath = join(tempDir, "vault-url.png");
+	await QRCode.toFile(qrPath, workerUrl, {
+		type: "png",
+		errorCorrectionLevel: "M",
+		margin: 2,
+		width: 1024,
+	});
+	return qrPath;
 }
 
 function usage(exitCode = 0): never {
@@ -676,6 +689,7 @@ async function createVault(args: string[]) {
 
 	const subdomain = await readWorkersSubdomain(account.id, cloudflare.accessToken);
 	const workerUrl = subdomain ? `https://${vault.scriptName}.${subdomain}.workers.dev` : `https://${vault.scriptName}.workers.dev`;
+	const qrPath = await writeVaultUrlQrCode(workerUrl, vault.slug);
 	const config = await readConfig();
 	const nextVault = {
 		name: vault.name,
@@ -697,6 +711,7 @@ async function createVault(args: string[]) {
 
 	console.log(`Worker\tdeployed\t${vault.scriptName}`);
 	console.log(`Vault URL\t${workerUrl}`);
+	console.log(`Vault QR\t${qrPath}`);
 	console.error(`Open ${workerUrl} on your phone, add it to the Home Screen, enable push notifications, then run:`);
 	console.error(`  sickrat pair ${workerUrl}`);
 }

@@ -30,7 +30,7 @@ mkdir -p ~/.local/bin
 mv sickrat ~/.local/bin/sickrat
 ```
 
-On Intel Macs, use `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`. If no release asset exists for the user's platform, stop and tell the user Sickrat does not currently ship a binary for that platform. Do not install Wrangler for normal Sickrat setup; `sickrat vault create` deploys through the Cloudflare API directly.
+On Intel Macs, use `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`. If no release asset exists for the user's platform, stop and tell the user Sickrat does not currently ship a binary for that platform.
 
 ## First-Time Setup
 

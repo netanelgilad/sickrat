@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { homedir, hostname, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { canonicalApprovalPayload, type ApprovalRequestCreate, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
 import QRCode from "qrcode";
@@ -56,6 +57,20 @@ type CloudflareWorkersSubdomain = {
 	previews_enabled?: boolean;
 };
 
+type AssetManifest = Record<string, { hash: string; size: number }>;
+
+type AssetFile = {
+	manifestPath: string;
+	filePath: string;
+	hash: string;
+	contentType: string;
+};
+
+type AssetUploadSession = {
+	jwt: string;
+	buckets: string[][];
+};
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const configPath = join(homedir(), ".sickrat", "config.json");
@@ -63,7 +78,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.1";
+const cliVersion = "0.1.2";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -563,76 +578,200 @@ async function readWorkersSubdomain(accountId: string, accessToken: string) {
 	}
 }
 
-async function writeVaultWranglerConfig(input: {
-	artifact: WebArtifact;
+function contentTypeForPath(path: string) {
+	const extension = extname(path).toLowerCase();
+	switch (extension) {
+		case ".html":
+			return "text/html; charset=utf-8";
+		case ".js":
+		case ".mjs":
+			return "text/javascript; charset=utf-8";
+		case ".css":
+			return "text/css; charset=utf-8";
+		case ".json":
+		case ".webmanifest":
+			return "application/json; charset=utf-8";
+		case ".svg":
+			return "image/svg+xml";
+		case ".png":
+			return "image/png";
+		case ".jpg":
+		case ".jpeg":
+			return "image/jpeg";
+		case ".ico":
+			return "image/x-icon";
+		case ".txt":
+			return "text/plain; charset=utf-8";
+		default:
+			return "application/null";
+	}
+}
+
+async function listAssetFiles(clientDir: string) {
+	const files: AssetFile[] = [];
+
+	async function walk(directory: string) {
+		const entries = await readdir(directory, { withFileTypes: true });
+		for (const entry of entries) {
+			const filePath = join(directory, entry.name);
+			if (entry.isDirectory()) {
+				await walk(filePath);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+
+			const relativePath = relative(clientDir, filePath).replace(/\\/g, "/");
+			if (relativePath === ".assetsignore") continue;
+			const bytes = await readFile(filePath);
+			const extension = extname(relativePath).slice(1);
+			const hash = createHash("sha256").update(bytes.toString("base64") + extension).digest("hex").slice(0, 32);
+			files.push({
+				manifestPath: `/${relativePath}`,
+				filePath,
+				hash,
+				contentType: contentTypeForPath(relativePath),
+			});
+		}
+	}
+
+	await walk(clientDir);
+	if (files.length === 0) throw new Error(`No web assets found in ${clientDir}.`);
+	return files;
+}
+
+function createAssetManifest(files: AssetFile[]) {
+	const manifest: AssetManifest = {};
+	for (const file of files) {
+		manifest[file.manifestPath] = {
+			hash: file.hash,
+			size: readFileSync(file.filePath).byteLength,
+		};
+	}
+	return manifest;
+}
+
+async function uploadVaultAssets(input: {
+	accessToken: string;
 	accountId: string;
 	scriptName: string;
-	d1Name: string;
-	d1Id: string;
-	vapidPublicKey: string;
-	vaultName: string;
+	clientDir: string;
 }) {
-	const config = {
-		$schema: "node_modules/wrangler/config-schema.json",
-		name: input.scriptName,
-		account_id: input.accountId,
-		main: "index.js",
+	const files = await listAssetFiles(input.clientDir);
+	const manifest = createAssetManifest(files);
+	const session = await readCloudflareApi<AssetUploadSession>(
+		`/accounts/${input.accountId}/workers/scripts/${input.scriptName}/assets-upload-session`,
+		input.accessToken,
+		{
+			method: "POST",
+			body: JSON.stringify({ manifest }),
+		},
+	);
+
+	if (!session.jwt) throw new Error("Cloudflare did not return an asset upload token.");
+	if (session.buckets.flat().length === 0) return session.jwt;
+
+	const filesByHash = new Map(files.map((file) => [file.hash, file]));
+	let completionJwt = "";
+	for (const bucket of session.buckets) {
+		const formData = new FormData();
+		for (const hash of bucket) {
+			const file = filesByHash.get(hash);
+			if (!file) throw new Error(`Cloudflare requested unknown asset hash ${hash}.`);
+			formData.append(hash, new Blob([(await readFile(file.filePath)).toString("base64")], { type: file.contentType }), hash);
+		}
+
+		const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${input.accountId}/workers/assets/upload?base64=true`, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${session.jwt}`,
+			},
+			body: formData,
+		});
+		const body = (await response.json().catch(() => null)) as {
+			success?: boolean;
+			result?: { jwt?: string };
+			errors?: Array<{ message: string }>;
+		} | null;
+		if (!response.ok || !body?.success) {
+			const message = body?.errors?.map((error) => error.message).join("; ") || `Cloudflare asset upload returned HTTP ${response.status}`;
+			throw new Error(message);
+		}
+		if (body.result?.jwt) completionJwt = body.result.jwt;
+	}
+
+	if (!completionJwt) throw new Error("Cloudflare asset upload completed without returning a completion token.");
+	return completionJwt;
+}
+
+async function uploadVaultWorker(input: {
+	accessToken: string;
+	accountId: string;
+	scriptName: string;
+	d1Id: string;
+	vaultName: string;
+	vapidPublicKey: string;
+	vapidPrivateKey: string;
+	assetsJwt: string;
+	workerDir: string;
+}) {
+	const workerPath = join(input.workerDir, "index.js");
+	const workerSource = await readFile(workerPath);
+	const metadata = {
+		main_module: "index.js",
 		compatibility_date: "2026-06-06",
 		compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
 		assets: {
-			not_found_handling: "single-page-application",
-			binding: "ASSETS",
-			run_worker_first: ["/api/*"],
-			directory: "../client",
-		},
-		vars: {
-			VAPID_PUBLIC_KEY: input.vapidPublicKey,
-			SICKRAT_VAULT_NAME: input.vaultName,
-			SICKRAT_DEPLOYED_BY: "sickrat-cli",
-		},
-		observability: {
-			enabled: true,
-		},
-		upload_source_maps: true,
-		no_bundle: true,
-		d1_databases: [
-			{
-				binding: "DB",
-				database_name: input.d1Name,
-				database_id: input.d1Id,
+			jwt: input.assetsJwt,
+			config: {
+				not_found_handling: "single-page-application",
+				run_worker_first: ["/api/*"],
 			},
-		],
-		durable_objects: {
-			bindings: [
-				{
-					name: "APPROVAL_HUB",
-					class_name: "ApprovalHub",
-				},
-			],
 		},
+		bindings: [
+			{ name: "ASSETS", type: "assets" },
+			{ name: "DB", type: "d1", id: input.d1Id },
+			{ name: "APPROVAL_HUB", type: "durable_object_namespace", class_name: "ApprovalHub" },
+			{ name: "VAPID_PUBLIC_KEY", type: "plain_text", text: input.vapidPublicKey },
+			{ name: "VAPID_PRIVATE_KEY", type: "secret_text", text: input.vapidPrivateKey },
+			{ name: "SICKRAT_VAULT_NAME", type: "plain_text", text: input.vaultName },
+			{ name: "SICKRAT_DEPLOYED_BY", type: "plain_text", text: "sickrat-cli" },
+		],
 		migrations: [
 			{
 				tag: "v1",
 				new_sqlite_classes: ["ApprovalHub"],
 			},
 		],
+		observability: {
+			enabled: true,
+		},
 	};
-	const configPath = join(input.artifact.workerDir, `${input.scriptName}.wrangler.json`);
-	await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-	return configPath;
-}
 
-async function writeVaultSecretsFile(artifact: WebArtifact, scriptName: string, vapidPrivateKey: string) {
-	const secretsPath = join(artifact.workerDir, `${scriptName}.secrets.json`);
-	await writeFile(secretsPath, `${JSON.stringify({ VAPID_PRIVATE_KEY: vapidPrivateKey }, null, 2)}\n`, { mode: 0o600 });
-	return secretsPath;
+	const formData = new FormData();
+	formData.set("metadata", JSON.stringify(metadata));
+	formData.append("index.js", new Blob([workerSource], { type: "application/javascript+module" }), "index.js");
+
+	const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${input.accountId}/workers/scripts/${input.scriptName}`, {
+		method: "PUT",
+		headers: {
+			authorization: `Bearer ${input.accessToken}`,
+		},
+		body: formData,
+	});
+	const body = (await response.json().catch(() => null)) as {
+		success?: boolean;
+		errors?: Array<{ message: string }>;
+	} | null;
+	if (!response.ok || !body?.success) {
+		const message = body?.errors?.map((error) => error.message).join("; ") || `Cloudflare Worker upload returned HTTP ${response.status}`;
+		throw new Error(message);
+	}
 }
 
 async function deployVaultWorker(input: {
 	accessToken: string;
 	accountId: string;
 	scriptName: string;
-	d1Name: string;
 	d1Id: string;
 	vaultName: string;
 }) {
@@ -642,30 +781,26 @@ async function deployVaultWorker(input: {
 
 	console.error("Generating vault-specific VAPID keys...");
 	const vapid = await generateVapidKeys();
-	let secretsPath: string | null = null;
-	const wranglerConfigPath = await writeVaultWranglerConfig({
-		artifact,
+	console.error("Uploading vault PWA assets...");
+	const assetsJwt = await uploadVaultAssets({
+		accessToken: input.accessToken,
 		accountId: input.accountId,
 		scriptName: input.scriptName,
-		d1Name: input.d1Name,
-		d1Id: input.d1Id,
-		vapidPublicKey: vapid.publicKey,
-		vaultName: input.vaultName,
+		clientDir: artifact.clientDir,
 	});
 
-	try {
-		secretsPath = await writeVaultSecretsFile(artifact, input.scriptName, vapid.privateKey);
-		console.error(`Deploying private vault Worker ${input.scriptName}...`);
-		await runCommand("npx", ["wrangler", "deploy", "--config", wranglerConfigPath, "--secrets-file", secretsPath], {
-			cwd: artifact.workerDir,
-			env: {
-				...process.env,
-				CLOUDFLARE_API_TOKEN: input.accessToken,
-			},
-		});
-	} finally {
-		if (secretsPath) await rm(secretsPath, { force: true });
-	}
+	console.error(`Deploying private vault Worker ${input.scriptName}...`);
+	await uploadVaultWorker({
+		accessToken: input.accessToken,
+		accountId: input.accountId,
+		scriptName: input.scriptName,
+		d1Id: input.d1Id,
+		vaultName: input.vaultName,
+		vapidPublicKey: vapid.publicKey,
+		vapidPrivateKey: vapid.privateKey,
+		assetsJwt,
+		workerDir: artifact.workerDir,
+	});
 }
 
 async function createVault(args: string[]) {
@@ -682,7 +817,6 @@ async function createVault(args: string[]) {
 		accessToken: cloudflare.accessToken,
 		accountId: account.id,
 		scriptName: vault.scriptName,
-		d1Name: vault.d1Name,
 		d1Id: d1.database.uuid,
 		vaultName: vault.name,
 	});

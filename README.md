@@ -166,7 +166,7 @@ mv sickrat ~/.local/bin/sickrat
 
 On Intel Macs, replace the asset with `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`.
 
-The first release channel is GitHub Releases because the CLI is a compiled Bun binary and also needs the matching Worker/PWA artifact used by `sickrat vault create`. npm and Homebrew packaging can sit on top of this release channel later, but they should not be the source of truth for the deploy artifact.
+The first release channel is GitHub Releases because the CLI is a compiled Bun binary and also needs the matching Worker/PWA artifact used by `sickrat vault create`. The distributed CLI deploys vault Workers through the Cloudflare API directly; end users do not need Wrangler for normal vault setup. npm and Homebrew packaging can sit on top of this release channel later, but they should not be the source of truth for the deploy artifact.
 
 ## Releases
 

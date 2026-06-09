@@ -32,8 +32,8 @@ Cloudflare Secrets Store is not required for the current vault model. The PWA en
 2. `sickrat vault create` selects a Cloudflare account.
 3. The CLI creates or finds D1.
 4. The CLI downloads and caches the matching Sickrat PWA/Worker release artifact.
-5. The CLI deploys the Worker with D1, Durable Object, assets, and VAPID bindings.
-6. Wrangler applies the Durable Object migration during deployment.
+5. The CLI uploads assets and deploys the Worker with D1, Durable Object, assets, and VAPID bindings through the Cloudflare API.
+6. The Worker upload metadata applies the Durable Object migration during deployment.
 7. The CLI stores the vault endpoint and account metadata locally.
 8. The user opens the vault URL on their phone, installs the PWA, then pairs CLI devices.
 

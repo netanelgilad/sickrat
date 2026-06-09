@@ -2,11 +2,11 @@
 
 Sickrat is a local-first secrets manager for agents and automation. It is designed to let a CLI request temporary access to secrets only after the account owner approves the request from their own user-controlled backend.
 
-Sickrat is not a hosted multi-tenant secrets service. The current prototype provisions and talks to Cloudflare resources in the user's own Cloudflare account, so the user owns the Worker, D1 database, Durable Objects, storage, logs, and encrypted vault records.
+Sickrat is not a hosted multi-tenant secrets service. It provisions and talks to Cloudflare resources in the user's own Cloudflare account, so the user owns the Worker, D1 database, Durable Objects, storage, logs, and encrypted vault records.
 
 ## Status
 
-This repository is an early prototype. The active code in this repo currently includes:
+The active code in this repo currently includes:
 
 - `apps/cli`: a Bun/TypeScript CLI named `sickrat`
 - `apps/site`: an Astro public product site deployed to `sickrat.dev`
@@ -149,7 +149,24 @@ printf '%s' '<returned-client-id>' | npx wrangler secret put CF_OAUTH_CLIENT_ID
 npm run web:deploy
 ```
 
-The generated OAuth client is configured for Authorization Code with PKCE, `token_endpoint_auth_method: none`, redirect URI `https://app.sickrat.dev/cf/callback`, and the Cloudflare scopes needed by the current provisioning prototype.
+The generated OAuth client is configured for Authorization Code with PKCE, `token_endpoint_auth_method: none`, redirect URI `https://app.sickrat.dev/cf/callback`, and the Cloudflare scopes needed by vault provisioning.
+
+## Install The CLI
+
+Sickrat CLI is distributed as compiled binaries from GitHub Releases.
+
+On Apple Silicon Macs:
+
+```sh
+curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-darwin-arm64 -o sickrat
+chmod +x sickrat
+mkdir -p ~/.local/bin
+mv sickrat ~/.local/bin/sickrat
+```
+
+On Intel Macs, replace the asset with `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`.
+
+The first release channel is GitHub Releases because the CLI is a compiled Bun binary and also needs the matching Worker/PWA artifact used by `sickrat vault create`. npm and Homebrew packaging can sit on top of this release channel later, but they should not be the source of truth for the deploy artifact.
 
 ## Releases
 
@@ -161,6 +178,7 @@ Current release targets:
 - `sickrat-darwin-x64`
 - `sickrat-linux-arm64`
 - `sickrat-linux-x64`
+- `sickrat-web-dist.tar.gz`
 
 Linux x64 uses Bun's baseline target for broader CPU compatibility.
 
@@ -170,7 +188,7 @@ Do not open public issues for vulnerabilities. Follow [SECURITY.md](SECURITY.md)
 
 ## Contributing
 
-Contributions are welcome while the prototype is still moving quickly. Start with [CONTRIBUTING.md](CONTRIBUTING.md), and please keep security-sensitive design changes tied to the threat model.
+Contributions are welcome while Sickrat is moving quickly. Start with [CONTRIBUTING.md](CONTRIBUTING.md), and please keep security-sensitive design changes tied to the threat model.
 
 ## License
 

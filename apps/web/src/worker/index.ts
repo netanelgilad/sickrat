@@ -438,6 +438,17 @@ function mapApproval(row: ApprovalRequestRecord) {
 	};
 }
 
+function mapPairing(row: PairingCodeRecord) {
+	return {
+		code: row.code,
+		deviceId: row.device_id,
+		label: row.label,
+		expiresAt: row.expires_at,
+		approvedAt: row.approved_at,
+		expired: Date.parse(row.expires_at) <= Date.now(),
+	};
+}
+
 function mapSecretCiphertext(row: SecretRecord) {
 	return {
 		id: row.id,
@@ -755,7 +766,25 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 				)
 					.bind(code, deviceId, body.label, JSON.stringify(body.publicKey), expiresAt)
 					.run();
-				return json({ code, deviceId, expiresAt });
+				let pushStatus: number | null = null;
+				const subscription = await env.DB.prepare("SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions ORDER BY created_at DESC LIMIT 1")
+					.first<PushSubscriptionRecord & { p256dh: string; auth: string }>();
+				if (subscription) {
+					try {
+						pushStatus = await sendEmptyWebPush(
+							{
+								id: subscription.id,
+								endpoint: subscription.endpoint,
+								keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+								created_at: subscription.created_at,
+							},
+							env,
+						);
+					} catch {
+						// The CLI still shows the pairing code and polls for approval.
+					}
+				}
+				return json({ code, deviceId, expiresAt, pushStatus });
 			} catch (error) {
 				if (attempt === 4) throw error;
 				code = randomPairingCode();
@@ -1032,6 +1061,26 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			.bind(subscription.id)
 			.first<ApprovalRequestRecord>();
 		return json({ approval: approval ? mapApproval(approval) : null });
+	}
+
+	if (url.pathname === "/api/pairing/latest" && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const body = (await request.json()) as { endpoint?: string };
+		if (!body.endpoint) return json({ error: "Subscription endpoint is required." }, { status: 400 });
+		const subscription = await env.DB.prepare("SELECT id FROM push_subscriptions WHERE endpoint = ?")
+			.bind(body.endpoint)
+			.first<{ id: string }>();
+		if (!subscription) return json({ error: "Subscription not found." }, { status: 404 });
+		const pairing = await env.DB.prepare(
+			`SELECT code, device_id, label, public_key, expires_at, approved_at
+			 FROM pairing_codes
+			 WHERE approved_at IS NULL AND expires_at > ?
+			 ORDER BY expires_at DESC
+			 LIMIT 1`,
+		)
+			.bind(new Date().toISOString())
+			.first<PairingCodeRecord>();
+		return json({ pairing: pairing ? mapPairing(pairing) : null });
 	}
 
 	if (url.pathname === "/api/approvals" && request.method === "GET") {

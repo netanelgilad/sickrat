@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { homedir, hostname } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { canonicalApprovalPayload, type ApprovalRequestCreate, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
@@ -58,12 +59,114 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const configPath = join(homedir(), ".sickrat", "config.json");
 const sourcePath = fileURLToPath(import.meta.url);
-const repoRoot = resolve(dirname(sourcePath), "../../..");
-const webWorkspace = join(repoRoot, "apps/web");
-const webWorkerBuildDir = join(webWorkspace, "dist/sickrat");
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
+const cliVersion = "0.1.0";
+const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
+
+type WebArtifact = {
+	workerDir: string;
+	clientDir: string;
+	build?: () => Promise<void>;
+};
+
+function resolveRepoRoot() {
+	const starts = [
+		process.env.SICKRAT_REPO_ROOT ? resolve(process.env.SICKRAT_REPO_ROOT) : null,
+		resolve(dirname(sourcePath), "../../.."),
+		resolve(dirname(process.execPath), "../../.."),
+		process.cwd(),
+	].filter((value): value is string => Boolean(value));
+
+	for (const start of starts) {
+		const found = findRepoRoot(start);
+		if (found) return found;
+	}
+
+	return null;
+}
+
+function findRepoRoot(start: string) {
+	let current = resolve(start);
+	while (true) {
+		const packageJsonPath = join(current, "package.json");
+		if (existsSync(packageJsonPath) && existsSync(join(current, "apps/web"))) {
+			try {
+				const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+				if (packageJson.name === "sickrat") return current;
+			} catch {
+				// Keep walking upward.
+			}
+		}
+
+		const parent = dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+}
+
+async function resolveWebArtifact(): Promise<WebArtifact> {
+	const explicitDist = process.env.SICKRAT_WEB_DIST ? resolve(process.env.SICKRAT_WEB_DIST) : null;
+	if (explicitDist) {
+		const workerDir = join(explicitDist, "sickrat");
+		const clientDir = join(explicitDist, "client");
+		if (existsSync(join(workerDir, "index.js")) && existsSync(join(clientDir, "index.html"))) {
+			return { workerDir, clientDir };
+		}
+		throw new Error(`SICKRAT_WEB_DIST does not look like a Sickrat web artifact: ${explicitDist}`);
+	}
+
+	const repoRoot = resolveRepoRoot();
+	if (repoRoot) {
+		const webWorkspace = join(repoRoot, "apps/web");
+		const workerDir = join(webWorkspace, "dist/sickrat");
+		const clientDir = join(webWorkspace, "dist/client");
+		return {
+			workerDir,
+			clientDir,
+			build: () => runCommand("npm", ["--workspace", "apps/web", "run", "build"], { cwd: repoRoot }),
+		};
+	}
+
+	return await downloadReleaseWebArtifact();
+}
+
+async function downloadReleaseWebArtifact(): Promise<WebArtifact> {
+	const cacheRoot = join(homedir(), ".sickrat", "artifacts", `web-v${cliVersion}`);
+	const workerDir = join(cacheRoot, "sickrat");
+	const clientDir = join(cacheRoot, "client");
+	if (existsSync(join(workerDir, "index.js")) && existsSync(join(clientDir, "index.html"))) {
+		return { workerDir, clientDir };
+	}
+
+	await rm(cacheRoot, { recursive: true, force: true });
+	await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
+	const tempDir = await mkdtemp(join(tmpdir(), "sickrat-web-"));
+	const archivePath = join(tempDir, "sickrat-web-dist.tar.gz");
+	const url = `${releaseBaseUrl}/v${cliVersion}/sickrat-web-dist.tar.gz`;
+
+	try {
+		console.error(`Downloading Sickrat web artifact v${cliVersion}...`);
+		const response = await fetch(url);
+		if (!response.ok) {
+			throw new Error(`Release artifact download failed with HTTP ${response.status}.`);
+		}
+		await writeFile(archivePath, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 });
+		await runCommand("tar", ["-xzf", archivePath, "-C", cacheRoot]);
+		if (!existsSync(join(workerDir, "index.js")) || !existsSync(join(clientDir, "index.html"))) {
+			throw new Error("Downloaded web artifact is missing expected client/ or sickrat/ output.");
+		}
+		return { workerDir, clientDir };
+	} catch (error) {
+		await rm(cacheRoot, { recursive: true, force: true });
+		throw new Error(
+			`${error instanceof Error ? error.message : String(error)} Set SICKRAT_WEB_DIST to a local web artifact directory if you are using an unreleased CLI build.`,
+		);
+	} finally {
+		await rm(tempDir, { recursive: true, force: true });
+	}
+}
 
 function usage(exitCode = 0): never {
 	const output = `sickrat
@@ -351,7 +454,7 @@ async function cloudflareLogin(args: string[]) {
 			loggedInAt: new Date().toISOString(),
 		},
 	});
-	console.error(`Cloudflare login saved to ${configPath}.`);
+	console.error("Cloudflare login saved.");
 }
 
 async function chooseCloudflareAccount(accessToken: string, preferredAccountId?: string | null) {
@@ -448,12 +551,12 @@ async function readWorkersSubdomain(accountId: string, accessToken: string) {
 }
 
 async function writeVaultWranglerConfig(input: {
+	artifact: WebArtifact;
 	accountId: string;
 	scriptName: string;
 	d1Name: string;
 	d1Id: string;
 	vapidPublicKey: string;
-	vapidPrivateKey: string;
 	vaultName: string;
 }) {
 	const config = {
@@ -471,7 +574,6 @@ async function writeVaultWranglerConfig(input: {
 		},
 		vars: {
 			VAPID_PUBLIC_KEY: input.vapidPublicKey,
-			VAPID_PRIVATE_KEY: input.vapidPrivateKey,
 			SICKRAT_VAULT_NAME: input.vaultName,
 			SICKRAT_DEPLOYED_BY: "sickrat-cli",
 		},
@@ -502,9 +604,15 @@ async function writeVaultWranglerConfig(input: {
 			},
 		],
 	};
-	const configPath = join(webWorkerBuildDir, `${input.scriptName}.wrangler.json`);
+	const configPath = join(input.artifact.workerDir, `${input.scriptName}.wrangler.json`);
 	await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 	return configPath;
+}
+
+async function writeVaultSecretsFile(artifact: WebArtifact, scriptName: string, vapidPrivateKey: string) {
+	const secretsPath = join(artifact.workerDir, `${scriptName}.secrets.json`);
+	await writeFile(secretsPath, `${JSON.stringify({ VAPID_PRIVATE_KEY: vapidPrivateKey }, null, 2)}\n`, { mode: 0o600 });
+	return secretsPath;
 }
 
 async function deployVaultWorker(input: {
@@ -515,29 +623,36 @@ async function deployVaultWorker(input: {
 	d1Id: string;
 	vaultName: string;
 }) {
+	const artifact = await resolveWebArtifact();
 	console.error("Building vault PWA and Worker bundle...");
-	await runCommand("npm", ["--workspace", "apps/web", "run", "build"], { cwd: repoRoot });
+	if (artifact.build) await artifact.build();
 
 	console.error("Generating vault-specific VAPID keys...");
 	const vapid = await generateVapidKeys();
+	let secretsPath: string | null = null;
 	const wranglerConfigPath = await writeVaultWranglerConfig({
+		artifact,
 		accountId: input.accountId,
 		scriptName: input.scriptName,
 		d1Name: input.d1Name,
 		d1Id: input.d1Id,
 		vapidPublicKey: vapid.publicKey,
-		vapidPrivateKey: vapid.privateKey,
 		vaultName: input.vaultName,
 	});
 
-	console.error(`Deploying private vault Worker ${input.scriptName}...`);
-	await runCommand("npx", ["wrangler", "deploy", "--config", wranglerConfigPath], {
-		cwd: webWorkerBuildDir,
-		env: {
-			...process.env,
-			CLOUDFLARE_API_TOKEN: input.accessToken,
-		},
-	});
+	try {
+		secretsPath = await writeVaultSecretsFile(artifact, input.scriptName, vapid.privateKey);
+		console.error(`Deploying private vault Worker ${input.scriptName}...`);
+		await runCommand("npx", ["wrangler", "deploy", "--config", wranglerConfigPath, "--secrets-file", secretsPath], {
+			cwd: artifact.workerDir,
+			env: {
+				...process.env,
+				CLOUDFLARE_API_TOKEN: input.accessToken,
+			},
+		});
+	} finally {
+		if (secretsPath) await rm(secretsPath, { force: true });
+	}
 }
 
 async function createVault(args: string[]) {
@@ -582,7 +697,7 @@ async function createVault(args: string[]) {
 
 	console.log(`Worker\tdeployed\t${vault.scriptName}`);
 	console.log(`Vault URL\t${workerUrl}`);
-	console.error(`Open ${workerUrl} on your phone, add it to the Home Screen, then run:`);
+	console.error(`Open ${workerUrl} on your phone, add it to the Home Screen, enable push notifications, then run:`);
 	console.error(`  sickrat pair ${workerUrl}`);
 }
 
@@ -600,9 +715,11 @@ async function pair(args: string[]) {
 	});
 
 	console.error(`Pairing code: ${pairing.code}`);
-	console.error(`Open ${workerUrl}/?screen=pair and approve ${label}.`);
+	console.error(`Expires: ${new Date(pairing.expiresAt).toLocaleString()}`);
+	console.error(`A pairing notification was sent if push is enabled. Otherwise open ${workerUrl}/devices and enter the code.`);
 	console.error("Waiting for approval...");
 
+	let lastHeartbeatAt = 0;
 	while (true) {
 		await new Promise((resolve) => setTimeout(resolve, 2000));
 		const status = await api<PairingCodeStatusResponse>(
@@ -621,8 +738,15 @@ async function pair(args: string[]) {
 				signingPublicKey: publicKey,
 				pairedAt: new Date().toISOString(),
 			});
-			console.error(`Paired ${label}. Config saved to ${configPath}.`);
+			console.error(`Paired ${label}.`);
 			return;
+		}
+		const now = Date.now();
+		if (now - lastHeartbeatAt > 10_000) {
+			const remainingMs = Math.max(0, Date.parse(pairing.expiresAt) - now);
+			const remainingSeconds = Math.ceil(remainingMs / 1000);
+			console.error(`Still waiting for phone approval. Pairing expires in ${remainingSeconds}s.`);
+			lastHeartbeatAt = now;
 		}
 	}
 }

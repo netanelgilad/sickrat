@@ -40,6 +40,9 @@ jobs:
       - name: Typecheck CLI
         run: npm --workspace apps/cli run typecheck
 
+      - name: Build web deploy artifact
+        run: npm run web:build
+
       - name: Build release binaries
         run: |
           mkdir -p dist/release
@@ -47,6 +50,7 @@ jobs:
           bun build --compile --target=bun-darwin-x64 apps/cli/src/index.ts --outfile dist/release/sickrat-darwin-x64
           bun build --compile --target=bun-linux-arm64 apps/cli/src/index.ts --outfile dist/release/sickrat-linux-arm64
           bun build --compile --target=bun-linux-x64-baseline apps/cli/src/index.ts --outfile dist/release/sickrat-linux-x64
+          tar -C apps/web/dist -czf dist/release/sickrat-web-dist.tar.gz client sickrat
           shasum -a 256 dist/release/sickrat-* > dist/release/SHA256SUMS
 
       - name: Upload release artifacts

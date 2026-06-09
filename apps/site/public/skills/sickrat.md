@@ -1,3 +1,8 @@
+---
+name: sickrat
+description: Provision a user-owned Sickrat Cloudflare vault and request secrets through phone-approved CLI grants without asking users to paste credentials into chat.
+---
+
 # Sickrat Agent Skill
 
 Use Sickrat when a task needs a secret, API key, token, password, or private configuration value.
@@ -7,6 +12,25 @@ Use Sickrat when a task needs a secret, API key, token, password, or private con
 Do not ask the user to paste secrets into chat. Request the secret through Sickrat so the user can approve access from their phone.
 
 Sickrat vaults are user-owned Cloudflare deployments. The public `sickrat.dev` site only hosts docs and this skill file. The user's real vault is a private Worker/PWA created in their own Cloudflare account by the CLI.
+
+## Install The CLI
+
+First check whether the CLI is already available:
+
+```sh
+sickrat --help
+```
+
+If `sickrat` is missing, install it before setup. Sickrat is distributed as compiled binaries from GitHub Releases. On Apple Silicon Macs:
+
+```sh
+curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-darwin-arm64 -o sickrat
+chmod +x sickrat
+mkdir -p ~/.local/bin
+mv sickrat ~/.local/bin/sickrat
+```
+
+On Intel Macs, use `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`. If no release asset exists for the user's platform, stop and tell the user Sickrat does not currently ship a binary for that platform.
 
 ## First-Time Setup
 
@@ -30,7 +54,7 @@ Do not create or use a shared Sickrat service account. Do not send the user to `
 https://sickrat-default.<user-subdomain>.workers.dev
 ```
 
-After vault creation, tell the user to open that vault URL on their phone and add it to the Home Screen. The installed PWA is where they enable push, create the passkey-protected vault key, add secrets, and approve device pairing.
+After vault creation, tell the user to open that vault URL on their phone and add it to the Home Screen. The first launch of the installed PWA asks the user to enable push notifications. Wait for the user to confirm that the PWA is installed and push is enabled before running `sickrat pair`.
 
 ## Pair This Machine
 
@@ -43,6 +67,8 @@ sickrat pair <your-sickrat-vault-url>
 Show the pairing code to the user and ask them to approve it in the Sickrat web app.
 
 If `sickrat vault create` just ran successfully, use the printed vault URL. Do not guess a hosted URL.
+
+If push is enabled, the user should receive a pairing notification on their installed PWA. If not, tell them to open the vault PWA, go to Machines, enter the six-digit pairing code, and approve the device.
 
 ## Requesting A Secret
 
@@ -67,6 +93,7 @@ If the reference does not exist yet, still request it with a clear message. The 
 
 - For a first-time user, run `sickrat login` and `sickrat vault create` before pairing.
 - Treat the printed Worker/PWA URL as the user's private vault endpoint.
+- Do not read, print, summarize, upload, or inspect `~/.sickrat/config.json`; it is CLI-private state and may contain Cloudflare OAuth tokens and device keys.
 - Explain why the secret is needed before requesting it.
 - Put that explanation in `--message` so it appears on the user's approval screen.
 - It is valid to request a new reference that may not exist yet, but make the need specific and narrow.

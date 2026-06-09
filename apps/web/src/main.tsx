@@ -710,7 +710,7 @@ function InstalledPwaGate({ children }: { children: React.ReactNode }) {
 							<span>03</span>
 							<div>
 								<strong>Open Sickrat</strong>
-								<small>Launch the new icon, then log in with Cloudflare.</small>
+								<small>Launch the new icon, then enable push approvals.</small>
 							</div>
 						</li>
 					</ol>
@@ -859,6 +859,7 @@ function AppShell({
 	const [pairingCode, setPairingCode] = useState("");
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
 	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown by the CLI.");
+	const [pushSubscriptionChecked, setPushSubscriptionChecked] = useState(false);
 	const [cloudflareConfig, setCloudflareConfig] = useState<CloudflareOAuthConfig | null>(null);
 	const [cloudflareToken, setCloudflareToken] = useState<string | null>(() => localStorage.getItem("sickrat.cf.accessToken"));
 	const [cloudflareAccounts, setCloudflareAccounts] = useState<CloudflareAccount[]>([]);
@@ -958,6 +959,14 @@ function AppShell({
 	}, [route]);
 
 	useEffect(() => {
+		if (route !== "devices") return;
+		const code = new URLSearchParams(window.location.search).get("pairingCode")?.replace(/\D/g, "").slice(0, 6);
+		if (!code || code === pairingCode) return;
+		setPairingCode(code);
+		void loadPairingCodeValue(code);
+	}, [route]);
+
+	useEffect(() => {
 		api
 			.getCloudflareOAuthConfig()
 			.then((config) => {
@@ -1027,9 +1036,15 @@ function AppShell({
 	}, [cloudflareToken]);
 
 	useEffect(() => {
-		if (!capabilities?.push.configured) return;
-		if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
-		if (Notification.permission !== "granted") return;
+		if (!capabilities) return;
+		if (!capabilities.push.configured || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+			setPushSubscriptionChecked(true);
+			return;
+		}
+		if (Notification.permission !== "granted") {
+			setPushSubscriptionChecked(true);
+			return;
+		}
 
 		navigator.serviceWorker.ready
 			.then((registration) => registration.pushManager.getSubscription())
@@ -1044,7 +1059,8 @@ function AppShell({
 			})
 			.catch((error: unknown) => {
 				setStatus(error instanceof Error ? error.message : "Failed to sync existing push subscription.");
-			});
+			})
+			.finally(() => setPushSubscriptionChecked(true));
 	}, [capabilities]);
 
 	useEffect(() => {
@@ -1351,9 +1367,8 @@ function AppShell({
 		}
 	}
 
-	async function loadPairingCode(event: React.FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		const normalized = pairingCode.replace(/\D/g, "");
+	async function loadPairingCodeValue(code: string) {
+		const normalized = code.replace(/\D/g, "");
 		if (normalized.length !== 6) {
 			setPairingStatus("Enter a six-digit pairing code.");
 			return;
@@ -1369,6 +1384,11 @@ function AppShell({
 		} finally {
 			setBusy(false);
 		}
+	}
+
+	async function loadPairingCode(event: React.FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		await loadPairingCodeValue(pairingCode);
 	}
 
 	async function approvePairing() {
@@ -1641,6 +1661,45 @@ function AppShell({
 						</a>
 					</div>
 					<p className="screen-status">Cloudflare login and vault creation now happen in the CLI.</p>
+				</section>
+			</main>
+		);
+	}
+
+	if (
+		installed &&
+		capabilities?.push.configured &&
+		pushSubscriptionChecked &&
+		!subscription &&
+		route !== "approval" &&
+		!isCloudflareCallback
+	) {
+		return (
+			<main className="auth-page">
+				<section className="auth-card">
+					<Link className="brand-lockup" to="/">
+						<span className="brand-mark" aria-hidden="true">
+							<span className="mark-core">SR</span>
+						</span>
+						<span>Sickrat</span>
+					</Link>
+					<div>
+						<p className="eyebrow">First launch</p>
+						<h1>Enable push approvals.</h1>
+						<p>
+							Sickrat uses push notifications for pairing requests and agent approval prompts. Enable
+							push on this installed app before pairing an agent machine.
+						</p>
+					</div>
+					<div className="actions">
+						<button disabled={busy} onClick={enablePush}>
+							{busy ? "Enabling" : "Enable Push"}
+						</button>
+						<a className="button-link secondary-link" href="https://sickrat.dev/skills/sickrat.md">
+							Agent Skill
+						</a>
+					</div>
+					<p className="screen-status">{status}</p>
 				</section>
 			</main>
 		);

@@ -10,6 +10,12 @@ type PendingApproval = {
 	secretRefs: string[];
 };
 
+type PendingPairing = {
+	code: string;
+	label: string;
+	expiresAt: string;
+};
+
 async function navigateVisibleClients(url: string) {
 	const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
 	for (const client of clients) {
@@ -37,6 +43,7 @@ self.addEventListener("push", (event) => {
 	event.waitUntil(
 		(async () => {
 			let approval: PendingApproval | null = null;
+			let pairing: PendingPairing | null = null;
 
 			try {
 				const subscription = await self.registration.pushManager.getSubscription();
@@ -50,26 +57,47 @@ self.addEventListener("push", (event) => {
 						const body = (await response.json()) as { approval: PendingApproval | null };
 						approval = body.approval;
 					}
+					if (!approval) {
+						const pairingResponse = await fetch("/api/pairing/latest", {
+							method: "POST",
+							headers: { "content-type": "application/json" },
+							body: JSON.stringify({ endpoint: subscription.endpoint }),
+						});
+						if (pairingResponse.ok) {
+							const body = (await pairingResponse.json()) as { pairing: PendingPairing | null };
+							pairing = body.pairing;
+						}
+					}
 				}
 			} catch {
 				approval = null;
+				pairing = null;
 			}
 
-			const title = approval ? "Secret access requested" : "Sickrat";
+			const title = approval ? "Secret access requested" : pairing ? "Pairing requested" : "Sickrat";
 			const body = approval
 				? `${approval.device} wants ${approval.secretRefs.length} secrets`
-				: "Open Sickrat to review the latest request.";
-			const url = new URL(approval ? `/approve/${encodeURIComponent(approval.id)}` : "/", self.location.origin).href;
+				: pairing
+					? `${pairing.label} wants to pair with this vault`
+					: "Open Sickrat to review the latest request.";
+			const url = new URL(
+				approval
+					? `/approve/${encodeURIComponent(approval.id)}`
+					: pairing
+						? `/devices?pairingCode=${encodeURIComponent(pairing.code)}`
+						: "/",
+				self.location.origin,
+			).href;
 
 			await self.registration.showNotification(title, {
 				body,
 				badge: "/icons/icon.svg",
 				icon: "/icons/icon.svg",
-				tag: approval?.id ?? "sickrat-request",
-				data: { approvalId: approval?.id ?? null, url },
+				tag: approval?.id ?? pairing?.code ?? "sickrat-request",
+				data: { approvalId: approval?.id ?? null, pairingCode: pairing?.code ?? null, url },
 			});
 
-			if (approval) {
+			if (approval || pairing) {
 				await navigateVisibleClients(url);
 			}
 		})(),

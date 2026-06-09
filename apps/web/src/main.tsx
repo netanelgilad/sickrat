@@ -520,6 +520,14 @@ function isStandalone() {
 	);
 }
 
+function isLocalHost() {
+	return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function shouldRequireInstalledPwa() {
+	return window.location.protocol === "https:" && !isLocalHost();
+}
+
 type BeforeInstallPromptEvent = Event & {
 	prompt: () => Promise<void>;
 	userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
@@ -535,12 +543,28 @@ function isIosSafari() {
 	return isIosDevice() && /safari/.test(userAgent) && !/crios|fxios|edgios/.test(userAgent);
 }
 
-function InstallPrompt() {
+function useStandaloneMode() {
+	const [standalone, setStandalone] = useState(isStandalone);
+
+	useEffect(() => {
+		const standaloneQuery = window.matchMedia("(display-mode: standalone)");
+		const update = () => setStandalone(isStandalone());
+		standaloneQuery.addEventListener("change", update);
+		window.addEventListener("appinstalled", update);
+		window.addEventListener("focus", update);
+		return () => {
+			standaloneQuery.removeEventListener("change", update);
+			window.removeEventListener("appinstalled", update);
+			window.removeEventListener("focus", update);
+		};
+	}, []);
+
+	return standalone;
+}
+
+function usePwaInstallPrompt() {
 	const [promptEvent, setPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
 	const [installStatus, setInstallStatus] = useState("");
-	const standalone = useMemo(isStandalone, []);
-	const ios = useMemo(isIosDevice, []);
-	const iosSafari = useMemo(isIosSafari, []);
 
 	useEffect(() => {
 		const handlePrompt = (event: Event) => {
@@ -559,6 +583,15 @@ function InstallPrompt() {
 		setInstallStatus(choice.outcome === "accepted" ? "Install accepted." : "Install dismissed.");
 		setPromptEvent(null);
 	}
+
+	return { install, installStatus, promptEvent };
+}
+
+function InstallPrompt() {
+	const standalone = useStandaloneMode();
+	const ios = useMemo(isIosDevice, []);
+	const iosSafari = useMemo(isIosSafari, []);
+	const { install, installStatus, promptEvent } = usePwaInstallPrompt();
 
 	if (standalone) {
 		return (
@@ -602,6 +635,89 @@ function InstallPrompt() {
 			<strong>Browser session</strong>
 			<span>If your browser supports install prompts, the install button will appear here.</span>
 		</div>
+	);
+}
+
+function InstalledPwaGate({ children }: { children: React.ReactNode }) {
+	const standalone = useStandaloneMode();
+	const requireInstall = useMemo(shouldRequireInstalledPwa, []);
+	const ios = useMemo(isIosDevice, []);
+	const iosSafari = useMemo(isIosSafari, []);
+	const [copied, setCopied] = useState(false);
+	const { install, installStatus, promptEvent } = usePwaInstallPrompt();
+
+	if (!requireInstall || standalone) return <>{children}</>;
+
+	async function copyUrl() {
+		try {
+			await navigator.clipboard.writeText(window.location.href);
+			setCopied(true);
+			window.setTimeout(() => setCopied(false), 2_000);
+		} catch {
+			setCopied(false);
+		}
+	}
+
+	return (
+		<main className="install-gate" aria-labelledby="install-gate-title">
+			<section className="install-gate-panel">
+				<div className="brand-lockup install-gate-brand">
+					<span className="brand-mark" aria-hidden="true">
+						<span className="mark-core">SR</span>
+					</span>
+					<span>Sickrat</span>
+				</div>
+				<div className="install-gate-copy">
+					<p className="eyebrow">Home-screen app required</p>
+					<h1 id="install-gate-title">Install Sickrat to use this console.</h1>
+					<p>
+						Phone approvals depend on the installed PWA context so notifications, realtime routing, and the
+						vault console all open in the same app container.
+					</p>
+				</div>
+				{promptEvent ? (
+					<div className="install-gate-actions">
+						<button type="button" onClick={install}>
+							Install App
+						</button>
+						{installStatus ? <span className="mini-status">{installStatus}</span> : null}
+					</div>
+				) : ios ? (
+					<ol className="install-steps" aria-label="Install steps">
+						<li>
+							<span>01</span>
+							<strong>{iosSafari ? "Tap Share" : "Open this page in Safari"}</strong>
+							<small>{iosSafari ? "Use the Safari share button in the browser toolbar." : "iOS only installs PWAs from Safari."}</small>
+						</li>
+						<li>
+							<span>02</span>
+							<strong>Add to Home Screen</strong>
+							<small>Choose Add to Home Screen from the share sheet.</small>
+						</li>
+						<li>
+							<span>03</span>
+							<strong>Open Sickrat</strong>
+							<small>Launch the new icon, then log in with Cloudflare.</small>
+						</li>
+					</ol>
+				) : (
+					<div className="install-steps single">
+						<div>
+							<strong>Use your browser install control</strong>
+							<small>Look for Install app in the address bar or browser menu, then open Sickrat from the installed app.</small>
+						</div>
+					</div>
+				)}
+				<div className="install-gate-footer">
+					<button type="button" className="secondary" onClick={copyUrl}>
+						{copied ? "Copied" : "Copy URL"}
+					</button>
+					<a className="button-link secondary-link" href="https://sickrat.dev">
+						Back To Site
+					</a>
+				</div>
+			</section>
+		</main>
 	);
 }
 
@@ -2121,7 +2237,7 @@ function AppShell({
 
 function App() {
 	return (
-		<>
+		<InstalledPwaGate>
 			<PwaUpdatePrompt />
 			<Routes>
 				<Route path="/" element={<AppShell route="app" />} />
@@ -2144,7 +2260,7 @@ function App() {
 				<Route path="/pair" element={<Navigate to="/devices" replace />} />
 				<Route path="*" element={<Navigate to="/" replace />} />
 			</Routes>
-		</>
+		</InstalledPwaGate>
 	);
 }
 

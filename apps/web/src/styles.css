@@ -1127,6 +1127,140 @@ article h3,
 	justify-self: start;
 }
 
+.install-gate {
+	align-items: center;
+	display: grid;
+	min-height: 100vh;
+	min-height: 100svh;
+	max-width: none;
+	padding: calc(24px + var(--safe-top)) calc(18px + var(--safe-right)) calc(24px + var(--safe-bottom))
+		calc(18px + var(--safe-left));
+}
+
+.install-gate-panel {
+	background:
+		linear-gradient(135deg, rgba(69, 255, 138, 0.1), transparent 42%),
+		linear-gradient(180deg, rgba(242, 245, 238, 0.075), rgba(242, 245, 238, 0.025)),
+		#070b09;
+	border: 1px solid rgba(211, 229, 211, 0.28);
+	box-shadow: var(--shadow);
+	display: grid;
+	gap: 24px;
+	margin: 0 auto;
+	max-width: 620px;
+	overflow: hidden;
+	padding: clamp(22px, 5vw, 38px);
+	position: relative;
+	width: min(100%, 620px);
+}
+
+.install-gate-panel::before {
+	background:
+		linear-gradient(90deg, transparent, rgba(69, 255, 138, 0.45), transparent),
+		repeating-linear-gradient(90deg, rgba(69, 255, 138, 0.2) 0 1px, transparent 1px 18px);
+	content: "";
+	height: 2px;
+	left: 0;
+	position: absolute;
+	right: 0;
+	top: 0;
+}
+
+.install-gate-brand {
+	pointer-events: none;
+}
+
+.install-gate-copy {
+	display: grid;
+	gap: 14px;
+}
+
+.install-gate-copy h1 {
+	font-size: clamp(46px, 13vw, 88px);
+	line-height: 0.9;
+	margin: 0;
+	max-width: 9ch;
+	text-transform: uppercase;
+}
+
+.install-gate-copy p:not(.eyebrow) {
+	color: var(--muted);
+	font-size: 17px;
+	line-height: 1.5;
+	margin: 0;
+	max-width: 48ch;
+}
+
+.install-gate-actions {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+
+.install-steps {
+	display: grid;
+	gap: 10px;
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.install-steps li,
+.install-steps.single {
+	background: rgba(242, 245, 238, 0.04);
+	border: 1px solid var(--line);
+	display: grid;
+	gap: 6px 14px;
+	grid-template-columns: auto minmax(0, 1fr);
+	padding: 14px;
+}
+
+.install-steps.single {
+	grid-template-columns: 1fr;
+}
+
+.install-steps span {
+	align-items: center;
+	border: 1px solid rgba(69, 255, 138, 0.45);
+	color: var(--green);
+	display: inline-flex;
+	font-family: var(--mono);
+	font-size: 11px;
+	font-weight: 900;
+	height: 34px;
+	justify-content: center;
+	width: 42px;
+}
+
+.install-steps strong,
+.install-steps small {
+	display: block;
+	font-family: var(--mono);
+	overflow-wrap: anywhere;
+}
+
+.install-steps strong {
+	color: var(--ink);
+	font-size: 14px;
+	text-transform: uppercase;
+}
+
+.install-steps small {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+	margin-top: 4px;
+}
+
+.install-gate-footer {
+	border-top: 1px solid var(--line);
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	padding-top: 18px;
+}
+
 .approval-header.compact h2 {
 	font-family: var(--mono);
 	font-size: 18px;

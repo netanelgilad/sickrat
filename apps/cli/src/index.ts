@@ -78,7 +78,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.2";
+const cliVersion = "0.1.3";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -196,8 +196,14 @@ async function writeVaultUrlQrCode(workerUrl: string, slug: string) {
 	return qrPath;
 }
 
+function printAndExit(output: string, exitCode = 0): never {
+	(exitCode === 0 ? console.log : console.error)(output);
+	process.exit(exitCode);
+}
+
 function usage(exitCode = 0): never {
 	const output = `sickrat
+Version: ${cliVersion}
 
 Usage:
   sickrat login [--client-id <id>] [--port <port>]
@@ -211,8 +217,45 @@ Examples:
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
   sickrat request leumi --message "Reconcile today's bank transactions"
 `;
-	(exitCode === 0 ? console.log : console.error)(output);
-	process.exit(exitCode);
+	printAndExit(output, exitCode);
+}
+
+function commandHelp(command: string): never {
+	const help: Record<string, string> = {
+		login: `sickrat login
+
+Usage:
+  sickrat login [--client-id <id>] [--port <port>]
+
+Starts Cloudflare OAuth login and stores local control-plane state.
+`,
+		"vault create": `sickrat vault create
+
+Usage:
+  sickrat vault create [name] [--account-id <id>]
+
+Creates or updates a user-owned Sickrat vault in the selected Cloudflare account.
+`,
+		pair: `sickrat pair
+
+Usage:
+  sickrat pair <worker-url> [--label <name>]
+
+Pairs this machine with an existing Sickrat vault after phone approval.
+`,
+		request: `sickrat request
+
+Usage:
+  sickrat request <ref> [--message <why>]
+
+Requests a secret from a paired Sickrat vault.
+`,
+	};
+	printAndExit(help[command] ?? "", help[command] ? 0 : 1);
+}
+
+function hasHelpFlag(args: string[]) {
+	return args.includes("--help") || args.includes("-h");
 }
 
 function bytesToBase64Url(bytes: Uint8Array) {
@@ -736,12 +779,10 @@ async function uploadVaultWorker(input: {
 			{ name: "SICKRAT_VAULT_NAME", type: "plain_text", text: input.vaultName },
 			{ name: "SICKRAT_DEPLOYED_BY", type: "plain_text", text: "sickrat-cli" },
 		],
-		migrations: [
-			{
-				tag: "v1",
-				new_sqlite_classes: ["ApprovalHub"],
-			},
-		],
+		migrations: {
+			new_tag: "v1",
+			new_sqlite_classes: ["ApprovalHub"],
+		},
 		observability: {
 			enabled: true,
 		},
@@ -790,17 +831,25 @@ async function deployVaultWorker(input: {
 	});
 
 	console.error(`Deploying private vault Worker ${input.scriptName}...`);
-	await uploadVaultWorker({
-		accessToken: input.accessToken,
-		accountId: input.accountId,
-		scriptName: input.scriptName,
-		d1Id: input.d1Id,
-		vaultName: input.vaultName,
-		vapidPublicKey: vapid.publicKey,
-		vapidPrivateKey: vapid.privateKey,
-		assetsJwt,
-		workerDir: artifact.workerDir,
-	});
+	try {
+		await uploadVaultWorker({
+			accessToken: input.accessToken,
+			accountId: input.accountId,
+			scriptName: input.scriptName,
+			d1Id: input.d1Id,
+			vaultName: input.vaultName,
+			vapidPublicKey: vapid.publicKey,
+			vapidPrivateKey: vapid.privateKey,
+			assetsJwt,
+			workerDir: artifact.workerDir,
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		const context = /migration|migrations|unmarshal/i.test(message)
+			? "Worker deployment failed while applying Durable Object migration metadata"
+			: "Worker deployment failed";
+		throw new Error(`${context}: ${message}`);
+	}
 }
 
 async function createVault(args: string[]) {
@@ -999,6 +1048,17 @@ async function main() {
 	const command = args[0];
 	try {
 		if (!command || command === "--help" || command === "-h") usage(0);
+		if (command === "--version" || command === "-v" || command === "version") {
+			console.log(cliVersion);
+			return;
+		}
+		if (hasHelpFlag(args)) {
+			if (command === "login") commandHelp("login");
+			if (command === "vault" && args[1] === "create") commandHelp("vault create");
+			if (command === "pair") commandHelp("pair");
+			if (command === "request") commandHelp("request");
+			usage(0);
+		}
 		if (command === "login") return await cloudflareLogin(args);
 		if (command === "provision") return await createVault(args);
 		if (command === "vault" && args[1] === "create") return await createVault(args.slice(1));

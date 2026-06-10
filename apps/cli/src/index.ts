@@ -57,6 +57,11 @@ type CloudflareWorkersSubdomain = {
 	previews_enabled?: boolean;
 };
 
+type CloudflareWorkerScriptSummary = {
+	id: string;
+	migration_tag?: string;
+};
+
 type AssetManifest = Record<string, { hash: string; size: number }>;
 
 type AssetFile = {
@@ -78,7 +83,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.3";
+const cliVersion = "0.1.4";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -483,6 +488,7 @@ async function cloudflareLogin(args: string[]) {
 		server.once("error", reject);
 		server.listen(port, "127.0.0.1", () => {
 			console.error(`Opening Cloudflare login in your browser...`);
+			console.error(`Cloudflare login URL: ${authUrl.toString()}`);
 			console.error(`Callback: ${redirectUri}`);
 			openBrowser(authUrl.toString());
 		});
@@ -619,6 +625,22 @@ async function readWorkersSubdomain(accountId: string, accessToken: string) {
 	} catch {
 		return null;
 	}
+}
+
+async function readWorkerMigrationTag(accountId: string, accessToken: string, scriptName: string) {
+	try {
+		const scripts = await readCloudflareApi<CloudflareWorkerScriptSummary[]>(`/accounts/${accountId}/workers/scripts`, accessToken);
+		return scripts.find((script) => script.id === scriptName)?.migration_tag ?? null;
+	} catch {
+		return null;
+	}
+}
+
+async function enableWorkerSubdomain(accountId: string, accessToken: string, scriptName: string) {
+	await readCloudflareApi<unknown>(`/accounts/${accountId}/workers/scripts/${scriptName}/subdomain`, accessToken, {
+		method: "POST",
+		body: JSON.stringify({ enabled: true }),
+	});
 }
 
 function contentTypeForPath(path: string) {
@@ -759,6 +781,7 @@ async function uploadVaultWorker(input: {
 }) {
 	const workerPath = join(input.workerDir, "index.js");
 	const workerSource = await readFile(workerPath);
+	const migrationTag = await readWorkerMigrationTag(input.accountId, input.accessToken, input.scriptName);
 	const metadata = {
 		main_module: "index.js",
 		compatibility_date: "2026-06-06",
@@ -779,10 +802,15 @@ async function uploadVaultWorker(input: {
 			{ name: "SICKRAT_VAULT_NAME", type: "plain_text", text: input.vaultName },
 			{ name: "SICKRAT_DEPLOYED_BY", type: "plain_text", text: "sickrat-cli" },
 		],
-		migrations: {
-			new_tag: "v1",
-			new_sqlite_classes: ["ApprovalHub"],
-		},
+		...(migrationTag === "v1"
+			? {}
+			: {
+					migrations: {
+						...(migrationTag ? { old_tag: migrationTag } : {}),
+						new_tag: "v1",
+						steps: [{ new_sqlite_classes: ["ApprovalHub"] }],
+					},
+				}),
 		observability: {
 			enabled: true,
 		},
@@ -843,6 +871,7 @@ async function deployVaultWorker(input: {
 			assetsJwt,
 			workerDir: artifact.workerDir,
 		});
+		await enableWorkerSubdomain(input.accountId, input.accessToken, input.scriptName);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const context = /migration|migrations|unmarshal/i.test(message)

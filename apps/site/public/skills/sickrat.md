@@ -66,20 +66,36 @@ If `sickrat vault create` just ran successfully, use the printed vault URL. Do n
 
 If push is enabled, the user should receive a pairing notification on their installed PWA. If not, tell them to open the vault PWA, go to Machines, enter the six-digit pairing code, and approve the device.
 
-## Requesting A Secret
+## Running Commands With Secrets
 
-Request a secret by reference:
-
-```sh
-sickrat request <secret-ref> --message "<why this secret is needed>"
-```
-
-Examples:
+Use `sickrat run` as the default agent-facing interface. It requests phone approval, injects approved values into the child process environment, and does not print secret values:
 
 ```sh
-sickrat request openai/api-key --message "Run the smoke test against the real API"
-sickrat request prod/database/url --message "Apply the requested database migration"
+sickrat run \
+  --env OPENAI_API_KEY=openai/api-key \
+  --message "<why this command needs the secret>" \
+  -- npm test
 ```
+
+For multiple values, use repeated `--env` flags:
+
+```sh
+sickrat run \
+  --env LEUMI_USERNAME=leumi/username \
+  --env LEUMI_PASSWORD=leumi/password \
+  --message "Run the requested bank scraper" \
+  -- npm run scrape:leumi
+```
+
+Or use an env file with `sickrat://` references:
+
+```sh
+sickrat run --env-file .env.sickrat -- npm run scrape:leumi
+```
+
+Sickrat replaces only `sickrat://...` values with approved secrets and preserves ordinary env values as-is. Do not write resolved env files back to disk.
+
+For explicit manual debugging only, `sickrat reveal <secret-ref> --message "<why>"` prints a secret to stdout. Avoid `reveal` in normal agent workflows because terminal output may enter transcripts.
 
 The user receives an approval prompt. After approval, Sickrat returns a short-lived grant for the CLI process.
 
@@ -94,6 +110,6 @@ If the reference does not exist yet, still request it with a clear message. The 
 - Put that explanation in `--message` so it appears on the user's approval screen.
 - It is valid to request a new reference that may not exist yet, but make the need specific and narrow.
 - Request the narrowest secret reference that satisfies the task.
-- Never print secret values unless the user explicitly asks for that in a clearly non-production test.
-- Prefer `sickrat run` or env injection once available, so plaintext only reaches the child process that needs it.
+- Prefer `sickrat run` so plaintext only reaches the child process that needs it.
+- Never use `sickrat reveal` unless the user explicitly asks for plaintext output in a clearly non-production test.
 - If using `sickrat add-secret`, warn the user that providing the secret through chat may expose it to the model provider.

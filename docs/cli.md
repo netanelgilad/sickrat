@@ -11,9 +11,9 @@ sickrat vault list
 sickrat vault use <vault>
 
 sickrat pair <worker-url>
-sickrat request <ref> [--message <why>]
+sickrat run [--env KEY=ref] [--env-file <file>] [--message <why>] -- <command> [args...]
+sickrat reveal <ref> [--message <why>]
 sickrat inject -i <template> -o <output>
-sickrat run [--env-file <file>] -- <command> [args...]
 ```
 
 ## Secret References
@@ -29,7 +29,7 @@ prod/database/url
 sickrat://default/openai/api-key
 ```
 
-Future env-file auto-detection should use `sickrat://...` as the explicit marker so the CLI can distinguish literal values from secret references without extra config.
+Env-file auto-detection uses `sickrat://...` as the explicit marker so the CLI can distinguish literal values from secret references without extra config. Direct `--env KEY=ref` mappings accept raw refs without a URI scheme.
 
 ## `run`
 
@@ -41,14 +41,16 @@ Agents may request a reference that does not exist yet. The PWA should treat tha
 Example:
 
 ```sh
-sickrat run --env-file .env -- npm test
+sickrat run --env OPENAI_API_KEY=openai/api-key -- npm test
+sickrat run --env-file .env.sickrat -- npm test
 ```
 
-Input `.env`:
+Input `.env.sickrat`:
 
 ```env
 OPENAI_API_KEY=sickrat://default/openai/api-key
 DATABASE_URL=sickrat://prod/database/url
+SHOW_BROWSER=true
 ```
 
 Behavior:
@@ -58,6 +60,10 @@ Behavior:
 - Spawn the child process with resolved environment values.
 - Mask secret values in CLI diagnostics.
 - Never persist plaintext values to disk.
+
+## `reveal`
+
+`sickrat reveal <ref>` is explicit manual/debug mode. It uses the same phone approval flow, then prints the approved value to stdout. Agents should avoid it unless the user explicitly asks to inspect a non-production value.
 
 ## `inject`
 

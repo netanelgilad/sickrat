@@ -83,7 +83,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.5";
+const cliVersion = "0.1.6";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -214,13 +214,15 @@ Usage:
   sickrat login [--client-id <id>] [--port <port>]
   sickrat vault create [name] [--account-id <id>]
   sickrat pair <worker-url> [--label <name>]
-  sickrat request <ref> [--message <why>]
+  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...>
+  sickrat reveal <ref> [--message <why>]
 
 Examples:
   sickrat login
   sickrat vault create personal
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
-  sickrat request leumi --message "Reconcile today's bank transactions"
+  sickrat run --env LEUMI_PASSWORD=leumi/password -- npm run scrape:leumi
+  sickrat reveal leumi/password --message "Manual debug reveal"
 `;
 	printAndExit(output, exitCode);
 }
@@ -248,12 +250,23 @@ Usage:
 
 Pairs this machine with an existing Sickrat vault after phone approval.
 `,
-		request: `sickrat request
+		run: `sickrat run
 
 Usage:
-  sickrat request <ref> [--message <why>]
+  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...>
 
-Requests a secret from a paired Sickrat vault.
+Requests phone approval for referenced secrets, injects approved values into the child process environment, and never prints secret values.
+
+Examples:
+  sickrat run --env LEUMI_USERNAME=leumi/username --env LEUMI_PASSWORD=leumi/password -- npm run scrape:leumi
+  sickrat run --env-file .env.sickrat -- npm run scrape:leumi
+`,
+		reveal: `sickrat reveal
+
+Usage:
+  sickrat reveal <ref> [--message <why>]
+
+Requests a secret from a paired Sickrat vault and prints it to stdout. This is explicit manual/debug reveal mode.
 `,
 	};
 	printAndExit(help[command] ?? "", help[command] ? 0 : 1);
@@ -261,6 +274,10 @@ Requests a secret from a paired Sickrat vault.
 
 function hasHelpFlag(args: string[]) {
 	return args.includes("--help") || args.includes("-h");
+}
+
+function unknownCommand(command: string): never {
+	printAndExit(`Unknown command: ${command}\nRun sickrat --help for usage.`, 1);
 }
 
 function bytesToBase64Url(bytes: Uint8Array) {
@@ -317,6 +334,14 @@ function getAnyArgValue(args: string[], names: string[]) {
 		if (value) return value;
 	}
 	return null;
+}
+
+function getAllArgValues(args: string[], name: string) {
+	const values: string[] = [];
+	for (let index = 0; index < args.length; index += 1) {
+		if (args[index] === name && args[index + 1]) values.push(args[index + 1]);
+	}
+	return values;
 }
 
 function randomBase64Url(byteLength: number) {
@@ -385,6 +410,23 @@ async function runCommand(command: string, args: string[], options: { cwd?: stri
 				return;
 			}
 			reject(new Error(`${command} ${args.join(" ")} failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}.`));
+		});
+	});
+}
+
+async function runChild(command: string, args: string[], env: NodeJS.ProcessEnv) {
+	return await new Promise<number>((resolve, reject) => {
+		const child = spawn(command, args, {
+			env,
+			stdio: "inherit",
+		});
+		child.once("error", reject);
+		child.once("exit", (code, signal) => {
+			if (signal) {
+				reject(new Error(`${command} exited with signal ${signal}.`));
+				return;
+			}
+			resolve(code ?? 1);
 		});
 	});
 }
@@ -1023,13 +1065,28 @@ async function decryptGrant(grant: EncryptedGrant, privateKey: CryptoKey) {
 	return JSON.parse(textDecoder.decode(plaintext)) as GrantPayload;
 }
 
-async function requestSecret(args: string[]) {
-	const ref = args.find((arg, index) => index > 0 && !arg.startsWith("-") && args[index - 1] !== "--message" && args[index - 1] !== "-m");
-	if (!ref?.trim() || ref.trim() !== ref) usage(1);
-	const message = getAnyArgValue(args, ["--message", "-m"]) ?? undefined;
+function validateRequestMessage(message: string | undefined) {
 	if (message !== undefined && (!message.trim() || message.trim() !== message || message.length > 600)) {
 		throw new Error("Request message must be non-empty, 600 characters or fewer, and have no leading or trailing spaces.");
 	}
+}
+
+function uniqueRefs(refs: string[]) {
+	const unique: string[] = [];
+	const seen = new Set<string>();
+	for (const ref of refs) {
+		if (!ref.trim() || ref.trim() !== ref) throw new Error(`Invalid Sickrat reference: ${ref}`);
+		if (seen.has(ref)) continue;
+		seen.add(ref);
+		unique.push(ref);
+	}
+	if (unique.length === 0) throw new Error("At least one Sickrat reference is required.");
+	return unique;
+}
+
+async function requestGrant(input: { refs: string[]; message?: string; command: string }) {
+	validateRequestMessage(input.message);
+	const refs = uniqueRefs(input.refs);
 	const config = await readConfig();
 	if (!config.workerUrl || !config.deviceId) {
 		throw new Error("No paired device config found. Run sickrat pair <worker-url> first.");
@@ -1038,9 +1095,9 @@ async function requestSecret(args: string[]) {
 	const ephemeralPublicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
 	const unsigned = {
 		deviceId: config.deviceId,
-		command: `sickrat request ${ref}`,
-		message,
-		secretRefs: [ref],
+		command: input.command,
+		message: input.message,
+		secretRefs: refs,
 		ephemeralPublicKey,
 		timestamp: new Date().toISOString(),
 		nonce: bytesToBase64Url(crypto.getRandomValues(new Uint8Array(16))),
@@ -1051,6 +1108,7 @@ async function requestSecret(args: string[]) {
 		body: JSON.stringify({ ...unsigned, signature }),
 	});
 	console.error(`Approval request ${created.requestId} sent. Waiting for phone approval...`);
+	console.error(`Requested refs: ${refs.join(", ")}`);
 
 	const started = Date.now();
 	while (Date.now() - started < 2 * 60 * 1000) {
@@ -1062,14 +1120,135 @@ async function requestSecret(args: string[]) {
 		if (result.status === "denied") throw new Error("Request denied.");
 		if (result.status === "approved" && result.grantCiphertext) {
 			const grant = await decryptGrant(result.grantCiphertext, keyPair.privateKey);
-			const value = grant.secrets[ref];
-			if (value === undefined) throw new Error(`Approved grant did not include ${ref}.`);
-			process.stdout.write(value);
-			return;
+			for (const ref of refs) {
+				if (grant.secrets[ref] === undefined) throw new Error(`Approved grant did not include ${ref}.`);
+			}
+			console.error("Approved. Grant received.");
+			return grant;
 		}
 	}
 
 	throw new Error("Timed out waiting for approval.");
+}
+
+async function revealSecret(args: string[]) {
+	const ref = args.find((arg, index) => index > 0 && !arg.startsWith("-") && args[index - 1] !== "--message" && args[index - 1] !== "-m");
+	if (!ref?.trim() || ref.trim() !== ref) commandHelp("reveal");
+	const message = getAnyArgValue(args, ["--message", "-m"]) ?? undefined;
+	const grant = await requestGrant({
+		refs: [ref],
+		message,
+		command: `sickrat reveal ${ref}`,
+	});
+	process.stdout.write(grant.secrets[ref] ?? "");
+}
+
+function parseEnvAssignment(value: string) {
+	const match = value.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+	if (!match) throw new Error(`Expected KEY=value, got: ${value}`);
+	return { key: match[1], value: match[2] };
+}
+
+function unquoteDotenvValue(value: string) {
+	const trimmed = value.trim();
+	if (trimmed.startsWith("'") && trimmed.endsWith("'")) return trimmed.slice(1, -1);
+	if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+		return trimmed
+			.slice(1, -1)
+			.replace(/\\n/g, "\n")
+			.replace(/\\r/g, "\r")
+			.replace(/\\t/g, "\t")
+			.replace(/\\"/g, '"')
+			.replace(/\\\\/g, "\\");
+	}
+	const commentIndex = trimmed.search(/\s#/);
+	return (commentIndex >= 0 ? trimmed.slice(0, commentIndex) : trimmed).trim();
+}
+
+function parseDotenv(content: string, path: string) {
+	const values: Record<string, string> = {};
+	const lines = content.split(/\r?\n/);
+	for (let index = 0; index < lines.length; index += 1) {
+		const raw = lines[index];
+		const trimmed = raw.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		const withoutExport = trimmed.startsWith("export ") ? trimmed.slice("export ".length).trimStart() : trimmed;
+		const equalIndex = withoutExport.indexOf("=");
+		if (equalIndex <= 0) throw new Error(`${path}:${index + 1}: expected KEY=value`);
+		const key = withoutExport.slice(0, equalIndex).trim();
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`${path}:${index + 1}: invalid env key ${key}`);
+		values[key] = unquoteDotenvValue(withoutExport.slice(equalIndex + 1));
+	}
+	return values;
+}
+
+function sickratUriToRef(value: string) {
+	if (!value.startsWith("sickrat://")) return null;
+	const url = new URL(value);
+	const ref = `${url.hostname}${url.pathname}`.replace(/^\/+|\/+$/g, "");
+	if (!ref) throw new Error(`Invalid Sickrat reference URI: ${value}`);
+	return decodeURIComponent(ref);
+}
+
+function formatCommand(commandArgs: string[]) {
+	return commandArgs
+		.map((arg) => (/^[A-Za-z0-9_./:=@+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
+		.join(" ");
+}
+
+async function runWithSecrets(args: string[]) {
+	const separatorIndex = args.indexOf("--");
+	if (separatorIndex < 0 || separatorIndex === args.length - 1) commandHelp("run");
+	const beforeCommand = args.slice(1, separatorIndex);
+	const commandArgs = args.slice(separatorIndex + 1);
+	const directEnv = getAllArgValues(beforeCommand, "--env").map(parseEnvAssignment);
+	const envFiles = getAllArgValues(beforeCommand, "--env-file");
+	const message = getAnyArgValue(beforeCommand, ["--message", "-m"]) ?? undefined;
+	validateRequestMessage(message);
+
+	for (let index = 0; index < beforeCommand.length; index += 1) {
+		const arg = beforeCommand[index];
+		if (arg === "--env" || arg === "--env-file" || arg === "--message" || arg === "-m") {
+			index += 1;
+			continue;
+		}
+		throw new Error(`Unknown sickrat run option: ${arg}`);
+	}
+
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	const refByKey = new Map<string, string>();
+	for (const envFile of envFiles) {
+		const parsed = parseDotenv(await readFile(envFile, "utf8"), envFile);
+		for (const [key, value] of Object.entries(parsed)) {
+			const ref = sickratUriToRef(value);
+			if (ref) {
+				refByKey.set(key, ref);
+			} else {
+				refByKey.delete(key);
+				env[key] = value;
+			}
+		}
+	}
+	for (const { key, value } of directEnv) {
+		refByKey.set(key, value);
+	}
+	if (refByKey.size === 0) throw new Error("No Sickrat secret references found. Use --env KEY=ref or sickrat:// refs in --env-file.");
+
+	const refs = uniqueRefs([...refByKey.values()]);
+	const grant = await requestGrant({
+		refs,
+		message,
+		command: `sickrat run -- ${formatCommand(commandArgs)}`,
+	});
+	for (const [key, ref] of refByKey) {
+		const value = grant.secrets[ref];
+		if (value === undefined) throw new Error(`Approved grant did not include ${ref}.`);
+		env[key] = value;
+	}
+
+	console.error(`Starting child process with ${refByKey.size} Sickrat env values.`);
+	const code = await runChild(commandArgs[0], commandArgs.slice(1), env);
+	process.exit(code);
 }
 
 async function main() {
@@ -1085,15 +1264,21 @@ async function main() {
 			if (command === "login") commandHelp("login");
 			if (command === "vault" && args[1] === "create") commandHelp("vault create");
 			if (command === "pair") commandHelp("pair");
-			if (command === "request") commandHelp("request");
-			usage(0);
+			if (command === "run") commandHelp("run");
+			if (command === "reveal" || command === "request") commandHelp("reveal");
+			unknownCommand(command);
 		}
 		if (command === "login") return await cloudflareLogin(args);
 		if (command === "provision") return await createVault(args);
 		if (command === "vault" && args[1] === "create") return await createVault(args.slice(1));
 		if (command === "pair") return await pair(args);
-		if (command === "request") return await requestSecret(args);
-		usage(1);
+		if (command === "run") return await runWithSecrets(args);
+		if (command === "reveal") return await revealSecret(args);
+		if (command === "request") {
+			console.error("sickrat request is deprecated. Use sickrat reveal for explicit stdout reveal, or sickrat run for env injection.");
+			return await revealSecret(["reveal", ...args.slice(1)]);
+		}
+		unknownCommand(command);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		process.exit(1);

@@ -121,13 +121,16 @@ The implemented CLI currently supports:
 sickrat login [--client-id <id>] [--port <port>]
 sickrat vault create [name] [--account-id <id>]
 sickrat pair <worker-url> [--label <name>]
-sickrat request <ref> [--message <why>]
+sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...>
+sickrat reveal <ref> [--message <why>]
 ```
 
 Use `--message` when an agent requests a secret so the phone approval screen explains the task, not just the reference name.
+Use `run` for normal agent workflows; it injects approved secrets into the child process environment without printing them.
+Use `reveal` only for explicit manual/debug flows because it prints the approved value to stdout.
 If the requested reference does not exist yet, the approval screen can collect the value, save it into the vault, and approve the original request in one flow.
 
-Planned commands include `run`, `inject`, vault listing, and safer delivery modes beyond environment variables. See [docs/cli.md](docs/cli.md).
+Planned commands include vault listing and safer delivery modes beyond environment variables. See [docs/cli.md](docs/cli.md).
 
 ## Cloudflare OAuth Client Bootstrap
 

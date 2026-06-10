@@ -145,10 +145,12 @@ Vault URL: https://sickrat-default.<you>.workers.dev
 $ sickrat pair https://sickrat-default.<you>.workers.dev
 Pairing code: 482913
 
-$ sickrat request openai/api-key \\
-  --message "Run the smoke test with the real API"
+$ sickrat run \\
+  --env OPENAI_API_KEY=openai/api-key \\
+  --message "Run the smoke test with the real API" \\
+  -- npm test
 Waiting for approval on your phone...
-Approved. Encrypted grant sealed for this request.`}</pre>
+Approved. Starting child process with 1 Sickrat env value.`}</pre>
 			</div>
 		</section>
 

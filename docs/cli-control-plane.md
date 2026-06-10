@@ -15,7 +15,8 @@ This separation means one bootstrap agent can create vault infrastructure, while
 sickrat login [--client-id <cloudflare-oauth-client-id>] [--port 8977]
 sickrat vault create [name] [--account-id <account-id>]
 sickrat pair <worker-url> [--label <device-label>]
-sickrat request <ref>
+sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...>
+sickrat reveal <ref> [--message <why>]
 ```
 
 `login` uses OAuth authorization code with PKCE and a loopback callback server. Cloudflare's OAuth client API currently documents `authorization_code` and optional `refresh_token` grant types, not device-code. The project client id is the default, and `--client-id` is only for alternate OAuth clients.
@@ -30,7 +31,7 @@ sickrat request <ref>
 
 It intentionally does not create a Secrets Store today. Secret values are encrypted in the PWA before upload; D1 stores ciphertext, metadata, devices, approvals, subscriptions, and audit-adjacent records. Cloudflare Secrets Store should be added only when Sickrat has operational secrets that the Worker itself must read. It should not be used as the primary vault database unless we explicitly decide to make Cloudflare-managed plaintext secret material part of the product model.
 
-Secret references are arbitrary unique strings within a vault. `leumi`, `prod/database/url`, and `sickrat://default/openai/api-key` are all valid. Future env-file auto-detection should use `sickrat://...` as the explicit marker, but direct `sickrat request <ref>` does not require a URI scheme.
+Secret references are arbitrary unique strings within a vault. `leumi`, `prod/database/url`, and `sickrat://default/openai/api-key` are all valid. Env-file auto-detection uses `sickrat://...` as the explicit marker, while direct `sickrat run --env KEY=ref` and `sickrat reveal <ref>` accept raw refs without a URI scheme.
 
 The CLI writes the deployed vault URL into `~/.sickrat/config.json` so the next routine command can pair against that vault.
 

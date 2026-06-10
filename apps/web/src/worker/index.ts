@@ -266,7 +266,7 @@ async function publishPairing(subscriptionId: string, pairing: ReturnType<typeof
 		{
 			type: "pairing.requested",
 			pairing,
-			url: `/devices?pairingCode=${encodeURIComponent(pairing.code)}`,
+			url: "/devices",
 		},
 		env,
 	);
@@ -305,7 +305,7 @@ async function getLatestNotification(subscriptionId: string, env: EnvWithBinding
 	return {
 		type: "pairing.requested",
 		pairing: mapped,
-		url: `/devices?pairingCode=${encodeURIComponent(mapped.code)}`,
+		url: "/devices",
 	};
 }
 

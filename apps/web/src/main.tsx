@@ -977,10 +977,12 @@ function AppShell({
 	useEffect(() => {
 		if (route !== "devices") return;
 		const code = new URLSearchParams(window.location.search).get("pairingCode")?.replace(/\D/g, "").slice(0, 6);
-		if (!code || code === pairingCode) return;
-		setPairingCode(code);
-		void loadPairingCodeValue(code);
-	}, [route]);
+		if (!code) return;
+		setPairing(null);
+		setPairingCode("");
+		setPairingStatus("Pairing request opened. Type the six-digit code shown by the CLI to verify this device.");
+		navigate("/devices", { replace: true });
+	}, [navigate, route]);
 
 	useEffect(() => {
 		api

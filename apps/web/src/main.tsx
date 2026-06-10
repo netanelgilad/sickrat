@@ -739,7 +739,7 @@ function PwaUpdatePrompt() {
 	const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
 	const [updating, setUpdating] = useState(false);
 	const {
-		offlineReady: [offlineReady, setOfflineReady],
+		offlineReady: [, setOfflineReady],
 		needRefresh: [needRefresh, setNeedRefresh],
 		updateServiceWorker,
 	} = useRegisterSW({
@@ -767,7 +767,7 @@ function PwaUpdatePrompt() {
 		};
 	}, [registration]);
 
-	if (!offlineReady && !needRefresh) return null;
+	if (!needRefresh) return null;
 
 	const reloadApp = async () => {
 		setUpdating(true);
@@ -786,7 +786,7 @@ function PwaUpdatePrompt() {
 
 	return (
 		<div className="update-bar" role="status">
-			<span>{updating ? "Updating..." : offlineReady ? "Ready offline" : "Update available"}</span>
+			<span>{updating ? "Updating..." : "Update available"}</span>
 			<div>
 				{needRefresh ? (
 					<button disabled={updating} onClick={reloadApp}>

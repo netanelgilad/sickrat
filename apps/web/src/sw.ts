@@ -16,6 +16,18 @@ type PendingPairing = {
 	expiresAt: string;
 };
 
+type PendingNotification =
+	| {
+			type: "approval.requested";
+			approval: PendingApproval;
+			url: string;
+	  }
+	| {
+			type: "pairing.requested";
+			pairing: PendingPairing;
+			url: string;
+	  };
+
 async function navigateVisibleClients(url: string) {
 	const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
 	for (const client of clients) {
@@ -42,62 +54,48 @@ self.addEventListener("message", (event) => {
 self.addEventListener("push", (event) => {
 	event.waitUntil(
 		(async () => {
-			let approval: PendingApproval | null = null;
-			let pairing: PendingPairing | null = null;
+			let notification: PendingNotification | null = null;
 
 			try {
 				const subscription = await self.registration.pushManager.getSubscription();
 				if (subscription) {
-					const response = await fetch("/api/approvals/latest", {
+					const response = await fetch("/api/notifications/latest", {
 						method: "POST",
 						headers: { "content-type": "application/json" },
 						body: JSON.stringify({ endpoint: subscription.endpoint }),
 					});
 					if (response.ok) {
-						const body = (await response.json()) as { approval: PendingApproval | null };
-						approval = body.approval;
-					}
-					if (!approval) {
-						const pairingResponse = await fetch("/api/pairing/latest", {
-							method: "POST",
-							headers: { "content-type": "application/json" },
-							body: JSON.stringify({ endpoint: subscription.endpoint }),
-						});
-						if (pairingResponse.ok) {
-							const body = (await pairingResponse.json()) as { pairing: PendingPairing | null };
-							pairing = body.pairing;
-						}
+						const body = (await response.json()) as { notification: PendingNotification | null };
+						notification = body.notification;
 					}
 				}
 			} catch {
-				approval = null;
-				pairing = null;
+				notification = null;
 			}
 
-			const title = approval ? "Secret access requested" : pairing ? "Pairing requested" : "Sickrat";
-			const body = approval
-				? `${approval.device} wants ${approval.secretRefs.length} secrets`
-				: pairing
-					? `${pairing.label} wants to pair with this vault`
-					: "Open Sickrat to review the latest request.";
-			const url = new URL(
-				approval
-					? `/approve/${encodeURIComponent(approval.id)}`
-					: pairing
-						? `/devices?pairingCode=${encodeURIComponent(pairing.code)}`
-						: "/",
-				self.location.origin,
-			).href;
+			let title = "Sickrat";
+			let body = "Open Sickrat to review the latest request.";
+			let tag = "sickrat-request";
+			if (notification?.type === "approval.requested") {
+				title = "Secret access requested";
+				body = `${notification.approval.device} wants ${notification.approval.secretRefs.length} secrets`;
+				tag = notification.approval.id;
+			} else if (notification?.type === "pairing.requested") {
+				title = "Pairing requested";
+				body = `${notification.pairing.label} wants to pair with this vault`;
+				tag = notification.pairing.code;
+			}
+			const url = new URL(notification?.url ?? "/", self.location.origin).href;
 
 			await self.registration.showNotification(title, {
 				body,
 				badge: "/icons/icon.svg",
 				icon: "/icons/icon.svg",
-				tag: approval?.id ?? pairing?.code ?? "sickrat-request",
-				data: { approvalId: approval?.id ?? null, pairingCode: pairing?.code ?? null, url },
+				tag,
+				data: { url },
 			});
 
-			if (approval || pairing) {
+			if (notification) {
 				await navigateVisibleClients(url);
 			}
 		})(),

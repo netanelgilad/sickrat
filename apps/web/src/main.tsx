@@ -67,6 +67,18 @@ type PairingCodeDetails = {
 	expired: boolean;
 };
 
+type PendingNotification =
+	| {
+			type: "approval.requested";
+			approval: ApprovalRequest;
+			url: string;
+	  }
+	| {
+			type: "pairing.requested";
+			pairing: PairingCodeDetails;
+			url: string;
+	  };
+
 type Device = {
 	id: string;
 	label: string;
@@ -136,14 +148,14 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return response.json();
 	},
-	async getLatestApproval(endpoint: string) {
-		const response = await fetch("/api/approvals/latest", {
+	async getLatestNotification(endpoint: string) {
+		const response = await fetch("/api/notifications/latest", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ endpoint }),
 		});
 		if (!response.ok) throw new Error(await response.text());
-		return ((await response.json()) as { approval: ApprovalRequest | null }).approval;
+		return ((await response.json()) as { notification: PendingNotification | null }).notification;
 	},
 	async listApprovals(status?: ApprovalRequest["status"] | "all") {
 		const params = new URLSearchParams();
@@ -913,13 +925,17 @@ function AppShell({
 		}
 	}
 
+	function routeNotification(notification: Pick<PendingNotification, "url">) {
+		const target = new URL(notification.url, window.location.origin);
+		if (target.origin === window.location.origin) navigate(`${target.pathname}${target.search}${target.hash}`);
+	}
+
 	useEffect(() => {
 		if (!("serviceWorker" in navigator)) return;
 		const handleMessage = (event: MessageEvent) => {
 			const data = event.data as { type?: string; url?: string };
 			if (data.type === "SICKRAT_NAVIGATE" && data.url) {
-				const target = new URL(data.url, window.location.origin);
-				if (target.origin === window.location.origin) navigate(`${target.pathname}${target.search}${target.hash}`);
+				routeNotification({ url: data.url });
 			}
 		};
 		navigator.serviceWorker.addEventListener("message", handleMessage);
@@ -1078,14 +1094,12 @@ function AppShell({
 		if (requestId || !subscription?.endpoint) return;
 
 		let checking = false;
-		const routeToPendingApproval = async () => {
+		const routeToPendingNotification = async () => {
 			if (checking || document.visibilityState !== "visible") return;
 			checking = true;
 			try {
-				const latest = await api.getLatestApproval(subscription.endpoint);
-				if (latest?.status === "pending") {
-					navigate(`/approve/${encodeURIComponent(latest.id)}`);
-				}
+				const latest = await api.getLatestNotification(subscription.endpoint);
+				if (latest) routeNotification(latest);
 			} catch {
 				// This is only a notification-click fallback; the push setup status should stay stable.
 			} finally {
@@ -1094,7 +1108,7 @@ function AppShell({
 		};
 
 		const handleVisibility = () => {
-			void routeToPendingApproval();
+			void routeToPendingNotification();
 		};
 		window.addEventListener("focus", handleVisibility);
 		document.addEventListener("visibilitychange", handleVisibility);
@@ -1121,7 +1135,7 @@ function AppShell({
 			socket = new WebSocket(url);
 
 			socket.addEventListener("open", () => {
-				setStatus("Realtime approval channel connected.");
+				setStatus("Realtime notification channel connected.");
 				heartbeatTimer = window.setInterval(() => {
 					if (socket?.readyState === WebSocket.OPEN) socket.send("ping");
 				}, 25_000);
@@ -1130,11 +1144,8 @@ function AppShell({
 			socket.addEventListener("message", (event) => {
 				if (typeof event.data !== "string" || event.data === "pong") return;
 				try {
-					const message = JSON.parse(event.data) as { type?: string; approval?: ApprovalRequest; url?: string };
-					if (message.type === "approval.requested" && message.approval?.id) {
-						const target = new URL(message.url ?? `/approve/${encodeURIComponent(message.approval.id)}`, window.location.origin);
-						navigate(`${target.pathname}${target.search}${target.hash}`);
-					}
+					const message = JSON.parse(event.data) as { type?: string; url?: string };
+					if ((message.type === "approval.requested" || message.type === "pairing.requested") && message.url) routeNotification({ url: message.url });
 				} catch {
 					// Ignore non-JSON realtime messages.
 				}

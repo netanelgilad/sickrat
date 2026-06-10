@@ -640,7 +640,7 @@ function InstallPrompt() {
 				<span>
 					{iosSafari
 						? "Tap Share, then Add to Home Screen. Open Sickrat from the new icon to enable phone approvals."
-						: "iOS installs web apps from Safari. Open app.sickrat.dev in Safari, then use Share -> Add to Home Screen."}
+						: "iOS installs web apps from Safari. Open this vault URL in Safari, then use Share -> Add to Home Screen."}
 				</span>
 			</div>
 		);

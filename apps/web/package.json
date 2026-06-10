@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "deploy": "vite build && wrangler deploy",
     "dev": "vite dev",
     "preview": "vite preview",
     "start": "vite dev",

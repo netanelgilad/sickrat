@@ -21,20 +21,7 @@
 	"observability": {
 		"enabled": true
 	},
-	"routes": [
-		{
-			"pattern": "app.sickrat.dev",
-			"custom_domain": true
-		}
-	],
 	"upload_source_maps": true,
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "sickrat-dev",
-			"database_id": "40f1a71d-7c88-41e7-bdcc-4a4abe0d514f"
-		}
-	],
 	"durable_objects": {
 		"bindings": [
 			{

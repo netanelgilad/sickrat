@@ -8,14 +8,12 @@
     "packages/protocol"
   ],
   "scripts": {
-    "cf:oauth-client": "node scripts/create-cloudflare-oauth-client.mjs",
     "cli": "bun run apps/cli/src/index.ts",
     "cli:node": "node --experimental-strip-types apps/cli/src/index.ts",
     "site": "npm --workspace apps/site run dev",
     "site:build": "npm --workspace apps/site run build",
     "site:deploy": "npm --workspace apps/site run deploy",
     "web": "npm --workspace apps/web run dev",
-    "web:build": "npm --workspace apps/web run build",
-    "web:deploy": "npm --workspace apps/web run deploy"
+    "web:build": "npm --workspace apps/web run build"
   }
 }

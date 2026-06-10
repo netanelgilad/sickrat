@@ -10,7 +10,7 @@ The active code in this repo currently includes:
 
 - `apps/cli`: a Bun/TypeScript CLI named `sickrat`
 - `apps/site`: an Astro public product site deployed to `sickrat.dev`
-- `apps/web`: a React/Vite PWA console and Cloudflare Worker deployed to `app.sickrat.dev`
+- `apps/web`: a React/Vite PWA console and Cloudflare Worker artifact deployed into each user's Cloudflare account by the CLI
 - `packages/protocol`: shared TypeScript protocol helpers and envelope definitions
 - `docs`: architecture, CLI, provisioning, protocol, and threat-model notes
 
@@ -34,7 +34,7 @@ See [docs/architecture.md](docs/architecture.md) and [docs/threat-model.md](docs
 apps/
   cli/             Bun/TypeScript CLI
   site/            Astro public product site for sickrat.dev
-  web/             React PWA console and Cloudflare Worker entrypoints for app.sickrat.dev
+  web/             React PWA console and Cloudflare Worker artifact for user-owned vaults
 packages/
   protocol/        Shared request/response and crypto envelope helpers
 docs/
@@ -45,8 +45,6 @@ docs/
   cloudflare-provisioning.md
   protocol.md
   threat-model.md
-scripts/
-  create-cloudflare-oauth-client.mjs
 ```
 
 ## Requirements
@@ -100,11 +98,10 @@ Build the PWA/Worker bundle:
 npm run web:build
 ```
 
-Deploy the public site and app console:
+Deploy the public site:
 
 ```sh
 npm run site:deploy
-npm run web:deploy
 ```
 
 Build the CLI for the current machine:
@@ -131,28 +128,6 @@ Use `reveal` only for explicit manual/debug flows because it prints the approved
 If the requested reference does not exist yet, the approval screen can collect the value, save it into the vault, and approve the original request in one flow.
 
 Planned commands include vault listing and safer delivery modes beyond environment variables. See [docs/cli.md](docs/cli.md).
-
-## Cloudflare OAuth Client Bootstrap
-
-Cloudflare OAuth clients are account resources. Create the `Sickrat` OAuth client in the Cloudflare account that owns the deployed Worker:
-
-1. Create a Cloudflare API token with `OAuth Client Write` for the account.
-2. Run:
-
-```sh
-CLOUDFLARE_ACCOUNT_ID=<account-id> \
-CLOUDFLARE_API_TOKEN=<token> \
-npm run cf:oauth-client
-```
-
-3. Set the returned client id on the Worker:
-
-```sh
-printf '%s' '<returned-client-id>' | npx wrangler secret put CF_OAUTH_CLIENT_ID
-npm run web:deploy
-```
-
-The generated OAuth client is configured for Authorization Code with PKCE, `token_endpoint_auth_method: none`, redirect URI `https://app.sickrat.dev/cf/callback`, and the Cloudflare scopes needed by vault provisioning.
 
 ## Install The CLI
 

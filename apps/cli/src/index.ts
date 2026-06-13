@@ -62,6 +62,8 @@ type CloudflareWorkersSubdomain = {
 type CloudflareWorkerScriptSummary = {
 	id: string;
 	migration_tag?: string;
+	created_on?: string;
+	modified_on?: string;
 };
 
 type AssetManifest = Record<string, { hash: string; size: number }>;
@@ -136,7 +138,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.12";
+const cliVersion = "0.1.13";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -1309,17 +1311,57 @@ async function createVault(args: string[]) {
 	console.error(`  sickrat pair ${workerUrl}`);
 }
 
-function selectConfiguredVault(config: Config, name?: string | null) {
+async function discoverConfiguredVaults(accessToken: string) {
+	const accounts = await readCloudflareApi<CloudflareAccount[]>("/accounts?per_page=50", accessToken);
+	const discovered: ConfiguredVault[] = [];
+	for (const account of accounts) {
+		const [scripts, databases, subdomain] = await Promise.all([
+			readCloudflareApi<CloudflareWorkerScriptSummary[]>(`/accounts/${account.id}/workers/scripts`, accessToken).catch(() => []),
+			readCloudflareApi<CloudflareD1Database[]>(`/accounts/${account.id}/d1/database?per_page=100`, accessToken).catch(() => []),
+			readWorkersSubdomain(account.id, accessToken),
+		]);
+		for (const script of scripts.filter((candidate) => candidate.id.startsWith("sickrat-"))) {
+			const slug = script.id.replace(/^sickrat-/, "");
+			if (!slug) continue;
+			const d1Name = `sickrat-${slug}-vault`;
+			const database = databases.find((candidate) => candidate.name === d1Name);
+			if (!database) continue;
+			const workerUrl = subdomain ? `https://${script.id}.${subdomain}.workers.dev` : `https://${script.id}.workers.dev`;
+			discovered.push({
+				name: slug,
+				slug,
+				accountId: account.id,
+				accountName: account.name,
+				scriptName: script.id,
+				d1Name,
+				d1Id: database.uuid,
+				workerUrl,
+				createdAt: script.created_on ?? database.created_at ?? new Date().toISOString(),
+			});
+		}
+	}
+	return discovered.sort((left, right) => left.scriptName.localeCompare(right.scriptName));
+}
+
+async function selectConfiguredVault(config: Config, accessToken: string, name?: string | null) {
 	const vaults = config.vaults ?? [];
-	if (vaults.length === 0) throw new Error("No local vault config found. Run sickrat vault create first.");
 	if (name) {
 		const normalized = normalizeVaultName(name);
 		const selected = vaults.find((vault) => vault.slug === normalized.slug || vault.name === name || vault.scriptName === name);
-		if (!selected) throw new Error(`Vault not found in local config: ${name}`);
-		return selected;
+		if (selected) return selected;
+		const discovered = await discoverConfiguredVaults(accessToken);
+		const discoveredSelected = discovered.find((vault) => vault.slug === normalized.slug || vault.name === name || vault.scriptName === name);
+		if (discoveredSelected) return discoveredSelected;
+		throw new Error(`Vault not found: ${name}`);
 	}
-	const selected = config.workerUrl ? vaults.find((vault) => vault.workerUrl === config.workerUrl) : null;
-	return selected ?? vaults.at(-1) ?? vaults[0];
+	if (vaults.length > 0) {
+		const selected = config.workerUrl ? vaults.find((vault) => vault.workerUrl === config.workerUrl) : null;
+		return selected ?? vaults.at(-1) ?? vaults[0];
+	}
+	const discovered = await discoverConfiguredVaults(accessToken);
+	if (discovered.length === 0) throw new Error("No Sickrat vaults found. Run sickrat vault create first.");
+	if (discovered.length === 1) return discovered[0];
+	throw new Error(`Multiple Sickrat vaults found. Re-run with a vault name: ${discovered.map((vault) => vault.name).join(", ")}`);
 }
 
 function compareSemver(a: string, b: string) {
@@ -1339,7 +1381,7 @@ function releaseVersion(release: GitHubRelease) {
 async function vaultStatus(args: string[]) {
 	const { config, cloudflare } = await ensureCloudflareConfig();
 	const vaultName = args.find((arg, index) => index > 1 && !arg.startsWith("-") && args[index - 1] !== "--account-id");
-	const vault = selectConfiguredVault(config, vaultName);
+	const vault = await selectConfiguredVault(config, cloudflare.accessToken, vaultName);
 	const manifest = await readRemoteManifest(vault, cloudflare.accessToken).catch((error) => {
 		console.error(`Remote manifest unavailable: ${error instanceof Error ? error.message : String(error)}`);
 		return null;
@@ -1433,7 +1475,7 @@ async function vaultUpdate(args: string[]) {
 	const yes = args.includes("--yes") || dryRun;
 	const forceUnlock = args.includes("--force-unlock");
 	const vaultName = args.find((arg, index) => index > 1 && !arg.startsWith("-") && !["--account-id"].includes(args[index - 1]));
-	const vault = selectConfiguredVault(config, vaultName);
+	const vault = await selectConfiguredVault(config, cloudflare.accessToken, vaultName);
 	const release = await fetchLatestRelease();
 	const targetVersion = releaseVersion(release);
 	const existingManifest = await readRemoteManifest(vault, cloudflare.accessToken).catch(() => null);

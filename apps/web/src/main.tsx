@@ -79,6 +79,12 @@ type PendingNotification =
 			url: string;
 	  };
 
+type NotificationToast = {
+	url: string;
+	title: string;
+	body: string;
+};
+
 type Device = {
 	id: string;
 	label: string;
@@ -880,6 +886,7 @@ function AppShell({
 	const [cloudflareStatus, setCloudflareStatus] = useState(
 		cloudflareToken ? "Cloudflare session found in this browser." : "Cloudflare login is not connected.",
 	);
+	const [notificationToast, setNotificationToast] = useState<NotificationToast | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -930,12 +937,52 @@ function AppShell({
 		if (target.origin === window.location.origin) navigate(`${target.pathname}${target.search}${target.hash}`);
 	}
 
+	function showNotificationToast(notification: NotificationToast) {
+		setNotificationToast(notification);
+		window.setTimeout(() => {
+			setNotificationToast((current) => (current?.url === notification.url ? null : current));
+		}, 10_000);
+	}
+
+	function describePendingNotification(notification: PendingNotification): NotificationToast {
+		if (notification.type === "approval.requested") {
+			return {
+				url: notification.url,
+				title: "Secret access requested",
+				body: `${notification.approval.device} wants ${notification.approval.secretRefs.length} secrets`,
+			};
+		}
+		return {
+			url: notification.url,
+			title: "Pairing requested",
+			body: `${notification.pairing.label} wants to pair with this vault`,
+		};
+	}
+
+	function describeRealtimeNotification(message: PendingNotification | { type?: string; url?: string }): NotificationToast | null {
+		if (!message.url) return null;
+		if (message.type === "approval.requested" && "approval" in message) return describePendingNotification(message);
+		if (message.type === "pairing.requested" && "pairing" in message) return describePendingNotification(message);
+		return {
+			url: message.url,
+			title: "Sickrat request",
+			body: "Open Sickrat to review the latest request.",
+		};
+	}
+
+
 	useEffect(() => {
 		if (!("serviceWorker" in navigator)) return;
 		const handleMessage = (event: MessageEvent) => {
-			const data = event.data as { type?: string; url?: string };
+			const data = event.data as { type?: string; url?: string; title?: string; body?: string };
 			if (data.type === "SICKRAT_NAVIGATE" && data.url) {
 				routeNotification({ url: data.url });
+			} else if (data.type === "SICKRAT_NOTIFICATION" && data.url) {
+				showNotificationToast({
+					url: data.url,
+					title: data.title ?? "Sickrat request",
+					body: data.body ?? "Open Sickrat to review the latest request.",
+				});
 			}
 		};
 		navigator.serviceWorker.addEventListener("message", handleMessage);
@@ -1101,7 +1148,7 @@ function AppShell({
 			checking = true;
 			try {
 				const latest = await api.getLatestNotification(subscription.endpoint);
-				if (latest) routeNotification(latest);
+				if (latest) showNotificationToast(describePendingNotification(latest));
 			} catch {
 				// This is only a notification-click fallback; the push setup status should stay stable.
 			} finally {
@@ -1146,8 +1193,9 @@ function AppShell({
 			socket.addEventListener("message", (event) => {
 				if (typeof event.data !== "string" || event.data === "pong") return;
 				try {
-					const message = JSON.parse(event.data) as { type?: string; url?: string };
-					if ((message.type === "approval.requested" || message.type === "pairing.requested") && message.url) routeNotification({ url: message.url });
+					const message = JSON.parse(event.data) as PendingNotification | { type?: string; url?: string };
+					const toast = describeRealtimeNotification(message);
+					if (toast) showNotificationToast(toast);
 				} catch {
 					// Ignore non-JSON realtime messages.
 				}
@@ -2267,8 +2315,42 @@ function AppShell({
 								<strong>{currentPageTitle}</strong>
 							</div>
 						</header>
+						{notificationToast ? (
+							<div className="notification-toast" role="status">
+								<div>
+									<strong>{notificationToast.title}</strong>
+									<span>{notificationToast.body}</span>
+								</div>
+								<div className="notification-actions">
+									<button
+										className="secondary"
+										type="button"
+										onClick={() => setNotificationToast(null)}
+									>
+										Later
+									</button>
+									<button
+										type="button"
+										onClick={() => {
+											const next = notificationToast;
+											setNotificationToast(null);
+											routeNotification(next);
+										}}
+									>
+										Open
+									</button>
+								</div>
+							</div>
+						) : null}
 						{routeContent}
 					</section>
+					<nav className="bottom-nav" aria-label="Primary console navigation">
+						<NavLink end to="/"><span aria-hidden="true">DB</span>Dashboard</NavLink>
+						<NavLink end to="/secrets"><span aria-hidden="true">SK</span>Secrets</NavLink>
+						<NavLink end to="/approvals"><span aria-hidden="true">GR</span>Grants</NavLink>
+						<NavLink end to="/devices"><span aria-hidden="true">MC</span>Machines</NavLink>
+						<NavLink end to="/settings"><span aria-hidden="true">ST</span>Settings</NavLink>
+					</nav>
 				</div>
 			</main>
 		);

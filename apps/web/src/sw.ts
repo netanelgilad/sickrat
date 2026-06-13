@@ -28,18 +28,16 @@ type PendingNotification =
 			url: string;
 	  };
 
-async function navigateVisibleClients(url: string) {
+async function notifyVisibleClients(payload: { url: string; title: string; body: string }) {
 	const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+	let delivered = false;
 	for (const client of clients) {
 		if (new URL(client.url).origin !== self.location.origin) continue;
 		if (client.visibilityState !== "visible" && !client.focused) continue;
-		client.postMessage({ type: "SICKRAT_NAVIGATE", url });
-		try {
-			if ("navigate" in client) await client.navigate(url);
-		} catch {
-			// iOS may reject navigation from a foreground notification path; postMessage is the fallback.
-		}
+		client.postMessage({ type: "SICKRAT_NOTIFICATION", ...payload });
+		delivered = true;
 	}
+	return delivered;
 }
 
 precacheAndRoute(self.__WB_MANIFEST);
@@ -87,6 +85,10 @@ self.addEventListener("push", (event) => {
 			}
 			const url = new URL(notification?.url ?? "/", self.location.origin).href;
 
+			if (notification && (await notifyVisibleClients({ url, title, body }))) {
+				return;
+			}
+
 			await self.registration.showNotification(title, {
 				body,
 				badge: "/icons/icon.svg",
@@ -94,10 +96,6 @@ self.addEventListener("push", (event) => {
 				tag,
 				data: { url },
 			});
-
-			if (notification) {
-				await navigateVisibleClients(url);
-			}
 		})(),
 	);
 });

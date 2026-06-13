@@ -7,8 +7,12 @@ The CLI should feel familiar to users of tools like the 1Password CLI while addi
 ```sh
 sickrat login
 sickrat vault create [name]
+sickrat vault status [name]
+sickrat vault update [name] [--dry-run] [--yes] [--force-unlock]
 sickrat vault list
 sickrat vault use <vault>
+sickrat self update [--yes]
+sickrat update [--yes]
 
 sickrat pair <worker-url>
 sickrat run [--env KEY=ref] [--env-file <file>] [--message <why>] -- <command> [args...]
@@ -68,6 +72,18 @@ Use narrow, command-specific env files for least-privilege approvals. `sickrat r
 ## `reveal`
 
 `sickrat reveal <ref>` is explicit manual/debug mode. It uses the same phone approval flow, then prints the approved value to stdout. Agents should avoid it unless the user explicitly asks to inspect a non-production value.
+
+## Updates
+
+User-owned vaults cannot be updated centrally from `sickrat.dev`. The CLI owns the update flow:
+
+```sh
+sickrat vault status
+sickrat vault update --dry-run
+sickrat vault update --yes
+```
+
+`sickrat vault update` downloads the verified release Worker/PWA artifact, deploys it to the user's Cloudflare account, and writes a remote deployment manifest in D1. `sickrat update` is the combined happy path: update the CLI when needed, then update the selected/default vault.
 
 ## `inject`
 

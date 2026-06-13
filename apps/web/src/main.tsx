@@ -17,10 +17,16 @@ type Capabilities = {
 	vault: {
 		name: string;
 		deployedBy: string;
+		version: string;
 	};
 	ios: {
 		requiresHomeScreenInstall: boolean;
 	};
+};
+
+type LatestReleaseMetadata = {
+	version: string;
+	notesUrl?: string;
 };
 
 type PushRecord = {
@@ -565,6 +571,23 @@ function isIosSafari() {
 	return isIosDevice() && /safari/.test(userAgent) && !/crios|fxios|edgios/.test(userAgent);
 }
 
+function compareVersions(left: string, right: string) {
+	const a = left.replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+	const b = right.replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+	for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+		const delta = (a[index] ?? 0) - (b[index] ?? 0);
+		if (delta !== 0) return delta;
+	}
+	return 0;
+}
+
+function arrayBuffersEqual(left: ArrayBuffer | null, right: Uint8Array) {
+	if (!left) return false;
+	const leftBytes = new Uint8Array(left);
+	if (leftBytes.length !== right.length) return false;
+	return leftBytes.every((byte, index) => byte === right[index]);
+}
+
 function useStandaloneMode() {
 	const [standalone, setStandalone] = useState(isStandalone);
 
@@ -887,6 +910,7 @@ function AppShell({
 		cloudflareToken ? "Cloudflare session found in this browser." : "Cloudflare login is not connected.",
 	);
 	const [notificationToast, setNotificationToast] = useState<NotificationToast | null>(null);
+	const [latestRelease, setLatestRelease] = useState<LatestReleaseMetadata | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -895,6 +919,12 @@ function AppShell({
 	const pushState = subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline";
 	const cloudflareState = capabilities?.vault.deployedBy === "sickrat-cli" ? "CLI provisioned" : cloudflareToken ? "Connected" : "Standalone";
 	const vaultName = capabilities?.vault.name ?? "default";
+	const updateAvailable = Boolean(
+		capabilities?.vault.version &&
+			capabilities.vault.version !== "unknown" &&
+			latestRelease?.version &&
+			compareVersions(capabilities.vault.version, latestRelease.version) < 0,
+	);
 	const activeDevices = devices.filter((device) => !device.revokedAt);
 	const pendingApprovals = approvals.filter((item) => item.status === "pending");
 	const filteredSecrets = secrets.filter((secret) => {
@@ -997,6 +1027,17 @@ function AppShell({
 				setStatus(next.push.configured ? "Push backend is configured." : "Add VAPID keys to enable remote push.");
 			})
 			.catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Failed to load capabilities."));
+	}, []);
+
+	useEffect(() => {
+		fetch("https://sickrat.dev/releases/latest.json", { cache: "no-store" })
+			.then(async (response) => {
+				if (!response.ok) return null;
+				const metadata = (await response.json()) as Partial<LatestReleaseMetadata>;
+				return typeof metadata.version === "string" ? { version: metadata.version, notesUrl: metadata.notesUrl } : null;
+			})
+			.then((metadata) => setLatestRelease(metadata))
+			.catch(() => undefined);
 	}, []);
 
 	useEffect(() => {
@@ -1249,12 +1290,17 @@ function AppShell({
 			}
 
 			const registration = await navigator.serviceWorker.ready;
+			const applicationServerKey = base64UrlToUint8Array(capabilities.push.vapidPublicKey);
 			const existing = await registration.pushManager.getSubscription();
+			if (existing && !arrayBuffersEqual(existing.options.applicationServerKey, applicationServerKey)) {
+				await existing.unsubscribe();
+			}
+			const current = await registration.pushManager.getSubscription();
 			const nextSubscription =
-				existing ??
+				current ??
 				(await registration.pushManager.subscribe({
 					userVisibleOnly: true,
-					applicationServerKey: base64UrlToUint8Array(capabilities.push.vapidPublicKey),
+					applicationServerKey,
 				}));
 
 			const saved = await api.saveSubscription(nextSubscription.toJSON());
@@ -2315,6 +2361,17 @@ function AppShell({
 								<strong>{currentPageTitle}</strong>
 							</div>
 						</header>
+						{updateAvailable ? (
+							<div className="vault-update-banner" role="status">
+								<div>
+									<strong>Vault update available</strong>
+									<span>
+										This vault is running {capabilities?.vault.version}. Latest is {latestRelease?.version}.
+									</span>
+								</div>
+								<code>sickrat vault update {vaultName}</code>
+							</div>
+						) : null}
 						{notificationToast ? (
 							<div className="notification-toast" role="status">
 								<div>

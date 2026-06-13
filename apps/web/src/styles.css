@@ -970,6 +970,49 @@ article h3,
 	z-index: 26;
 }
 
+.vault-update-banner {
+	align-items: center;
+	background: rgba(69, 255, 138, 0.08);
+	border: 1px solid rgba(69, 255, 138, 0.34);
+	border-radius: 14px;
+	display: grid;
+	gap: 12px;
+	grid-template-columns: minmax(0, 1fr) auto;
+	margin-bottom: 14px;
+	padding: 12px;
+}
+
+.vault-update-banner strong,
+.vault-update-banner span {
+	display: block;
+}
+
+.vault-update-banner strong {
+	color: var(--accent);
+	font-family: var(--mono);
+	font-size: 13px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.vault-update-banner span {
+	color: var(--muted);
+	font-size: 14px;
+	margin-top: 3px;
+}
+
+.vault-update-banner code {
+	background: rgba(0, 0, 0, 0.3);
+	border: 1px solid rgba(211, 229, 211, 0.16);
+	border-radius: 10px;
+	color: var(--ink);
+	font-family: var(--mono);
+	font-size: 12px;
+	font-weight: 900;
+	padding: 10px;
+	white-space: nowrap;
+}
+
 .notification-toast strong,
 .notification-toast span {
 	display: block;
@@ -2129,6 +2172,17 @@ button.deny {
 		position: sticky;
 		top: calc(64px + var(--safe-top));
 		z-index: 29;
+	}
+
+	.vault-update-banner {
+		border-radius: 18px;
+		grid-template-columns: 1fr;
+		margin: 10px 0 12px;
+	}
+
+	.vault-update-banner code {
+		overflow-x: auto;
+		white-space: nowrap;
 	}
 
 	.notification-actions {

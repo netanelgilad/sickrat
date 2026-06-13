@@ -25,7 +25,7 @@ Recommended commands:
 sickrat update
 sickrat self update
 sickrat vault status [name]
-sickrat vault update [name] [--dry-run] [--yes] [--resume] [--force-unlock]
+sickrat vault update [name] [--dry-run] [--yes] [--force-unlock]
 ```
 
 `sickrat update` is the happy path. It updates the CLI first, then updates the selected/default vault.
@@ -345,7 +345,7 @@ The release metadata should include:
 2. Add `sickrat vault status`.
 3. Add release metadata consumption and artifact verification plumbing.
 4. Add `sickrat vault update --dry-run`.
-5. Add lock acquisition, resume, and status reporting.
+5. Add lock acquisition, force-unlock, and status reporting.
 6. Add the migration runner with a no-op migration for the current version.
 7. Add real Worker/PWA redeploy as the first update operation.
 8. Add D1 migration support.

@@ -55,6 +55,8 @@ Do not create or use a shared Sickrat service account. Use the vault URL printed
 
 After vault creation, tell the user to open that vault URL on their phone and add it to the Home Screen. If the CLI prints a `Vault QR` image path, show that image to the user so they can scan it from their phone. The first launch of the installed PWA asks the user to enable push notifications. Wait for the user to confirm that the PWA is installed and push is enabled before running `sickrat pair`.
 
+If the vault PWA says an update is available, run `sickrat vault update --dry-run`, show the plan to the user, then run `sickrat vault update --yes` if they approve. User-owned vaults are updated through the CLI because Sickrat cannot centrally push changes into the user's Cloudflare account.
+
 ## Pair This Machine
 
 If the machine is not paired yet:

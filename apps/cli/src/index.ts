@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
@@ -37,6 +37,8 @@ type Config = {
 		d1Id: string;
 		workerUrl: string;
 		createdAt: string;
+		vapidPublicKey?: string;
+		vapidPrivateKey?: string;
 	}>;
 };
 
@@ -76,6 +78,57 @@ type AssetUploadSession = {
 	buckets: string[][];
 };
 
+type ConfiguredVault = NonNullable<Config["vaults"]>[number];
+
+type VaultManifest = {
+	manifestVersion: 1;
+	vaultName: string;
+	slug: string;
+	sickratVersion: string;
+	artifactVersion: string;
+	schemaVersion: number;
+	workerScriptName: string;
+	workerUrl: string;
+	resources: {
+		d1: {
+			databaseName: string;
+			databaseId: string;
+		};
+		worker: {
+			scriptName: string;
+			workersDevUrl: string;
+		};
+		durableObjects: Array<{
+			binding: string;
+			className: string;
+		}>;
+		vars: string[];
+		secrets: string[];
+	};
+	migrationsApplied: string[];
+	lastUpdate: {
+		startedAt: string;
+		finishedAt: string;
+		fromVersion: string;
+		toVersion: string;
+	} | null;
+};
+
+type GitHubRelease = {
+	tag_name: string;
+	html_url: string;
+	assets: Array<{
+		name: string;
+		browser_download_url: string;
+	}>;
+};
+
+type D1QueryResult<T> = {
+	results?: T[];
+	success?: boolean;
+	meta?: unknown;
+};
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const configPath = join(homedir(), ".sickrat", "config.json");
@@ -83,7 +136,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.11";
+const cliVersion = "0.1.12";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -150,14 +203,15 @@ async function resolveWebArtifact(): Promise<WebArtifact> {
 		};
 	}
 
-	return await downloadReleaseWebArtifact();
+	return await downloadReleaseWebArtifact(cliVersion);
 }
 
-async function downloadReleaseWebArtifact(): Promise<WebArtifact> {
-	const cacheRoot = join(homedir(), ".sickrat", "artifacts", `web-v${cliVersion}`);
+async function downloadReleaseWebArtifact(version: string, force = false): Promise<WebArtifact> {
+	const normalizedVersion = version.startsWith("v") ? version.slice(1) : version;
+	const cacheRoot = join(homedir(), ".sickrat", "artifacts", `web-v${normalizedVersion}`);
 	const workerDir = join(cacheRoot, "sickrat");
 	const clientDir = join(cacheRoot, "client");
-	if (existsSync(join(workerDir, "index.js")) && existsSync(join(clientDir, "index.html"))) {
+	if (!force && existsSync(join(workerDir, "index.js")) && existsSync(join(clientDir, "index.html"))) {
 		return { workerDir, clientDir };
 	}
 
@@ -165,15 +219,12 @@ async function downloadReleaseWebArtifact(): Promise<WebArtifact> {
 	await mkdir(cacheRoot, { recursive: true, mode: 0o700 });
 	const tempDir = await mkdtemp(join(tmpdir(), "sickrat-web-"));
 	const archivePath = join(tempDir, "sickrat-web-dist.tar.gz");
-	const url = `${releaseBaseUrl}/v${cliVersion}/sickrat-web-dist.tar.gz`;
+	const tag = version.startsWith("v") ? version : `v${version}`;
+	const url = `${releaseBaseUrl}/${tag}/sickrat-web-dist.tar.gz`;
 
 	try {
-		console.error(`Downloading Sickrat web artifact v${cliVersion}...`);
-		const response = await fetch(url);
-		if (!response.ok) {
-			throw new Error(`Release artifact download failed with HTTP ${response.status}.`);
-		}
-		await writeFile(archivePath, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 });
+		console.error(`Downloading Sickrat web artifact ${tag}...`);
+		await downloadVerifiedReleaseAsset(tag, "sickrat-web-dist.tar.gz", archivePath);
 		await runCommand("tar", ["-xzf", archivePath, "-C", cacheRoot]);
 		if (!existsSync(join(workerDir, "index.js")) || !existsSync(join(clientDir, "index.html"))) {
 			throw new Error("Downloaded web artifact is missing expected client/ or sickrat/ output.");
@@ -184,6 +235,57 @@ async function downloadReleaseWebArtifact(): Promise<WebArtifact> {
 		throw new Error(
 			`${error instanceof Error ? error.message : String(error)} Set SICKRAT_WEB_DIST to a local web artifact directory if you are using an unreleased CLI build.`,
 		);
+	} finally {
+		await rm(tempDir, { recursive: true, force: true });
+	}
+}
+
+async function fetchLatestRelease() {
+	const response = await fetch("https://api.github.com/repos/netanelgilad/sickrat/releases/latest", {
+		headers: {
+			accept: "application/vnd.github+json",
+			"user-agent": `sickrat-cli/${cliVersion}`,
+		},
+	});
+	if (!response.ok) throw new Error(`GitHub latest release lookup failed with HTTP ${response.status}.`);
+	return (await response.json()) as GitHubRelease;
+}
+
+async function downloadUrlToFile(url: string, destination: string) {
+	const response = await fetch(url, {
+		headers: { "user-agent": `sickrat-cli/${cliVersion}` },
+	});
+	if (!response.ok) throw new Error(`Download failed with HTTP ${response.status}: ${url}`);
+	await writeFile(destination, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 });
+}
+
+async function sha256HexFile(path: string) {
+	const bytes = await readFile(path);
+	return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function downloadVerifiedReleaseAsset(tag: string, assetName: string, destination: string) {
+	const base = `${releaseBaseUrl}/${tag}`;
+	const tempDir = await mkdtemp(join(tmpdir(), "sickrat-download-"));
+	const sumsPath = join(tempDir, "SHA256SUMS");
+	try {
+		await downloadUrlToFile(`${base}/SHA256SUMS`, sumsPath);
+		const sums = await readFile(sumsPath, "utf8");
+		const expected = sums
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.map((line) => line.match(/^([a-fA-F0-9]{64})\s+\*?(.+)$/))
+			.find((match) => match?.[2] === assetName)?.[1]
+			?.toLowerCase();
+		if (!expected) throw new Error(`SHA256SUMS does not contain ${assetName}.`);
+		await downloadUrlToFile(`${base}/${assetName}`, destination);
+		const actual = await sha256HexFile(destination);
+		if (actual !== expected) {
+			await rm(destination, { force: true });
+			throw new Error(`Checksum mismatch for ${assetName}. Expected ${expected}, got ${actual}.`);
+		}
+		return { expected, actual };
 	} finally {
 		await rm(tempDir, { recursive: true, force: true });
 	}
@@ -213,6 +315,10 @@ Version: ${cliVersion}
 Usage:
   sickrat login [--client-id <id>] [--port <port>]
   sickrat vault create [name] [--account-id <id>]
+  sickrat vault status [name]
+  sickrat vault update [name] [--dry-run] [--yes] [--force-unlock]
+  sickrat self update [--yes]
+  sickrat update [--yes]
   sickrat pair <worker-url> [--label <name>]
   sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...>
   sickrat reveal <ref> [--message <why>]
@@ -220,6 +326,8 @@ Usage:
 Examples:
   sickrat login
   sickrat vault create personal
+  sickrat vault status personal
+  sickrat vault update personal --dry-run
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
   sickrat run --env SERVICE_TOKEN=service/api-token -- npm test
   sickrat reveal service/api-token --message "Manual debug reveal"
@@ -242,6 +350,34 @@ Usage:
   sickrat vault create [name] [--account-id <id>]
 
 Creates or updates a user-owned Sickrat vault in the selected Cloudflare account.
+`,
+		"vault status": `sickrat vault status
+
+Usage:
+  sickrat vault status [name]
+
+Shows the local and remote deployment status for a user-owned Sickrat vault.
+`,
+		"vault update": `sickrat vault update
+
+Usage:
+  sickrat vault update [name] [--dry-run] [--yes] [--force-unlock]
+
+Updates a user-owned Sickrat vault Worker/PWA and deployment manifest using verified release artifacts.
+`,
+		"self update": `sickrat self update
+
+Usage:
+  sickrat self update [--yes]
+
+Downloads, verifies, and atomically replaces the local Sickrat CLI binary when a newer release exists.
+`,
+		update: `sickrat update
+
+Usage:
+  sickrat update [--yes]
+
+Updates the local CLI if needed, then updates the selected/default user-owned vault.
 `,
 		pair: `sickrat pair
 
@@ -452,6 +588,24 @@ async function readCloudflareApi<T>(path: string, accessToken: string, init: Req
 	return body.result;
 }
 
+async function queryD1<T>(accountId: string, accessToken: string, databaseId: string, sql: string, params: unknown[] = []) {
+	const result = await readCloudflareApi<D1QueryResult<T>[] | D1QueryResult<T>>(
+		`/accounts/${accountId}/d1/database/${databaseId}/query`,
+		accessToken,
+		{
+			method: "POST",
+			body: JSON.stringify({ sql, params }),
+		},
+	);
+	const first = Array.isArray(result) ? result[0] : result;
+	if (first?.success === false) throw new Error(`D1 query failed: ${sql}`);
+	return first?.results ?? [];
+}
+
+async function execD1(accountId: string, accessToken: string, databaseId: string, sql: string, params: unknown[] = []) {
+	await queryD1(accountId, accessToken, databaseId, sql, params);
+}
+
 async function ensureCloudflareConfig() {
 	const config = await readConfig();
 	if (!config.cloudflare?.accessToken) {
@@ -640,6 +794,159 @@ function getVaultResourceNames(vaultName: string | undefined) {
 		d1Name: `sickrat-${vault.slug}-vault`,
 		scriptName: `sickrat-${vault.slug}`,
 	};
+}
+
+function createVaultManifest(input: {
+	vault: ConfiguredVault;
+	version: string;
+	fromVersion?: string;
+	migrationsApplied?: string[];
+	lastUpdateStartedAt?: string;
+}) {
+	const finishedAt = new Date().toISOString();
+	return {
+		manifestVersion: 1,
+		vaultName: input.vault.name,
+		slug: input.vault.slug,
+		sickratVersion: input.version,
+		artifactVersion: input.version,
+		schemaVersion: 1,
+		workerScriptName: input.vault.scriptName,
+		workerUrl: input.vault.workerUrl,
+		resources: {
+			d1: {
+				databaseName: input.vault.d1Name,
+				databaseId: input.vault.d1Id,
+			},
+			worker: {
+				scriptName: input.vault.scriptName,
+				workersDevUrl: input.vault.workerUrl,
+			},
+			durableObjects: [{ binding: "APPROVAL_HUB", className: "ApprovalHub" }],
+			vars: ["SICKRAT_VERSION", "SICKRAT_VAULT_NAME", "SICKRAT_DEPLOYED_BY", "VAPID_PUBLIC_KEY"],
+			secrets: ["VAPID_PRIVATE_KEY"],
+		},
+		migrationsApplied: input.migrationsApplied ?? ["0001_manifest"],
+		lastUpdate: input.fromVersion
+			? {
+					startedAt: input.lastUpdateStartedAt ?? finishedAt,
+					finishedAt,
+					fromVersion: input.fromVersion,
+					toVersion: input.version,
+				}
+			: null,
+	} satisfies VaultManifest;
+}
+
+async function ensureManifestTables(vault: ConfiguredVault, accessToken: string) {
+	await execD1(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		"CREATE TABLE IF NOT EXISTS sickrat_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)",
+	);
+	await execD1(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		"CREATE TABLE IF NOT EXISTS sickrat_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL, sickrat_version TEXT NOT NULL)",
+	);
+	await execD1(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		"CREATE TABLE IF NOT EXISTS sickrat_update_locks (id TEXT PRIMARY KEY, owner TEXT NOT NULL, started_at TEXT NOT NULL, expires_at TEXT NOT NULL, from_version TEXT NOT NULL, to_version TEXT NOT NULL, last_completed_step TEXT)",
+	);
+}
+
+async function readRemoteManifest(vault: ConfiguredVault, accessToken: string) {
+	await ensureManifestTables(vault, accessToken);
+	const rows = await queryD1<{ value: string }>(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		"SELECT value FROM sickrat_meta WHERE key = ? LIMIT 1",
+		["deployment_manifest"],
+	);
+	if (!rows[0]?.value) return null;
+	return JSON.parse(rows[0].value) as VaultManifest;
+}
+
+async function writeRemoteManifest(vault: ConfiguredVault, accessToken: string, manifest: VaultManifest) {
+	await ensureManifestTables(vault, accessToken);
+	await execD1(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		`INSERT INTO sickrat_meta (key, value, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		["deployment_manifest", JSON.stringify(manifest), new Date().toISOString()],
+	);
+	for (const migration of manifest.migrationsApplied) {
+		await execD1(
+			vault.accountId,
+			accessToken,
+			vault.d1Id,
+			`INSERT INTO sickrat_migrations (id, applied_at, sickrat_version)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(id) DO NOTHING`,
+			[migration, new Date().toISOString(), manifest.sickratVersion],
+		);
+	}
+}
+
+async function acquireUpdateLock(vault: ConfiguredVault, accessToken: string, fromVersion: string, toVersion: string, forceUnlock: boolean) {
+	await ensureManifestTables(vault, accessToken);
+	const now = new Date();
+	const existing = await queryD1<{ id: string; owner: string; expires_at: string; last_completed_step: string | null }>(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		"SELECT id, owner, expires_at, last_completed_step FROM sickrat_update_locks WHERE id = ? LIMIT 1",
+		["vault-update"],
+	);
+	if (existing[0] && Date.parse(existing[0].expires_at) > now.getTime() && !forceUnlock) {
+		throw new Error(
+			`Vault update is already locked by ${existing[0].owner} until ${existing[0].expires_at}. Re-run with --force-unlock only if that update is abandoned.`,
+		);
+	}
+	if (existing[0] && forceUnlock) {
+		await execD1(vault.accountId, accessToken, vault.d1Id, "DELETE FROM sickrat_update_locks WHERE id = ?", ["vault-update"]);
+	}
+	const owner = `${hostname()}:${process.pid}`;
+	const startedAt = now.toISOString();
+	const expiresAt = new Date(now.getTime() + 15 * 60 * 1000).toISOString();
+	await execD1(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		`INSERT INTO sickrat_update_locks (id, owner, started_at, expires_at, from_version, to_version, last_completed_step)
+		 VALUES (?, ?, ?, ?, ?, ?, NULL)
+		 ON CONFLICT(id) DO UPDATE SET
+			owner = excluded.owner,
+			started_at = excluded.started_at,
+			expires_at = excluded.expires_at,
+			from_version = excluded.from_version,
+			to_version = excluded.to_version,
+			last_completed_step = NULL`,
+		["vault-update", owner, startedAt, expiresAt, fromVersion, toVersion],
+	);
+	return { owner, startedAt };
+}
+
+async function markUpdateStep(vault: ConfiguredVault, accessToken: string, step: string) {
+	await execD1(
+		vault.accountId,
+		accessToken,
+		vault.d1Id,
+		"UPDATE sickrat_update_locks SET last_completed_step = ? WHERE id = ?",
+		[step, "vault-update"],
+	);
+}
+
+async function releaseUpdateLock(vault: ConfiguredVault, accessToken: string) {
+	await execD1(vault.accountId, accessToken, vault.d1Id, "DELETE FROM sickrat_update_locks WHERE id = ?", ["vault-update"]);
 }
 
 async function ensureD1Database(accountId: string, accessToken: string, databaseName: string) {
@@ -832,6 +1139,7 @@ async function uploadVaultWorker(input: {
 	scriptName: string;
 	d1Id: string;
 	vaultName: string;
+	sickratVersion: string;
 	vapidPublicKey: string;
 	vapidPrivateKey: string;
 	assetsJwt: string;
@@ -859,6 +1167,7 @@ async function uploadVaultWorker(input: {
 			{ name: "VAPID_PRIVATE_KEY", type: "secret_text", text: input.vapidPrivateKey },
 			{ name: "SICKRAT_VAULT_NAME", type: "plain_text", text: input.vaultName },
 			{ name: "SICKRAT_DEPLOYED_BY", type: "plain_text", text: "sickrat-cli" },
+			{ name: "SICKRAT_VERSION", type: "plain_text", text: input.sickratVersion },
 		],
 		...(migrationTag === "v1"
 			? {}
@@ -901,13 +1210,21 @@ async function deployVaultWorker(input: {
 	scriptName: string;
 	d1Id: string;
 	vaultName: string;
+	version?: string;
+	artifact?: WebArtifact;
+	vapid?: { publicKey: string; privateKey: string };
 }) {
-	const artifact = await resolveWebArtifact();
-	console.error("Building vault PWA and Worker bundle...");
+	const version = input.version ?? cliVersion;
+	const artifact = input.artifact ?? (await resolveWebArtifact());
+	console.error("Preparing vault PWA and Worker bundle...");
 	if (artifact.build) await artifact.build();
 
-	console.error("Generating vault-specific VAPID keys...");
-	const vapid = await generateVapidKeys();
+	const vapid = input.vapid ?? (await generateVapidKeys());
+	if (input.vapid) {
+		console.error("Reusing vault VAPID keys...");
+	} else {
+		console.error("Generated vault-specific VAPID keys.");
+	}
 	console.error("Uploading vault PWA assets...");
 	const assetsJwt = await uploadVaultAssets({
 		accessToken: input.accessToken,
@@ -924,12 +1241,14 @@ async function deployVaultWorker(input: {
 			scriptName: input.scriptName,
 			d1Id: input.d1Id,
 			vaultName: input.vaultName,
+			sickratVersion: version,
 			vapidPublicKey: vapid.publicKey,
 			vapidPrivateKey: vapid.privateKey,
 			assetsJwt,
 			workerDir: artifact.workerDir,
 		});
 		await enableWorkerSubdomain(input.accountId, input.accessToken, input.scriptName);
+		return vapid;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const context = /migration|migrations|unmarshal/i.test(message)
@@ -949,12 +1268,13 @@ async function createVault(args: string[]) {
 	const d1 = await ensureD1Database(account.id, cloudflare.accessToken, vault.d1Name);
 	console.log(`D1\t${d1.created ? "created" : "exists"}\t${d1.database.name}\t${d1.database.uuid}`);
 
-	await deployVaultWorker({
+	const vapid = await deployVaultWorker({
 		accessToken: cloudflare.accessToken,
 		accountId: account.id,
 		scriptName: vault.scriptName,
 		d1Id: d1.database.uuid,
 		vaultName: vault.name,
+		version: cliVersion,
 	});
 
 	const subdomain = await readWorkersSubdomain(account.id, cloudflare.accessToken);
@@ -971,7 +1291,10 @@ async function createVault(args: string[]) {
 		d1Id: d1.database.uuid,
 		workerUrl,
 		createdAt: new Date().toISOString(),
+		vapidPublicKey: vapid.publicKey,
+		vapidPrivateKey: vapid.privateKey,
 	};
+	await writeRemoteManifest(nextVault, cloudflare.accessToken, createVaultManifest({ vault: nextVault, version: cliVersion }));
 	const otherVaults = (config.vaults ?? []).filter((existing) => existing.accountId !== account.id || existing.slug !== vault.slug);
 	await writeConfig({
 		...config,
@@ -984,6 +1307,212 @@ async function createVault(args: string[]) {
 	console.log(`Vault QR\t${qrPath}`);
 	console.error(`Open ${workerUrl} on your phone, add it to the Home Screen, enable push notifications, then run:`);
 	console.error(`  sickrat pair ${workerUrl}`);
+}
+
+function selectConfiguredVault(config: Config, name?: string | null) {
+	const vaults = config.vaults ?? [];
+	if (vaults.length === 0) throw new Error("No local vault config found. Run sickrat vault create first.");
+	if (name) {
+		const normalized = normalizeVaultName(name);
+		const selected = vaults.find((vault) => vault.slug === normalized.slug || vault.name === name || vault.scriptName === name);
+		if (!selected) throw new Error(`Vault not found in local config: ${name}`);
+		return selected;
+	}
+	const selected = config.workerUrl ? vaults.find((vault) => vault.workerUrl === config.workerUrl) : null;
+	return selected ?? vaults.at(-1) ?? vaults[0];
+}
+
+function compareSemver(a: string, b: string) {
+	const left = a.replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+	const right = b.replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
+	for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+		const delta = (left[index] ?? 0) - (right[index] ?? 0);
+		if (delta !== 0) return delta;
+	}
+	return 0;
+}
+
+function releaseVersion(release: GitHubRelease) {
+	return release.tag_name.replace(/^v/, "");
+}
+
+async function vaultStatus(args: string[]) {
+	const { config, cloudflare } = await ensureCloudflareConfig();
+	const vaultName = args.find((arg, index) => index > 1 && !arg.startsWith("-") && args[index - 1] !== "--account-id");
+	const vault = selectConfiguredVault(config, vaultName);
+	const manifest = await readRemoteManifest(vault, cloudflare.accessToken).catch((error) => {
+		console.error(`Remote manifest unavailable: ${error instanceof Error ? error.message : String(error)}`);
+		return null;
+	});
+	const capabilities = await fetch(`${vault.workerUrl}/api/capabilities`).then((response) => response.json()).catch(() => null) as
+		| { vault?: { version?: string; name?: string; deployedBy?: string }; database?: { configured?: boolean }; push?: { configured?: boolean } }
+		| null;
+	const latest = await fetchLatestRelease().catch(() => null);
+	const currentVersion = manifest?.sickratVersion ?? capabilities?.vault?.version ?? "unknown";
+	const latestVersion = latest ? releaseVersion(latest) : "unknown";
+	console.log(`Vault\t${vault.name}`);
+	console.log(`URL\t${vault.workerUrl}`);
+	console.log(`Account\t${vault.accountName}\t${vault.accountId}`);
+	console.log(`Worker\t${vault.scriptName}`);
+	console.log(`D1\t${vault.d1Name}\t${vault.d1Id}`);
+	console.log(`Current\t${currentVersion}`);
+	console.log(`Latest\t${latestVersion}`);
+	console.log(`Manifest\t${manifest ? "present" : "missing"}`);
+	console.log(`Push\t${capabilities?.push?.configured ? "configured" : "unknown"}`);
+	console.log(`Database\t${capabilities?.database?.configured ? "configured" : "unknown"}`);
+	if (latest && currentVersion !== "unknown") {
+		console.log(`Update\t${compareSemver(currentVersion, latestVersion) < 0 ? "available" : "not-needed"}`);
+	}
+}
+
+function platformReleaseAssetName() {
+	const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : process.arch;
+	if (process.platform === "darwin") return `sickrat-darwin-${arch}`;
+	if (process.platform === "linux") return `sickrat-linux-${arch}`;
+	throw new Error(`Sickrat self-update does not support this platform yet: ${process.platform}/${process.arch}`);
+}
+
+async function selfUpdate(args: string[]) {
+	const yes = args.includes("--yes");
+	const release = await fetchLatestRelease();
+	const latestVersion = releaseVersion(release);
+	if (compareSemver(cliVersion, latestVersion) >= 0) {
+		console.log(`Sickrat CLI is current (${cliVersion}).`);
+		return;
+	}
+	const assetName = platformReleaseAssetName();
+	if (!release.assets.some((asset) => asset.name === assetName)) throw new Error(`Release ${release.tag_name} does not include ${assetName}.`);
+	const currentPath = process.execPath;
+	await stat(currentPath).catch(() => {
+		throw new Error(`Cannot stat current executable: ${currentPath}`);
+	});
+	if (!yes && process.stdin.isTTY) {
+		const readline = createInterface({ input: process.stdin, output: process.stderr });
+		try {
+			const answer = await readline.question(`Update Sickrat CLI ${cliVersion} -> ${latestVersion} at ${currentPath}? [y/N] `);
+			if (!/^y(es)?$/i.test(answer.trim())) {
+				console.error("Self-update cancelled.");
+				return;
+			}
+		} finally {
+			readline.close();
+		}
+	}
+	const tempDir = await mkdtemp(join(tmpdir(), "sickrat-self-update-"));
+	const nextPath = join(tempDir, assetName);
+	const backupPath = `${currentPath}.bak-${Date.now()}`;
+	try {
+		console.error(`Downloading ${assetName} from ${release.tag_name}...`);
+		await downloadVerifiedReleaseAsset(release.tag_name, assetName, nextPath);
+		await chmod(nextPath, 0o755);
+		const versionCheck = await new Promise<string>((resolve, reject) => {
+			const child = spawn(nextPath, ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
+			let output = "";
+			child.stdout?.on("data", (chunk) => (output += chunk.toString()));
+			child.once("error", reject);
+			child.once("exit", (code) => (code === 0 ? resolve(output.trim()) : reject(new Error("Downloaded binary failed --version check."))));
+		});
+		if (versionCheck !== latestVersion) throw new Error(`Downloaded binary reports ${versionCheck}, expected ${latestVersion}.`);
+		await rename(currentPath, backupPath);
+		try {
+			await rename(nextPath, currentPath);
+		} catch (error) {
+			await rename(backupPath, currentPath).catch(() => undefined);
+			throw error;
+		}
+		await rm(backupPath, { force: true });
+		console.log(`Updated Sickrat CLI to ${latestVersion}.`);
+	} finally {
+		await rm(tempDir, { recursive: true, force: true });
+	}
+}
+
+async function vaultUpdate(args: string[]) {
+	const { config, cloudflare } = await ensureCloudflareConfig();
+	const dryRun = args.includes("--dry-run");
+	const yes = args.includes("--yes") || dryRun;
+	const forceUnlock = args.includes("--force-unlock");
+	const vaultName = args.find((arg, index) => index > 1 && !arg.startsWith("-") && !["--account-id"].includes(args[index - 1]));
+	const vault = selectConfiguredVault(config, vaultName);
+	const release = await fetchLatestRelease();
+	const targetVersion = releaseVersion(release);
+	const existingManifest = await readRemoteManifest(vault, cloudflare.accessToken).catch(() => null);
+	const currentVersion = existingManifest?.sickratVersion ?? "unknown";
+	const needsVersionUpdate = currentVersion === "unknown" || compareSemver(currentVersion, targetVersion) < 0;
+	const needsManifest = !existingManifest;
+	const willRotateVapid = !vault.vapidPublicKey || !vault.vapidPrivateKey;
+	const plan = [
+		...(needsManifest ? ["initialize remote deployment manifest"] : []),
+		...(needsVersionUpdate ? [`deploy Worker/PWA artifact ${targetVersion}`] : []),
+		"ensure D1 manifest and migration tables",
+		...(willRotateVapid ? ["rotate VAPID push keys and require PWA push refresh"] : ["preserve VAPID push keys"]),
+		"verify /api/capabilities",
+		"write deployment manifest",
+	];
+	console.log(`Sickrat vault update: ${vault.name}`);
+	console.log(`Current vault: ${currentVersion}`);
+	console.log(`Target vault:  ${targetVersion}`);
+	console.log("");
+	console.log("Plan:");
+	for (const item of plan) console.log(`  - ${item}`);
+	if (dryRun) return;
+	if (!yes && process.stdin.isTTY) {
+		const readline = createInterface({ input: process.stdin, output: process.stderr });
+		try {
+			const answer = await readline.question("Apply update? [y/N] ");
+			if (!/^y(es)?$/i.test(answer.trim())) {
+				console.error("Vault update cancelled.");
+				return;
+			}
+		} finally {
+			readline.close();
+		}
+	}
+	const lock = await acquireUpdateLock(vault, cloudflare.accessToken, currentVersion, targetVersion, forceUnlock);
+	try {
+		await ensureManifestTables(vault, cloudflare.accessToken);
+		await markUpdateStep(vault, cloudflare.accessToken, "ensure_manifest_tables");
+		const artifact = await downloadReleaseWebArtifact(targetVersion, true);
+		await markUpdateStep(vault, cloudflare.accessToken, "download_artifact");
+		const vapid = await deployVaultWorker({
+			accessToken: cloudflare.accessToken,
+			accountId: vault.accountId,
+			scriptName: vault.scriptName,
+			d1Id: vault.d1Id,
+			vaultName: vault.name,
+			version: targetVersion,
+			artifact,
+			vapid: vault.vapidPublicKey && vault.vapidPrivateKey ? { publicKey: vault.vapidPublicKey, privateKey: vault.vapidPrivateKey } : undefined,
+		});
+		await markUpdateStep(vault, cloudflare.accessToken, "deploy_worker");
+		const response = await fetch(`${vault.workerUrl}/api/capabilities`);
+		if (!response.ok) throw new Error(`Updated Worker health check failed with HTTP ${response.status}.`);
+		const manifest = createVaultManifest({
+			vault,
+			version: targetVersion,
+			fromVersion: currentVersion,
+			migrationsApplied: Array.from(new Set([...(existingManifest?.migrationsApplied ?? []), "0001_manifest", `deploy_${targetVersion}`])),
+			lastUpdateStartedAt: lock.startedAt,
+		});
+		await writeRemoteManifest(vault, cloudflare.accessToken, manifest);
+		await markUpdateStep(vault, cloudflare.accessToken, "write_manifest");
+		const nextVault = { ...vault, vapidPublicKey: vapid.publicKey, vapidPrivateKey: vapid.privateKey };
+		const otherVaults = (config.vaults ?? []).filter((existing) => existing.accountId !== vault.accountId || existing.slug !== vault.slug);
+		await writeConfig({ ...config, workerUrl: vault.workerUrl, vaults: [...otherVaults, nextVault] });
+		await releaseUpdateLock(vault, cloudflare.accessToken);
+		console.log(`Vault ${vault.name} updated to ${targetVersion}.`);
+		if (willRotateVapid) {
+			console.log("Push keys were rotated for this legacy vault. Open the installed PWA Settings page and refresh push if notifications do not arrive.");
+		}
+	} catch (error) {
+		console.error("Vault update failed. The update lock remains for inspection or --force-unlock retry.");
+		throw error;
+	}
+}
+
+async function updateAll(args: string[]) {
+	await selfUpdate(args);
+	await vaultUpdate(["vault", "update", ...args.slice(1)]);
 }
 
 async function pair(args: string[]) {
@@ -1293,6 +1822,10 @@ async function main() {
 		if (hasHelpFlag(args)) {
 			if (command === "login") commandHelp("login");
 			if (command === "vault" && args[1] === "create") commandHelp("vault create");
+			if (command === "vault" && args[1] === "status") commandHelp("vault status");
+			if (command === "vault" && args[1] === "update") commandHelp("vault update");
+			if (command === "self" && args[1] === "update") commandHelp("self update");
+			if (command === "update") commandHelp("update");
 			if (command === "pair") commandHelp("pair");
 			if (command === "run") commandHelp("run");
 			if (command === "reveal" || command === "request") commandHelp("reveal");
@@ -1301,6 +1834,10 @@ async function main() {
 		if (command === "login") return await cloudflareLogin(args);
 		if (command === "provision") return await createVault(args);
 		if (command === "vault" && args[1] === "create") return await createVault(args.slice(1));
+		if (command === "vault" && args[1] === "status") return await vaultStatus(args);
+		if (command === "vault" && args[1] === "update") return await vaultUpdate(args);
+		if (command === "self" && args[1] === "update") return await selfUpdate(args);
+		if (command === "update") return await updateAll(args);
 		if (command === "pair") return await pair(args);
 		if (command === "run") return await runWithSecrets(args);
 		if (command === "reveal") return await revealSecret(args);

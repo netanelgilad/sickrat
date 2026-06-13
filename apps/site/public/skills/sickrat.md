@@ -117,4 +117,4 @@ If the reference does not exist yet, still request it with a clear message. The 
 - Request the narrowest secret reference that satisfies the task.
 - Prefer `sickrat run` so plaintext only reaches the child process that needs it.
 - Never use `sickrat reveal` unless the user explicitly asks for plaintext output in a clearly non-production test.
-- If using `sickrat add-secret`, warn the user that providing the secret through chat may expose it to the model provider.
+- When a new secret value is needed, prefer the PWA approval flow so the user enters or generates the value on their device instead of sending plaintext through chat.

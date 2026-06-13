@@ -37,6 +37,7 @@ Env-file auto-detection uses `sickrat://...` as the explicit marker so the CLI c
 
 Agents should include `--message` whenever they request approval so the phone screen explains the work being performed, not only the secret reference.
 Agents may request a reference that does not exist yet. The PWA should treat that as a just-in-time secret creation flow: collect the value from the user, save it encrypted into the vault, then continue the same approval.
+Agents may also request generated values for new refs when a workflow needs a fresh password or token. Keep that inside `sickrat run` rather than adding provider-specific commands. See [generated-secret-flows.md](generated-secret-flows.md).
 
 Example:
 

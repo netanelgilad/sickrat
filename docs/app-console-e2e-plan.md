@@ -77,7 +77,7 @@ Task routes:
 
 ```text
 /approve/:requestId       Focused mobile approval flow
-/secrets                  Compatibility redirect to /app/secrets or focused add-secret route
+/secrets                  Compatibility redirect to /app/secrets or focused secret-entry route
 /pair                     Compatibility redirect to /app/devices or focused pair route
 /cf/callback              OAuth callback, then redirect to /app/settings or /app
 ```
@@ -85,7 +85,7 @@ Task routes:
 Recommendation:
 
 - Keep `/approve/:requestId` focused and full-screen.
-- Move normal add-secret and pairing UI into `/app/secrets` and `/app/devices`.
+- Move normal secret entry and pairing UI into `/app/secrets` and `/app/devices`.
 - Use `/secrets` and `/pair` as redirects or compatibility shells only if needed.
 
 ## App Shell Requirements

@@ -35,13 +35,15 @@ Secret references are arbitrary unique strings within a vault. `service/api-toke
 
 The CLI writes the deployed vault URL into `~/.sickrat/config.json` so the next routine command can pair against that vault.
 
-## CLI Secret Add Direction
+## New Secret Value Direction
 
-`sickrat add-secret` should exist, but it needs explicit UX warnings:
+The default way to add a new value should be the PWA approval flow, not a plaintext CLI command:
 
-- Human direct terminal use is acceptable.
-- Agent-mediated use is allowed only after warning that the plaintext secret will pass through the agent/chat/model path.
-- For local/private model setups the user may still decide that is fine.
+- If an agent requests a ref that is not stored yet, the PWA asks the user to enter or generate it during approval.
+- If a workflow needs a fresh password or token, `sickrat run` should request a generated value with constraints and receive it only after approval.
+- Plaintext should not pass through chat unless the user explicitly accepts that risk for their environment.
+
+See [generated-secret-flows.md](generated-secret-flows.md) for the proposed generated-value model.
 
 ## CLI Vault Unlock Direction
 
@@ -53,6 +55,6 @@ Recommended first CLI unlock design:
 2. The PWA requires passkey unlock.
 3. The PWA wraps a CLI vault key copy to a CLI public key.
 4. The CLI stores the wrapped key in the OS keychain where available.
-5. `sickrat add-secret` can then encrypt locally without sending plaintext to the Worker.
+5. Future local encryption features can use that key without sending plaintext to the Worker.
 
 Passkey support from a pure CLI is less portable than browser WebAuthn. Hardware security keys are practical through FIDO2 libraries, but iCloud Keychain/platform passkeys are primarily exposed through browser/app platform APIs. For our product, the canonical unlock authority should remain the PWA first; CLI vault unlock can be granted by the PWA.

@@ -83,7 +83,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.8";
+const cliVersion = "0.1.9";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -221,8 +221,8 @@ Examples:
   sickrat login
   sickrat vault create personal
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
-  sickrat run --env LEUMI_PASSWORD=leumi/password -- npm run scrape:leumi
-  sickrat reveal leumi/password --message "Manual debug reveal"
+  sickrat run --env SERVICE_TOKEN=service/api-token -- npm test
+  sickrat reveal service/api-token --message "Manual debug reveal"
 `;
 	printAndExit(output, exitCode);
 }
@@ -258,8 +258,8 @@ Usage:
 Requests phone approval for referenced secrets, injects approved values into the child process environment, and never prints secret values.
 
 Examples:
-  sickrat run --env LEUMI_USERNAME=leumi/username --env LEUMI_PASSWORD=leumi/password -- npm run scrape:leumi
-  sickrat run --env-file .env.sickrat -- npm run scrape:leumi
+  sickrat run --env SERVICE_USERNAME=service/username --env SERVICE_PASSWORD=service/password -- npm run sync:service
+  sickrat run --env-file .env.sickrat -- npm run sync:service
 `,
 		reveal: `sickrat reveal
 

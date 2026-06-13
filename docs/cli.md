@@ -23,7 +23,7 @@ Secret refs are arbitrary unique strings inside a vault. URI-style refs are opti
 Examples of valid refs:
 
 ```text
-leumi
+service/api-token
 openai/api-key
 prod/database/url
 sickrat://default/openai/api-key

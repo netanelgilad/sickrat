@@ -81,16 +81,16 @@ For multiple values, use repeated `--env` flags:
 
 ```sh
 sickrat run \
-  --env LEUMI_USERNAME=leumi/username \
-  --env LEUMI_PASSWORD=leumi/password \
-  --message "Run the requested bank scraper" \
-  -- npm run scrape:leumi
+  --env SERVICE_USERNAME=service/username \
+  --env SERVICE_PASSWORD=service/password \
+  --message "Run the requested integration task" \
+  -- npm run sync:service
 ```
 
 Or use an env file with `sickrat://` references:
 
 ```sh
-sickrat run --env-file .env.sickrat -- npm run scrape:leumi
+sickrat run --env-file .env.sickrat -- npm run sync:service
 ```
 
 Sickrat replaces only `sickrat://...` values with approved secrets and preserves ordinary env values as-is. Do not write resolved env files back to disk.

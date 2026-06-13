@@ -31,7 +31,7 @@ sickrat reveal <ref> [--message <why>]
 
 It intentionally does not create a Secrets Store today. Secret values are encrypted in the PWA before upload; D1 stores ciphertext, metadata, devices, approvals, subscriptions, and audit-adjacent records. Cloudflare Secrets Store should be added only when Sickrat has operational secrets that the Worker itself must read. It should not be used as the primary vault database unless we explicitly decide to make Cloudflare-managed plaintext secret material part of the product model.
 
-Secret references are arbitrary unique strings within a vault. `leumi`, `prod/database/url`, and `sickrat://default/openai/api-key` are all valid. Env-file auto-detection uses `sickrat://...` as the explicit marker, while direct `sickrat run --env KEY=ref` and `sickrat reveal <ref>` accept raw refs without a URI scheme.
+Secret references are arbitrary unique strings within a vault. `service/api-token`, `prod/database/url`, and `sickrat://default/openai/api-key` are all valid. Env-file auto-detection uses `sickrat://...` as the explicit marker, while direct `sickrat run --env KEY=ref` and `sickrat reveal <ref>` accept raw refs without a URI scheme.
 
 The CLI writes the deployed vault URL into `~/.sickrat/config.json` so the next routine command can pair against that vault.
 

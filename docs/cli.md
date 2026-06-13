@@ -57,9 +57,12 @@ Behavior:
 
 - Parse `.env` without mutating it.
 - Request approval for all referenced secrets as one approval bundle.
+- Preserve ordinary env values from the env file unchanged in the child process.
 - Spawn the child process with resolved environment values.
 - Mask secret values in CLI diagnostics.
 - Never persist plaintext values to disk.
+
+Use narrow, command-specific env files for least-privilege approvals. `sickrat run --env-file` requests every `sickrat://...` reference in the file.
 
 ## `reveal`
 

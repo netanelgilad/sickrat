@@ -136,13 +136,16 @@ Sickrat CLI is distributed as compiled binaries from GitHub Releases.
 On Apple Silicon Macs:
 
 ```sh
-curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-darwin-arm64 -o sickrat
+curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-darwin-arm64 -o sickrat-darwin-arm64
+curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/SHA256SUMS -o SHA256SUMS
+grep " sickrat-darwin-arm64$" SHA256SUMS | shasum -a 256 -c -
+mv sickrat-darwin-arm64 sickrat
 chmod +x sickrat
 mkdir -p ~/.local/bin
 mv sickrat ~/.local/bin/sickrat
 ```
 
-On Intel Macs, replace the asset with `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`.
+On Intel Macs, replace the asset with `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`. Always verify the selected binary with `SHA256SUMS` before installing it.
 
 The first release channel is GitHub Releases because the CLI is a compiled Bun binary and also needs the matching Worker/PWA artifact used by `sickrat vault create`. npm and Homebrew packaging can sit on top of this release channel later, but they should not be the source of truth for the deploy artifact.
 

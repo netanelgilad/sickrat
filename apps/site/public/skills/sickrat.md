@@ -24,13 +24,16 @@ sickrat --help
 If `sickrat` is missing, install it before setup. Sickrat is distributed as compiled binaries from GitHub Releases. On Apple Silicon Macs:
 
 ```sh
-curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-darwin-arm64 -o sickrat
+curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-darwin-arm64 -o sickrat-darwin-arm64
+curl -L https://github.com/netanelgilad/sickrat/releases/latest/download/SHA256SUMS -o SHA256SUMS
+grep " sickrat-darwin-arm64$" SHA256SUMS | shasum -a 256 -c -
+mv sickrat-darwin-arm64 sickrat
 chmod +x sickrat
 mkdir -p ~/.local/bin
 mv sickrat ~/.local/bin/sickrat
 ```
 
-On Intel Macs, use `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`. If no release asset exists for the user's platform, stop and tell the user Sickrat does not currently ship a binary for that platform.
+On Intel Macs, use `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`. Always verify the selected binary against the matching line in `SHA256SUMS` before installing it. If no release asset exists for the user's platform, stop and tell the user Sickrat does not currently ship a binary for that platform.
 
 ## First-Time Setup
 
@@ -94,6 +97,8 @@ sickrat run --env-file .env.sickrat -- npm run sync:service
 ```
 
 Sickrat replaces only `sickrat://...` values with approved secrets and preserves ordinary env values as-is. Do not write resolved env files back to disk.
+
+`sickrat run --env-file` requests every Sickrat reference in that file as one approval bundle. For least-privilege approval, prefer command-specific env files or direct `--env KEY=ref` mappings that include only the secrets needed for the current command.
 
 For explicit manual debugging only, `sickrat reveal <secret-ref> --message "<why>"` prints a secret to stdout. Avoid `reveal` in normal agent workflows because terminal output may enter transcripts.
 

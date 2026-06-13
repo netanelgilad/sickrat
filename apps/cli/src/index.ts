@@ -83,7 +83,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.10";
+const cliVersion = "0.1.11";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -487,6 +487,11 @@ async function cloudflareLogin(args: string[]) {
 	authUrl.searchParams.set("code_challenge_method", "S256");
 
 	const code = await new Promise<string>((resolve, reject) => {
+		let heartbeat: NodeJS.Timeout | null = null;
+		const stopHeartbeat = () => {
+			if (heartbeat) clearInterval(heartbeat);
+			heartbeat = null;
+		};
 		const server = createServer((request, response) => {
 			const requestUrl = new URL(request.url ?? "/", redirectUri);
 			if (requestUrl.pathname !== "/callback") {
@@ -500,6 +505,7 @@ async function cloudflareLogin(args: string[]) {
 				response.writeHead(400, { "content-type": "text/plain" });
 				response.end(`Cloudflare login failed: ${error}`);
 				server.close();
+				stopHeartbeat();
 				reject(new Error(requestUrl.searchParams.get("error_description") ?? error));
 				return;
 			}
@@ -508,6 +514,7 @@ async function cloudflareLogin(args: string[]) {
 				response.writeHead(400, { "content-type": "text/plain" });
 				response.end("Invalid OAuth state.");
 				server.close();
+				stopHeartbeat();
 				reject(new Error("Cloudflare login returned an invalid OAuth state."));
 				return;
 			}
@@ -517,6 +524,7 @@ async function cloudflareLogin(args: string[]) {
 				response.writeHead(400, { "content-type": "text/plain" });
 				response.end("Missing OAuth code.");
 				server.close();
+				stopHeartbeat();
 				reject(new Error("Cloudflare login did not return an authorization code."));
 				return;
 			}
@@ -524,15 +532,23 @@ async function cloudflareLogin(args: string[]) {
 			response.writeHead(200, { "content-type": "text/plain" });
 			response.end("Cloudflare login complete. You can return to your terminal.");
 			server.close();
+			stopHeartbeat();
 			resolve(nextCode);
 		});
 
-		server.once("error", reject);
+		server.once("error", (error) => {
+			stopHeartbeat();
+			reject(error);
+		});
 		server.listen(port, "127.0.0.1", () => {
 			console.error(`Opening Cloudflare login in your browser...`);
 			console.error(`Cloudflare login URL: ${authUrl.toString()}`);
 			console.error(`Callback: ${redirectUri}`);
 			openBrowser(authUrl.toString());
+			console.error("Waiting for browser authorization...");
+			heartbeat = setInterval(() => {
+				console.error(`Still waiting for Cloudflare authorization. If the browser did not open, use: ${authUrl.toString()}`);
+			}, 10_000);
 		});
 	});
 
@@ -1109,8 +1125,10 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 	});
 	console.error(`Approval request ${created.requestId} sent. Waiting for phone approval...`);
 	console.error(`Requested refs: ${refs.join(", ")}`);
+	console.error(`If the notification does not appear, open ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)} on your phone.`);
 
 	const started = Date.now();
+	let lastHeartbeatAt = 0;
 	while (Date.now() - started < 2 * 60 * 1000) {
 		await new Promise((resolve) => setTimeout(resolve, 1500));
 		const result = await api<{
@@ -1125,6 +1143,14 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 			}
 			console.error("Approved. Grant received.");
 			return grant;
+		}
+		const now = Date.now();
+		if (now - lastHeartbeatAt > 10_000) {
+			const remainingSeconds = Math.max(0, Math.ceil((2 * 60 * 1000 - (now - started)) / 1000));
+			console.error(
+				`Still waiting for phone approval. Request expires in ${remainingSeconds}s. Fallback: ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)}`,
+			);
+			lastHeartbeatAt = now;
 		}
 	}
 
@@ -1217,20 +1243,24 @@ async function runWithSecrets(args: string[]) {
 
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	const refByKey = new Map<string, string>();
+	const preservedEnvFileKeys = new Set<string>();
 	for (const envFile of envFiles) {
 		const parsed = parseDotenv(await readFile(envFile, "utf8"), envFile);
 		for (const [key, value] of Object.entries(parsed)) {
 			const ref = sickratUriToRef(value);
 			if (ref) {
 				refByKey.set(key, ref);
+				preservedEnvFileKeys.delete(key);
 			} else {
 				refByKey.delete(key);
 				env[key] = value;
+				preservedEnvFileKeys.add(key);
 			}
 		}
 	}
 	for (const { key, value } of directEnv) {
 		refByKey.set(key, value);
+		preservedEnvFileKeys.delete(key);
 	}
 	if (refByKey.size === 0) throw new Error("No Sickrat secret references found. Use --env KEY=ref or sickrat:// refs in --env-file.");
 
@@ -1246,7 +1276,7 @@ async function runWithSecrets(args: string[]) {
 		env[key] = value;
 	}
 
-	console.error(`Starting child process with ${refByKey.size} Sickrat env values.`);
+	console.error(`Starting child process with ${refByKey.size} Sickrat env values and ${preservedEnvFileKeys.size} preserved env-file values.`);
 	const code = await runChild(commandArgs[0], commandArgs.slice(1), env);
 	process.exit(code);
 }

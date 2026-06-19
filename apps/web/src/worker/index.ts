@@ -36,6 +36,15 @@ type SecretRecord = {
 	updated_at: string;
 };
 
+type SecretCiphertextInput = {
+	ref?: string;
+	label?: string;
+	ciphertext?: string;
+	iv?: string;
+	salt?: string;
+	kdf?: string;
+};
+
 type DeviceRecord = {
 	id: string;
 	label: string;
@@ -612,6 +621,25 @@ function isValidApprovalMessage(message: unknown) {
 	return message === undefined || (typeof message === "string" && message.trim() === message && message.length <= 600);
 }
 
+function isValidSecretCiphertextInput(secret: SecretCiphertextInput) {
+	return (
+		isValidSecretRef(secret.ref) &&
+		typeof secret.label === "string" &&
+		secret.label.trim() === secret.label &&
+		secret.label.length > 0 &&
+		secret.label.length <= 512 &&
+		typeof secret.ciphertext === "string" &&
+		secret.ciphertext.length > 0 &&
+		typeof secret.iv === "string" &&
+		secret.iv.length > 0 &&
+		typeof secret.salt === "string" &&
+		secret.salt.length > 0 &&
+		typeof secret.kdf === "string" &&
+		secret.kdf.length > 0 &&
+		secret.kdf.length <= 128
+	);
+}
+
 function mapSecret(row: Pick<SecretRecord, "id" | "ref" | "label" | "kdf" | "created_at" | "updated_at">) {
 	return {
 		id: row.id,
@@ -1074,15 +1102,8 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 
 	if (url.pathname === "/api/secrets" && request.method === "POST") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
-		const body = (await request.json()) as {
-			ref?: string;
-			label?: string;
-			ciphertext?: string;
-			iv?: string;
-			salt?: string;
-			kdf?: string;
-		};
-		if (!isValidSecretRef(body.ref) || !body.label || !body.ciphertext || !body.iv || !body.salt || !body.kdf) {
+		const body = (await request.json()) as SecretCiphertextInput;
+		if (!isValidSecretCiphertextInput(body)) {
 			return json({ error: "Secret ref, label, ciphertext, iv, salt, and kdf are required." }, { status: 400 });
 		}
 
@@ -1206,14 +1227,58 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 	if (approvalGrantMatch && request.method === "POST") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const id = decodeURIComponent(approvalGrantMatch[1]);
-		const body = (await request.json()) as { grantCiphertext?: unknown };
+		const body = (await request.json()) as { grantCiphertext?: unknown; createdSecrets?: SecretCiphertextInput[] };
 		if (!body.grantCiphertext) return json({ error: "grantCiphertext is required." }, { status: 400 });
+		const approval = await env.DB.prepare(`${approvalSelect} WHERE id = ?`)
+			.bind(id)
+			.first<ApprovalRequestRecord>();
+		if (!approval) return json({ error: "Approval request not found." }, { status: 404 });
+		if (approval.status !== "pending") return json({ error: `Approval request is already ${approval.status}.` }, { status: 409 });
+
+		const requestedRefs = JSON.parse(approval.secret_refs) as string[];
+		const requestedRefSet = new Set(requestedRefs);
+		const createdSecrets = body.createdSecrets ?? [];
+		if (!Array.isArray(createdSecrets)) return json({ error: "createdSecrets must be an array." }, { status: 400 });
+		if (createdSecrets.length > requestedRefs.length) {
+			return json({ error: "createdSecrets cannot exceed the number of requested refs." }, { status: 400 });
+		}
+
+		const createdRefSet = new Set<string>();
+		for (const secret of createdSecrets) {
+			if (!isValidSecretCiphertextInput(secret)) {
+				return json({ error: "Every created secret requires ref, label, ciphertext, iv, salt, and kdf." }, { status: 400 });
+			}
+			const ref = secret.ref as string;
+			if (!requestedRefSet.has(ref)) return json({ error: `Created secret was not requested: ${ref}` }, { status: 400 });
+			if (createdRefSet.has(ref)) return json({ error: `Duplicate created secret ref: ${ref}` }, { status: 400 });
+			createdRefSet.add(ref);
+			const existing = await env.DB.prepare("SELECT id FROM secrets WHERE ref = ?").bind(ref).first<{ id: string }>();
+			if (existing) return json({ error: `Secret already exists and will not be overwritten: ${ref}` }, { status: 409 });
+		}
+
 		const decidedAt = new Date().toISOString();
-		await env.DB.prepare(
-			"UPDATE approval_requests SET status = 'approved', decided_at = ?, grant_ciphertext = ?, grant_ready_at = ? WHERE id = ? AND status = 'pending'",
-		)
-			.bind(decidedAt, JSON.stringify(body.grantCiphertext), decidedAt, id)
-			.run();
+		const statements = createdSecrets.map((secret) =>
+			env.DB!.prepare(
+				`INSERT INTO secrets (id, ref, label, ciphertext, iv, salt, kdf, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).bind(
+				crypto.randomUUID(),
+				secret.ref,
+				secret.label,
+				secret.ciphertext,
+				secret.iv,
+				secret.salt,
+				secret.kdf,
+				decidedAt,
+				decidedAt,
+			),
+		);
+		statements.push(
+			env.DB.prepare(
+				"UPDATE approval_requests SET status = 'approved', decided_at = ?, grant_ciphertext = ?, grant_ready_at = ? WHERE id = ? AND status = 'pending'",
+			).bind(decidedAt, JSON.stringify(body.grantCiphertext), decidedAt, id),
+		);
+		await env.DB.batch(statements);
 		return json({ ok: true, id, status: "approved", decidedAt });
 	}
 

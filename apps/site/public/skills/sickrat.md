@@ -108,6 +108,18 @@ The user receives an approval prompt. After approval, Sickrat returns a short-li
 
 If the reference does not exist yet, still request it with a clear message. The user can create the missing secret from the approval screen and approve the same request.
 
+For password rotation, request the current ref and a new, specific ref in the same `sickrat run` call. The user can generate the new value in the PWA, approve both values, and the child process can complete the provider-specific password change:
+
+```sh
+sickrat run \
+  --env CURRENT_PASSWORD=service/password \
+  --env NEW_PASSWORD=service/password-2026-06-19 \
+  --message "Rotate the service password after the provider requested a password change" \
+  -- npm run rotate-service-password
+```
+
+Only update local config to the new ref after the provider confirms the password change succeeded.
+
 ## Agent Behavior
 
 - For a first-time user, run `sickrat login` and `sickrat vault create` before pairing.

@@ -1965,6 +1965,115 @@ textarea {
 	margin: 10px 0 0;
 }
 
+.missing-secret-list {
+	display: grid;
+	gap: 12px;
+	margin-top: 16px;
+}
+
+.missing-secret-editor {
+	background: rgba(3, 16, 9, 0.66);
+	border: 1px solid rgba(255, 189, 50, 0.44);
+	border-radius: 14px;
+	display: grid;
+	gap: 12px;
+	padding: 14px;
+}
+
+.missing-secret-title {
+	align-items: flex-start;
+	display: flex;
+	gap: 12px;
+	justify-content: space-between;
+}
+
+.missing-secret-title span,
+.missing-secret-editor label {
+	color: var(--muted);
+	display: block;
+	font-size: 12px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.missing-secret-title strong {
+	color: var(--ink);
+	display: block;
+	font-family: var(--mono);
+	font-size: 13px;
+	line-height: 1.35;
+	margin-top: 4px;
+	overflow-wrap: anywhere;
+	text-transform: none;
+}
+
+.missing-secret-title em {
+	background: var(--amber);
+	border-radius: 999px;
+	color: #150d01;
+	flex: 0 0 auto;
+	font-family: var(--mono);
+	font-size: 11px;
+	font-style: normal;
+	font-weight: 900;
+	padding: 6px 8px;
+	text-transform: uppercase;
+}
+
+.missing-secret-editor input[type="password"],
+.missing-secret-editor input[type="text"] {
+	background: rgba(242, 245, 238, 0.05);
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	color: var(--ink);
+	display: block;
+	font-family: var(--mono);
+	font-size: 16px;
+	line-height: 1.4;
+	margin-top: 7px;
+	min-height: 48px;
+	padding: 11px 12px;
+	width: 100%;
+}
+
+.password-tools {
+	align-items: center;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.password-tools button {
+	min-height: 42px;
+	padding: 9px 12px;
+}
+
+.toggle-row {
+	align-items: center;
+	border: 1px solid var(--line);
+	border-radius: 999px;
+	color: var(--ink);
+	display: inline-flex;
+	gap: 8px;
+	min-height: 42px;
+	padding: 8px 12px;
+}
+
+.toggle-row input {
+	accent-color: var(--green);
+	height: 18px;
+	min-height: 0;
+	width: 18px;
+}
+
+.toggle-row span {
+	color: var(--ink);
+	font-family: var(--mono);
+	font-size: 12px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
 .decision-row {
 	display: grid;
 	gap: 10px;

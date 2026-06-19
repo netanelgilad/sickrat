@@ -136,6 +136,12 @@ type PasskeyVaultRecord = {
 	kdf: "WebAuthn-PRF-HKDF-SHA256:AES-256-GCM:v1";
 };
 
+type PendingSecretOptions = {
+	show: boolean;
+	symbols: boolean;
+	copied: boolean;
+};
+
 const api = {
 	async getCapabilities() {
 		const response = await fetch("/api/capabilities");
@@ -267,11 +273,22 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return response.json();
 	},
-	async sendGrant(id: string, grantCiphertext: unknown) {
+	async sendGrant(
+		id: string,
+		grantCiphertext: unknown,
+		createdSecrets: Array<{
+			ref: string;
+			label: string;
+			ciphertext: string;
+			iv: string;
+			salt: string;
+			kdf: string;
+		}> = [],
+	) {
 		const response = await fetch(`/api/approvals/${encodeURIComponent(id)}/grant`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ grantCiphertext }),
+			body: JSON.stringify({ grantCiphertext, createdSecrets }),
 		});
 		if (!response.ok) throw new Error(await response.text());
 		return response.json();
@@ -307,6 +324,42 @@ function randomBase64Url(byteLength: number) {
 	const bytes = new Uint8Array(byteLength);
 	crypto.getRandomValues(bytes);
 	return bytesToBase64Url(bytes);
+}
+
+function cryptoRandomInt(maxExclusive: number) {
+	if (!Number.isInteger(maxExclusive) || maxExclusive <= 0) throw new Error("Invalid random range.");
+	const range = 0x100000000;
+	const limit = range - (range % maxExclusive);
+	const bytes = new Uint32Array(1);
+	do {
+		crypto.getRandomValues(bytes);
+	} while (bytes[0] >= limit);
+	return bytes[0] % maxExclusive;
+}
+
+function pickRandomCharacter(characters: string) {
+	return characters[cryptoRandomInt(characters.length)];
+}
+
+function shuffleCharacters(characters: string[]) {
+	for (let index = characters.length - 1; index > 0; index -= 1) {
+		const swapIndex = cryptoRandomInt(index + 1);
+		[characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
+	}
+	return characters.join("");
+}
+
+function generateSecurePassword({ length = 22, symbols = false }: { length?: number; symbols?: boolean } = {}) {
+	const normalizedLength = Math.max(20, Math.min(length, 80));
+	const uppercase = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+	const lowercase = "abcdefghijkmnopqrstuvwxyz";
+	const digits = "23456789";
+	const symbolSet = "!@#$%^&*()-_=+[]{};:,.?";
+	const requiredSets = symbols ? [uppercase, lowercase, digits, symbolSet] : [uppercase, lowercase, digits];
+	const allCharacters = requiredSets.join("");
+	const output = requiredSets.map(pickRandomCharacter);
+	while (output.length < normalizedLength) output.push(pickRandomCharacter(allCharacters));
+	return shuffleCharacters(output);
 }
 
 async function sha256Base64Url(value: string) {
@@ -897,6 +950,7 @@ function AppShell({
 		value: "",
 	});
 	const [approvalSecretValues, setApprovalSecretValues] = useState<Record<string, string>>({});
+	const [approvalSecretOptions, setApprovalSecretOptions] = useState<Record<string, PendingSecretOptions>>({});
 	const [pairingCode, setPairingCode] = useState("");
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
 	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown by the CLI.");
@@ -936,6 +990,40 @@ function AppShell({
 		const storedRefs = new Set(secrets.map((secret) => secret.ref));
 		return approval.secretRefs.filter((ref) => !storedRefs.has(ref));
 	}, [approval, secrets]);
+
+	function getPendingSecretOptions(ref: string) {
+		return approvalSecretOptions[ref] ?? { show: false, symbols: false, copied: false };
+	}
+
+	function updatePendingSecretOptions(ref: string, next: Partial<PendingSecretOptions>) {
+		setApprovalSecretOptions((current) => ({
+			...current,
+			[ref]: { ...(current[ref] ?? { show: false, symbols: false, copied: false }), ...next },
+		}));
+	}
+
+	function generateMissingSecret(ref: string) {
+		const options = getPendingSecretOptions(ref);
+		setApprovalSecretValues((current) => ({ ...current, [ref]: generateSecurePassword({ symbols: options.symbols }) }));
+		updatePendingSecretOptions(ref, { show: true, copied: false });
+	}
+
+	async function copyMissingSecret(ref: string) {
+		const value = approvalSecretValues[ref];
+		if (!value) return;
+		try {
+			await navigator.clipboard.writeText(value);
+			updatePendingSecretOptions(ref, { copied: true });
+			window.setTimeout(() => {
+				setApprovalSecretOptions((current) => ({
+					...current,
+					[ref]: { ...(current[ref] ?? { show: false, symbols: false, copied: false }), copied: false },
+				}));
+			}, 1800);
+		} catch {
+			updatePendingSecretOptions(ref, { copied: false });
+		}
+	}
 
 	async function refreshSecrets() {
 		try {
@@ -1418,16 +1506,45 @@ function AppShell({
 						if (!value) throw new Error(`Enter a value for ${ref} before approving.`);
 					}
 					setStatus("Encrypting new secrets locally...");
-					const savedSecrets: SecretMetadata[] = [];
+					const createdSecrets: Array<{
+						ref: string;
+						label: string;
+						ciphertext: string;
+						iv: string;
+						salt: string;
+						kdf: string;
+					}> = [];
 					for (const ref of missingApprovalRefs) {
 						const encrypted = await encryptSecretValue(approvalSecretValues[ref], key);
-						const saved = await api.saveSecret({
+						createdSecrets.push({
 							ref,
 							label: ref,
 							...encrypted,
 						});
-						savedSecrets.push(saved);
 					}
+					setStatus("Loading existing encrypted secrets from Cloudflare...");
+					const existingRefs = approval.secretRefs.filter((ref) => !missingApprovalRefs.includes(ref));
+					const encryptedSecrets = existingRefs.length > 0 ? await api.resolveSecrets(existingRefs) : [];
+					const plaintextSecrets: Record<string, string> = {};
+					for (const secret of encryptedSecrets) {
+						plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
+					}
+					for (const ref of missingApprovalRefs) plaintextSecrets[ref] = approvalSecretValues[ref];
+					setStatus("Encrypting ephemeral grant for the CLI...");
+					const grant = await encryptGrantForCli(
+						{ secrets: plaintextSecrets, approvedAt: new Date().toISOString() },
+						approval.ephemeralPublicKey,
+					);
+					await api.sendGrant(approval.id, grant, createdSecrets);
+					const createdAt = new Date().toISOString();
+					const savedSecrets = createdSecrets.map((secret) => ({
+						id: secret.ref,
+						ref: secret.ref,
+						label: secret.label,
+						kdf: secret.kdf,
+						createdAt,
+						updatedAt: createdAt,
+					}));
 					setSecrets((current) => [
 						...savedSecrets,
 						...current.filter((secret) => !savedSecrets.some((saved) => saved.ref === secret.ref)),
@@ -1437,19 +1554,25 @@ function AppShell({
 						for (const ref of missingApprovalRefs) delete next[ref];
 						return next;
 					});
+					setApprovalSecretOptions((current) => {
+						const next = { ...current };
+						for (const ref of missingApprovalRefs) delete next[ref];
+						return next;
+					});
+				} else {
+					setStatus("Loading encrypted secrets from Cloudflare...");
+					const encryptedSecrets = await api.resolveSecrets(approval.secretRefs);
+					const plaintextSecrets: Record<string, string> = {};
+					for (const secret of encryptedSecrets) {
+						plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
+					}
+					setStatus("Encrypting ephemeral grant for the CLI...");
+					const grant = await encryptGrantForCli(
+						{ secrets: plaintextSecrets, approvedAt: new Date().toISOString() },
+						approval.ephemeralPublicKey,
+					);
+					await api.sendGrant(approval.id, grant);
 				}
-				setStatus("Loading encrypted secrets from Cloudflare...");
-				const encryptedSecrets = await api.resolveSecrets(approval.secretRefs);
-				const plaintextSecrets: Record<string, string> = {};
-				for (const secret of encryptedSecrets) {
-					plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
-				}
-				setStatus("Encrypting ephemeral grant for the CLI...");
-				const grant = await encryptGrantForCli(
-					{ secrets: plaintextSecrets, approvedAt: new Date().toISOString() },
-					approval.ephemeralPublicKey,
-				);
-				await api.sendGrant(approval.id, grant);
 			} else {
 				await api.decideApproval(approval.id, action);
 			}
@@ -1647,7 +1770,7 @@ function AppShell({
 							{approval.secretRefs.map((ref) => (
 								<li className={missingApprovalRefs.includes(ref) ? "missing" : undefined} key={ref}>
 									<strong>{ref}</strong>
-									<span>{missingApprovalRefs.includes(ref) ? "Not in vault yet" : "Stored in vault"}</span>
+									<span>{missingApprovalRefs.includes(ref) ? "Needs value. This approval will create and grant it." : "Stored in vault"}</span>
 								</li>
 							))}
 						</ul>
@@ -1655,8 +1778,8 @@ function AppShell({
 							<div className="missing-secret-panel">
 								<h2>Create missing secrets</h2>
 								<p>
-									The agent requested references that are not in this vault yet. Enter the values here to
-									encrypt and save them, then this same approval will continue.
+									The agent requested references that are not in this vault yet. Values entered here stay
+									on this device until you approve. Approval encrypts, saves, and grants them in one step.
 								</p>
 								<div className="vault-panel">
 									<div>
@@ -1676,21 +1799,63 @@ function AppShell({
 										</span>
 									</div>
 								</div>
-								<div className="secret-form">
+								<div className="missing-secret-list">
 									{missingApprovalRefs.map((ref) => (
-										<label key={ref}>
-											{ref}
-											<textarea
-												autoCapitalize="none"
-												autoComplete="off"
-												value={approvalSecretValues[ref] ?? ""}
-												onChange={(event) =>
-													setApprovalSecretValues((current) => ({ ...current, [ref]: event.target.value }))
-												}
-												placeholder="Paste value to save and approve"
-												rows={3}
-											/>
-										</label>
+										<div className="missing-secret-editor" key={ref}>
+											<div className="missing-secret-title">
+												<div>
+													<span>New secret ref</span>
+													<strong>{ref}</strong>
+												</div>
+												<em>Needs value</em>
+											</div>
+											<label>
+												Secret value
+												<input
+													autoCapitalize="none"
+													autoComplete="new-password"
+													spellCheck={false}
+													type={getPendingSecretOptions(ref).show ? "text" : "password"}
+													value={approvalSecretValues[ref] ?? ""}
+													onChange={(event) =>
+														setApprovalSecretValues((current) => ({ ...current, [ref]: event.target.value }))
+													}
+													placeholder="Type, paste, or generate"
+												/>
+											</label>
+											<div className="password-tools">
+												<label className="toggle-row">
+													<input
+														type="checkbox"
+														checked={getPendingSecretOptions(ref).symbols}
+														onChange={(event) => updatePendingSecretOptions(ref, { symbols: event.target.checked })}
+													/>
+													<span>Allow symbols</span>
+												</label>
+												<button className="secondary" type="button" onClick={() => generateMissingSecret(ref)}>
+													Generate secure password
+												</button>
+											</div>
+											<div className="password-tools">
+												<button
+													className="secondary"
+													type="button"
+													disabled={!approvalSecretValues[ref]}
+													onClick={() => updatePendingSecretOptions(ref, { show: !getPendingSecretOptions(ref).show })}
+												>
+													{getPendingSecretOptions(ref).show ? "Hide" : "Show"}
+												</button>
+												<button
+													className="secondary"
+													type="button"
+													disabled={!approvalSecretValues[ref]}
+													onClick={() => void copyMissingSecret(ref)}
+												>
+													{getPendingSecretOptions(ref).copied ? "Copied" : "Copy"}
+												</button>
+												<span className="mini-status">Default: 22 chars, uppercase, lowercase, digits.</span>
+											</div>
+										</div>
 									))}
 								</div>
 							</div>

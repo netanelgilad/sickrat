@@ -8,9 +8,30 @@ Use the existing approval request flow, extended with per-ref intent:
 
 - `existing`: resolve a stored ref and grant it after approval.
 - `missing`: ask the user to enter a value, save it encrypted, then grant it.
-- `generated`: generate a candidate value that satisfies requested constraints, save it encrypted on approval, then grant it.
+- `generated`: generate a candidate value in the PWA, save it encrypted on approval, then grant it.
 
-This means a password-change scraper can ask for both the old password and a generated new password in one phone approval:
+Implemented v1 behavior:
+
+- `sickrat run --env KEY=ref` can request refs that do not exist yet.
+- The approval screen marks missing refs as “Needs value”.
+- The user can type/paste a value or generate a 22-character password locally.
+- Uppercase, lowercase, and digits are included by default; symbols are optional per ref.
+- New encrypted secret records are submitted with the approval grant and are stored only when the approval succeeds.
+- The CLI still receives the value only through the encrypted grant; it is not printed.
+
+Request-side generation hints and constraints remain a later extension.
+
+Today, a password-change scraper can ask for both the old password and a fresh missing new-password ref in one phone approval:
+
+```sh
+sickrat run \
+  --env SERVICE_PASSWORD=service/password \
+  --env SERVICE_NEW_PASSWORD=service/password/2026-06-19 \
+  --message "Service requires a password change; approve the old password and create a replacement." \
+  -- npm run rotate-service-password
+```
+
+Later, request-side generation constraints could make that intent explicit:
 
 ```sh
 sickrat run \
@@ -24,7 +45,7 @@ sickrat run \
   -- npm run rotate-service-password
 ```
 
-The exact flag syntax can change, but the capability should remain part of `run`. Do not add one-off commands such as `request-generated`, `promote`, or provider-specific password-change commands.
+The exact future flag syntax can change, but the capability should remain part of `run`. Do not add one-off commands such as `request-generated`, `promote`, or provider-specific password-change commands.
 
 ## Why New Refs
 
@@ -38,7 +59,7 @@ service/password/next
 
 This avoids overwriting the known-good password before the provider accepts the change. The user can later replace or archive the old ref from the PWA, or a future generic commit flow can mark the generated ref as the primary value after the child process confirms success.
 
-The first version should not pretend to be transactional across arbitrary websites. The safe baseline is:
+Sickrat should not pretend to be transactional across arbitrary websites. The safe baseline is:
 
 1. Grant old password plus generated new password to the child process.
 2. Child process changes the provider password.
@@ -79,14 +100,14 @@ The Worker does not generate or see plaintext. It stores request metadata and ro
 
 ## PWA Behavior
 
-For generated refs, the approval screen should:
+For missing/generated refs, the approval screen should:
 
-- show the ref, label, and requested constraints;
-- generate the candidate locally in the PWA after the vault key is unlocked;
-- allow regenerate;
-- allow reveal/copy only with an explicit tap if we add that later;
-- save the generated value encrypted into D1 only when the user approves;
-- include the generated value in the encrypted grant sent to the CLI.
+- show the ref clearly as a value that will be created and granted;
+- let the user type or paste a value;
+- generate/regenerate a candidate locally in the PWA;
+- allow reveal/copy only with an explicit tap;
+- save the value encrypted into D1 only when the user approves;
+- include the plaintext value only inside the encrypted grant sent to the CLI.
 
 If the generated ref already exists, the approval screen should not silently overwrite it. It should show an explicit choice:
 

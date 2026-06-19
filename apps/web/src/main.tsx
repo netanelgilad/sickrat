@@ -912,7 +912,6 @@ function AppShell({
 	const [notificationToast, setNotificationToast] = useState<NotificationToast | null>(null);
 	const [latestRelease, setLatestRelease] = useState<LatestReleaseMetadata | null>(null);
 	const [busy, setBusy] = useState(false);
-	const [sidebarOpen, setSidebarOpen] = useState(false);
 
 	const installed = useMemo(isStandalone, []);
 	const vaultKeyState = vaultKey ? "Unlocked" : getPasskeyVaultRecord() ? "Locked" : "No key";
@@ -1261,15 +1260,6 @@ function AppShell({
 			socket?.close();
 		};
 	}, [navigate, subscription?.id]);
-
-	useEffect(() => {
-		if (!sidebarOpen) return;
-		const previousOverflow = document.body.style.overflow;
-		document.body.style.overflow = "hidden";
-		return () => {
-			document.body.style.overflow = previousOverflow;
-		};
-	}, [sidebarOpen]);
 
 	async function enablePush() {
 		if (!capabilities?.push.vapidPublicKey) {
@@ -2300,66 +2290,14 @@ function AppShell({
 		return (
 			<main className="app-page">
 				<div className="console-shell">
-					{sidebarOpen ? (
-						<button
-							className="sidebar-scrim"
-							type="button"
-							aria-label="Close console navigation"
-							onClick={() => setSidebarOpen(false)}
-						/>
-					) : null}
-					<aside className={`console-sidebar ${sidebarOpen ? "open" : ""}`}>
-						<div className="sidebar-head">
-							<button
-								className="sidebar-close"
-								type="button"
-								aria-label="Close console navigation"
-								onClick={() => setSidebarOpen(false)}
-							>
-								‹
-							</button>
-							<Link className="brand-lockup" to="/">
-								<span className="brand-mark" aria-hidden="true">
-									<span className="mark-core">SR</span>
-								</span>
-								<span>Sickrat</span>
-							</Link>
-							<span className="vault-badge">{vaultName} vault</span>
-						</div>
-						<nav className="sidebar-nav" aria-label="Console">
-							<NavLink end to="/" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">DB</span>Dashboard</NavLink>
-							<NavLink end to="/vaults" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">VT</span>Vaults</NavLink>
-							<NavLink end to="/secrets" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">SK</span>Server Secrets</NavLink>
-							<NavLink end to="/approvals" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">GR</span>Approval Grants</NavLink>
-							<NavLink end to="/devices" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">MC</span>Machines</NavLink>
-							<NavLink end to="/settings" onClick={() => setSidebarOpen(false)}><span aria-hidden="true">ST</span>Account Settings</NavLink>
-						</nav>
-						<div className="sidebar-footer">
-							<a className="sidebar-skill" href="https://sickrat.dev/skills/sickrat.md">Agent skill</a>
-							<div className="account-chip">
-								<span className="account-avatar">SR</span>
-								<div>
-									<strong>{vaultName} vault</strong>
-									<span>{window.location.host}</span>
-								</div>
-							</div>
-						</div>
-					</aside>
 					<section className="console-main">
 						<header className="console-topbar">
-							<button
-								className="sidebar-toggle"
-								type="button"
-								aria-label="Open console navigation"
-								aria-expanded={sidebarOpen}
-								onClick={() => setSidebarOpen(true)}
-							>
-								‹
-							</button>
+							<Link className="topbar-brand" to="/" aria-label="Sickrat dashboard">SR</Link>
 							<div className="topbar-title">
-								<span>Main menu</span>
+								<span>{vaultName} vault</span>
 								<strong>{currentPageTitle}</strong>
 							</div>
+							<Link className="topbar-settings" to="/settings" aria-label="Settings">ST</Link>
 						</header>
 						{updateAvailable ? (
 							<div className="vault-update-banner" role="status">
@@ -2402,10 +2340,10 @@ function AppShell({
 						{routeContent}
 					</section>
 					<nav className="bottom-nav" aria-label="Primary console navigation">
-						<NavLink end to="/"><span aria-hidden="true">DB</span>Dashboard</NavLink>
+						<NavLink end to="/"><span aria-hidden="true">DB</span>Home</NavLink>
 						<NavLink end to="/secrets"><span aria-hidden="true">SK</span>Secrets</NavLink>
 						<NavLink end to="/approvals"><span aria-hidden="true">GR</span>Grants</NavLink>
-						<NavLink end to="/devices"><span aria-hidden="true">MC</span>Machines</NavLink>
+						<NavLink end to="/devices"><span aria-hidden="true">MC</span>Devices</NavLink>
 						<NavLink end to="/settings"><span aria-hidden="true">ST</span>Settings</NavLink>
 					</nav>
 				</div>

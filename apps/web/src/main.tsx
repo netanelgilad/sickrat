@@ -1043,6 +1043,7 @@ function AppShell({
 
 	async function refreshApprovals(status: ApprovalRequest["status"] | "all" = approvalFilter) {
 		try {
+			setApprovals([]);
 			setApprovals(await api.listApprovals(status));
 		} catch (error) {
 			setStatus(error instanceof Error ? error.message : "Failed to load approvals.");
@@ -1150,7 +1151,7 @@ function AppShell({
 	}, []);
 
 	useEffect(() => {
-		if (!route.startsWith("approval")) void refreshApprovals(approvalFilter);
+		if (route === "approvals" || route === "app") void refreshApprovals(approvalFilter);
 	}, [approvalFilter, route]);
 
 	useEffect(() => {

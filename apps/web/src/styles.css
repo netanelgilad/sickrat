@@ -2740,3 +2740,132 @@ button.deny {
 		width: calc(100% - 24px - var(--safe-left) - var(--safe-right));
 	}
 }
+
+/* Compact approval flow overrides. Keep after legacy responsive rules. */
+.approval-screen {
+	max-width: 560px;
+	padding: calc(8px + var(--safe-top)) calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom))
+		calc(12px + var(--safe-left));
+}
+
+.approval-screen .back-link {
+	font-size: 11px;
+	margin-bottom: 8px;
+}
+
+.approval-screen .approval {
+	border-radius: 18px;
+	padding: 14px;
+}
+
+.approval-screen .approval-header {
+	align-items: center;
+	display: flex;
+	flex-direction: row;
+	gap: 10px;
+}
+
+.approval-screen .approval-header h1,
+.approval-screen .approval-header h2 {
+	font-size: clamp(28px, 8vw, 42px);
+	line-height: 0.95;
+}
+
+.approval-screen .approval-header .eyebrow {
+	font-size: 11px;
+	margin-bottom: 4px;
+}
+
+.approval-screen .pill {
+	border-radius: 999px;
+	font-size: 11px;
+	padding: 6px 8px;
+}
+
+.approval-screen .timed-access-banner {
+	border-radius: 14px;
+	margin-top: 10px;
+	padding: 10px;
+}
+
+.approval-screen .timed-access-banner strong {
+	font-size: clamp(22px, 7vw, 34px);
+}
+
+.approval-screen .timed-access-banner p {
+	font-size: 13px;
+	margin-top: 6px;
+}
+
+.approval-screen .request-meta {
+	gap: 8px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	margin-top: 10px;
+}
+
+.approval-screen .request-meta div {
+	padding-top: 7px;
+}
+
+.approval-screen .request-meta span {
+	font-size: 11px;
+	margin-bottom: 2px;
+}
+
+.approval-screen .request-meta strong {
+	font-size: 12px;
+	line-height: 1.3;
+}
+
+.approval-screen .secret-list {
+	gap: 6px;
+	margin-top: 10px;
+}
+
+.approval-screen .secret-list li {
+	padding: 9px;
+}
+
+.approval-screen .secret-list strong {
+	font-size: 12px;
+}
+
+.approval-screen .secret-list span {
+	font-size: 12px;
+}
+
+.approval-screen .missing-secret-panel {
+	border-radius: 14px;
+	margin-top: 10px;
+	padding: 10px;
+}
+
+.approval-screen .missing-secret-panel h2 {
+	font-size: 15px;
+}
+
+.approval-screen .missing-secret-panel p {
+	font-size: 13px;
+	margin-top: 6px;
+}
+
+.approval-screen .decision-row {
+	background: linear-gradient(180deg, rgba(8, 11, 10, 0), rgba(8, 11, 10, 0.92) 24%);
+	bottom: max(8px, var(--safe-bottom));
+	display: grid;
+	gap: 8px;
+	grid-template-columns: 1fr 1fr;
+	margin-top: 10px;
+	padding-top: 10px;
+	position: sticky;
+	z-index: 12;
+}
+
+.approval-screen .decision-row button {
+	min-height: 46px;
+}
+
+.approval-screen .screen-status {
+	font-size: 12px;
+	margin-top: 8px;
+}

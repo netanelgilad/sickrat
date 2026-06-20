@@ -1276,6 +1276,13 @@ article h3,
 	padding: 0;
 }
 
+.approval-list li {
+	border-radius: 16px;
+	overflow: hidden;
+	position: relative;
+	touch-action: pan-y;
+}
+
 .approval-list a,
 .device-list li {
 	background: rgba(242, 245, 238, 0.035);
@@ -1291,6 +1298,57 @@ article h3,
 .approval-list a {
 	grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1fr) auto;
 	align-items: center;
+}
+
+.approval-row-card {
+	position: relative;
+	transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+	z-index: 2;
+}
+
+.approval-list li.swiped .approval-row-card {
+	transform: translateX(-148px);
+}
+
+.approval-row-actions {
+	align-items: stretch;
+	display: grid;
+	gap: 1px;
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(72px, 1fr);
+	inset: 0 0 0 auto;
+	justify-content: end;
+	position: absolute;
+	width: min(148px, 46%);
+	z-index: 1;
+}
+
+.approval-row-actions button {
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	color: #031009;
+	font-family: var(--mono);
+	font-size: 12px;
+	font-weight: 900;
+	min-height: 100%;
+	padding: 0 10px;
+	text-transform: uppercase;
+}
+
+.approval-row-actions .quick-deny {
+	background: var(--red);
+	color: #160307;
+}
+
+.approval-row-actions .quick-approve {
+	background: var(--green);
+}
+
+.approval-row-actions .quick-archive {
+	background: var(--amber);
+	color: #150d01;
+	grid-column: 1 / -1;
 }
 
 .approval-list a:hover,

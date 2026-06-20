@@ -959,6 +959,8 @@ function AppShell({
 	});
 	const [approvalSecretValues, setApprovalSecretValues] = useState<Record<string, string>>({});
 	const [approvalSecretOptions, setApprovalSecretOptions] = useState<Record<string, PendingSecretOptions>>({});
+	const [swipedApprovalId, setSwipedApprovalId] = useState<string | null>(null);
+	const [approvalTouchStart, setApprovalTouchStart] = useState<{ id: string; x: number } | null>(null);
 	const [pairingCode, setPairingCode] = useState("");
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
 	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown by the CLI.");
@@ -1492,6 +1494,65 @@ function AppShell({
 		}
 	}
 
+	async function approveExistingApprovalRequest(target: ApprovalRequest) {
+		const storedRefs = new Set(secrets.map((secret) => secret.ref));
+		const missingRefs = target.secretRefs.filter((ref) => !storedRefs.has(ref));
+		if (missingRefs.length > 0) {
+			navigate(`/approve/${encodeURIComponent(target.id)}`);
+			throw new Error("Open the approval screen to create missing secret values before approving.");
+		}
+		if (!target.ephemeralPublicKey) throw new Error("This approval request cannot receive an encrypted CLI grant.");
+
+		const approvedAt = new Date();
+		const accessExpiresAt = target.accessDurationSeconds
+			? new Date(approvedAt.getTime() + target.accessDurationSeconds * 1000).toISOString()
+			: undefined;
+		let key = vaultKey;
+		if (!key) {
+			if (getPasskeyVaultRecord()) {
+				setStatus("Unlocking vault with passkey...");
+				key = await unlockPasskeyVaultKey();
+			} else {
+				setStatus("Creating a passkey-protected vault key...");
+				key = await createPasskeyWrappedVaultKey();
+			}
+			if (!key) throw new Error("Unlock or create the vault key before approving this CLI request.");
+			setVaultKey(key);
+		}
+
+		setStatus("Loading encrypted secrets from Cloudflare...");
+		const encryptedSecrets = await api.resolveSecrets(target.secretRefs);
+		const plaintextSecrets: Record<string, string> = {};
+		for (const secret of encryptedSecrets) {
+			plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
+		}
+		setStatus("Encrypting ephemeral grant for the CLI...");
+		const grant = await encryptGrantForCli(
+			{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
+			target.ephemeralPublicKey,
+		);
+		await api.sendGrant(target.id, grant);
+	}
+
+	async function decideApprovalRequest(target: ApprovalRequest, action: "approve" | "deny") {
+		setBusy(true);
+		setSwipedApprovalId(null);
+		try {
+			if (action === "approve") {
+				await approveExistingApprovalRequest(target);
+			} else {
+				await api.decideApproval(target.id, action);
+			}
+			if (approval?.id === target.id) setApproval(await api.getApproval(target.id));
+			await refreshApprovals(approvalFilter);
+			setStatus(action === "approve" ? "Approved. The CLI can now decrypt its ephemeral grant." : "Denied. The request is closed.");
+		} catch (error) {
+			setStatus(error instanceof Error ? error.message : "Decision failed.");
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	async function decide(action: "approve" | "deny") {
 		if (!approval) return;
 		setBusy(true);
@@ -1738,6 +1799,25 @@ function AppShell({
 		} finally {
 			setBusy(false);
 		}
+	}
+
+	function handleApprovalTouchStart(item: ApprovalRequest, event: React.TouchEvent<HTMLLIElement>) {
+		setApprovalTouchStart({ id: item.id, x: event.touches[0]?.clientX ?? 0 });
+	}
+
+	function handleApprovalTouchEnd(item: ApprovalRequest, event: React.TouchEvent<HTMLLIElement>) {
+		if (!approvalTouchStart || approvalTouchStart.id !== item.id) return;
+		const endX = event.changedTouches[0]?.clientX ?? approvalTouchStart.x;
+		const delta = endX - approvalTouchStart.x;
+		if (Math.abs(delta) > 44) {
+			setSwipedApprovalId((current) => (current === item.id ? null : item.id));
+		}
+		setApprovalTouchStart(null);
+	}
+
+	function hideApprovalRow(id: string) {
+		setApprovals((current) => current.filter((item) => item.id !== id));
+		setSwipedApprovalId(null);
 	}
 
 	if (route === "approval" && requestId) {
@@ -2341,8 +2421,43 @@ function AppShell({
 					</div>
 					<ul className="approval-list">
 						{approvals.map((item) => (
-							<li key={item.id}>
-								<Link to={`/approvals/${encodeURIComponent(item.id)}`}>
+							<li
+								className={swipedApprovalId === item.id ? "swiped" : undefined}
+								key={item.id}
+								onTouchStart={(event) => handleApprovalTouchStart(item, event)}
+								onTouchEnd={(event) => handleApprovalTouchEnd(item, event)}
+							>
+								<div className="approval-row-actions" aria-hidden={swipedApprovalId !== item.id}>
+									{item.status === "pending" ? (
+										<>
+											<button
+												className="quick-deny"
+												disabled={busy}
+												type="button"
+												onClick={() => void decideApprovalRequest(item, "deny")}
+											>
+												Deny
+											</button>
+											<button
+												className="quick-approve"
+												disabled={busy}
+												type="button"
+												onClick={() => void decideApprovalRequest(item, "approve")}
+											>
+												Approve
+											</button>
+										</>
+									) : (
+										<button className="quick-archive" type="button" onClick={() => hideApprovalRow(item.id)}>
+											Archive
+										</button>
+									)}
+								</div>
+								<Link
+									className="approval-row-card"
+									to={`/approvals/${encodeURIComponent(item.id)}`}
+									onClick={() => setSwipedApprovalId(null)}
+								>
 									<span className={`pill ${item.status}`}>{item.status}</span>
 									<strong>{item.command}</strong>
 									<small>{item.message ?? `${item.secretRefs.length} refs requested`}</small>

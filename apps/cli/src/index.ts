@@ -42,6 +42,23 @@ type Config = {
 	}>;
 };
 
+type GrantCache = {
+	version: 1;
+	entries: GrantCacheEntry[];
+};
+
+type GrantCacheEntry = {
+	workerUrl: string;
+	deviceId: string;
+	refs: string[];
+	secretsCiphertext: string;
+	secretsIv: string;
+	approvedAt: string;
+	expiresAt: string;
+	command: string;
+	message?: string;
+};
+
 type CloudflareAccount = {
 	id: string;
 	name: string;
@@ -134,11 +151,12 @@ type D1QueryResult<T> = {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const configPath = join(homedir(), ".sickrat", "config.json");
+const grantCachePath = join(homedir(), ".sickrat", "grant-cache.json");
 const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.15";
+const cliVersion = "0.1.16";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -322,7 +340,7 @@ Usage:
   sickrat self update [--yes]
   sickrat update [--yes]
   sickrat pair <worker-url> [--label <name>]
-  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...>
+  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] -- <command...>
   sickrat reveal <ref> [--message <why>]
 
 Examples:
@@ -332,6 +350,7 @@ Examples:
   sickrat vault update personal --dry-run
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
   sickrat run --env SERVICE_TOKEN=service/api-token -- npm test
+  sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm test
   sickrat reveal service/api-token --message "Manual debug reveal"
 `;
 	printAndExit(output, exitCode);
@@ -391,12 +410,14 @@ Pairs this machine with an existing Sickrat vault after phone approval.
 		run: `sickrat run
 
 Usage:
-  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...>
+  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] -- <command...>
 
 Requests phone approval for referenced secrets, injects approved values into the child process environment, and never prints secret values.
+Use --access-for, for example 15m or 1h, to ask the user for a timed local grant that can be reused by later sickrat run calls until it expires.
 
 Examples:
   sickrat run --env SERVICE_USERNAME=service/username --env SERVICE_PASSWORD=service/password -- npm run sync:service
+  sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm run sync:service
   sickrat run --env-file .env.sickrat -- npm run sync:service
 `,
 		reveal: `sickrat reveal
@@ -488,6 +509,25 @@ function randomBase64Url(byteLength: number) {
 	return bytesToBase64Url(bytes);
 }
 
+function parseAccessDuration(value: string | undefined) {
+	if (!value) return undefined;
+	const match = value.trim().match(/^(\d+)(s|m|h)?$/i);
+	if (!match) throw new Error("Access duration must look like 10m, 1h, or 3600s.");
+	const amount = Number.parseInt(match[1], 10);
+	const unit = (match[2] ?? "m").toLowerCase();
+	const seconds = unit === "h" ? amount * 3600 : unit === "s" ? amount : amount * 60;
+	if (!Number.isInteger(seconds) || seconds < 60 || seconds > 8 * 60 * 60) {
+		throw new Error("Access duration must be between 1 minute and 8 hours.");
+	}
+	return seconds;
+}
+
+function formatDuration(seconds: number) {
+	if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+	if (seconds % 60 === 0) return `${seconds / 60}m`;
+	return `${seconds}s`;
+}
+
 async function sha256Base64Url(value: string) {
 	const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(value));
 	return bytesToBase64Url(new Uint8Array(digest));
@@ -525,6 +565,77 @@ async function readConfig() {
 async function writeConfig(config: Config) {
 	await mkdir(dirname(configPath), { recursive: true, mode: 0o700 });
 	await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function readGrantCache() {
+	try {
+		const cache = JSON.parse(await readFile(grantCachePath, "utf8")) as GrantCache;
+		return cache.version === 1 && Array.isArray(cache.entries) ? cache : ({ version: 1, entries: [] } satisfies GrantCache);
+	} catch {
+		return { version: 1, entries: [] } satisfies GrantCache;
+	}
+}
+
+async function writeGrantCache(cache: GrantCache) {
+	await mkdir(dirname(grantCachePath), { recursive: true, mode: 0o700 });
+	await writeFile(grantCachePath, `${JSON.stringify(cache, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function deriveGrantCacheKey(config: Config) {
+	const privateKeySeed = config.signingPrivateKey?.d;
+	if (!privateKeySeed) throw new Error("No device signing key found. Run sickrat pair <worker-url> first.");
+	const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(`sickrat:grant-cache:v1:${privateKeySeed}`));
+	return crypto.subtle.importKey("raw", digest, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptCachedSecrets(secrets: Record<string, string>, key: CryptoKey) {
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, textEncoder.encode(JSON.stringify(secrets)));
+	return {
+		secretsIv: bytesToBase64Url(iv),
+		secretsCiphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
+	};
+}
+
+async function decryptCachedSecrets(entry: GrantCacheEntry, key: CryptoKey) {
+	const plaintext = await crypto.subtle.decrypt(
+		{ name: "AES-GCM", iv: base64UrlToBytes(entry.secretsIv) },
+		key,
+		base64UrlToBytes(entry.secretsCiphertext),
+	);
+	return JSON.parse(textDecoder.decode(plaintext)) as Record<string, string>;
+}
+
+async function findCachedGrant(input: { workerUrl: string; deviceId: string; refs: string[]; config: Config }) {
+	const cache = await readGrantCache();
+	const now = Date.now();
+	const activeEntries = cache.entries.filter((entry) => Date.parse(entry.expiresAt) > now);
+	if (activeEntries.length !== cache.entries.length) await writeGrantCache({ version: 1, entries: activeEntries });
+	const key = await deriveGrantCacheKey(input.config);
+	for (const entry of activeEntries) {
+		if (entry.workerUrl !== input.workerUrl || entry.deviceId !== input.deviceId) continue;
+		try {
+			const secrets = await decryptCachedSecrets(entry, key);
+			if (input.refs.every((ref) => secrets[ref] !== undefined)) return { entry, secrets };
+		} catch {
+			// Ignore stale cache entries that cannot be decrypted with the current device key.
+		}
+	}
+	return null;
+}
+
+async function saveCachedGrant(entry: GrantCacheEntry) {
+	if (Date.parse(entry.expiresAt) <= Date.now()) return;
+	const cache = await readGrantCache();
+	const nextEntries = cache.entries.filter((current) => {
+		if (Date.parse(current.expiresAt) <= Date.now()) return false;
+		if (current.workerUrl !== entry.workerUrl || current.deviceId !== entry.deviceId) return true;
+		const currentRefs = current.refs.slice().sort().join("\n");
+		const nextRefs = entry.refs.slice().sort().join("\n");
+		return currentRefs !== nextRefs;
+	});
+	nextEntries.push(entry);
+	await writeGrantCache({ version: 1, entries: nextEntries });
 }
 
 function openBrowser(url: string) {
@@ -1671,12 +1782,23 @@ function uniqueRefs(refs: string[]) {
 	return unique;
 }
 
-async function requestGrant(input: { refs: string[]; message?: string; command: string }) {
+async function requestGrant(input: { refs: string[]; message?: string; command: string; accessDurationSeconds?: number; allowCache?: boolean }) {
 	validateRequestMessage(input.message);
 	const refs = uniqueRefs(input.refs);
 	const config = await readConfig();
 	if (!config.workerUrl || !config.deviceId) {
 		throw new Error("No paired device config found. Run sickrat pair <worker-url> first.");
+	}
+	if (input.allowCache !== false) {
+		const cached = await findCachedGrant({ workerUrl: config.workerUrl, deviceId: config.deviceId, refs, config });
+		if (cached) {
+			console.error(`Using timed local grant approved until ${cached.entry.expiresAt}.`);
+			return {
+				secrets: cached.secrets,
+				approvedAt: cached.entry.approvedAt,
+				accessExpiresAt: cached.entry.expiresAt,
+			} satisfies GrantPayload;
+		}
 	}
 	const keyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
 	const ephemeralPublicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
@@ -1685,6 +1807,7 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 		command: input.command,
 		message: input.message,
 		secretRefs: refs,
+		accessDurationSeconds: input.accessDurationSeconds,
 		ephemeralPublicKey,
 		timestamp: new Date().toISOString(),
 		nonce: bytesToBase64Url(crypto.getRandomValues(new Uint8Array(16))),
@@ -1694,7 +1817,11 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 		method: "POST",
 		body: JSON.stringify({ ...unsigned, signature }),
 	});
-	console.error(`Approval request ${created.requestId} sent. Waiting for phone approval...`);
+	console.error(
+		input.accessDurationSeconds
+			? `Timed access request ${created.requestId} sent for ${formatDuration(input.accessDurationSeconds)}. Waiting for phone approval...`
+			: `Approval request ${created.requestId} sent. Waiting for phone approval...`,
+	);
 	console.error(`Requested refs: ${refs.join(", ")}`);
 	console.error(`If the notification does not appear, open ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)} on your phone.`);
 
@@ -1705,12 +1832,29 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 		const result = await api<{
 			status: "pending" | "approved" | "denied";
 			grantCiphertext: EncryptedGrant | null;
+			accessExpiresAt?: string | null;
 		}>(config.workerUrl, `/api/approvals/${created.requestId}/grant`);
 		if (result.status === "denied") throw new Error("Request denied.");
 		if (result.status === "approved" && result.grantCiphertext) {
 			const grant = await decryptGrant(result.grantCiphertext, keyPair.privateKey);
 			for (const ref of refs) {
 				if (grant.secrets[ref] === undefined) throw new Error(`Approved grant did not include ${ref}.`);
+			}
+			if (grant.accessExpiresAt && Date.parse(grant.accessExpiresAt) > Date.now()) {
+				const cacheKey = await deriveGrantCacheKey(config);
+				const encrypted = await encryptCachedSecrets(grant.secrets, cacheKey);
+				await saveCachedGrant({
+					workerUrl: config.workerUrl,
+					deviceId: config.deviceId,
+					refs,
+					...encrypted,
+					approvedAt: grant.approvedAt,
+					expiresAt: grant.accessExpiresAt,
+					command: input.command,
+					message: input.message,
+				});
+				console.error(`Approved. Timed local grant cached until ${grant.accessExpiresAt}.`);
+				return grant;
 			}
 			console.error("Approved. Grant received.");
 			return grant;
@@ -1736,6 +1880,7 @@ async function revealSecret(args: string[]) {
 		refs: [ref],
 		message,
 		command: `sickrat reveal ${ref}`,
+		allowCache: false,
 	});
 	process.stdout.write(grant.secrets[ref] ?? "");
 }
@@ -1801,11 +1946,12 @@ async function runWithSecrets(args: string[]) {
 	const directEnv = getAllArgValues(beforeCommand, "--env").map(parseEnvAssignment);
 	const envFiles = getAllArgValues(beforeCommand, "--env-file");
 	const message = getAnyArgValue(beforeCommand, ["--message", "-m"]) ?? undefined;
+	const accessDurationSeconds = parseAccessDuration(getAnyArgValue(beforeCommand, ["--access-for"]) ?? undefined);
 	validateRequestMessage(message);
 
 	for (let index = 0; index < beforeCommand.length; index += 1) {
 		const arg = beforeCommand[index];
-		if (arg === "--env" || arg === "--env-file" || arg === "--message" || arg === "-m") {
+		if (arg === "--env" || arg === "--env-file" || arg === "--message" || arg === "-m" || arg === "--access-for") {
 			index += 1;
 			continue;
 		}
@@ -1839,6 +1985,7 @@ async function runWithSecrets(args: string[]) {
 	const grant = await requestGrant({
 		refs,
 		message,
+		accessDurationSeconds,
 		command: `sickrat run -- ${formatCommand(commandArgs)}`,
 	});
 	for (const [key, ref] of refByKey) {

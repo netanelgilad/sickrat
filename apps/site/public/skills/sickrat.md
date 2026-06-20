@@ -106,6 +106,18 @@ For explicit manual debugging only, `sickrat reveal <secret-ref> --message "<why
 
 The user receives an approval prompt. After approval, Sickrat returns a short-lived grant for the CLI process.
 
+For long-running or multi-step work that may need the same refs repeatedly, the agent may ask for a timed local grant:
+
+```sh
+sickrat run \
+  --env SERVICE_TOKEN=service/api-token \
+  --access-for 30m \
+  --message "Work on the requested service task for the next 30 minutes" \
+  -- npm run sync:service
+```
+
+Use timed access only when the task is actively ongoing and the reason is specific. The phone approval screen is distinct and shows the requested duration. After approval, later `sickrat run` calls on the same paired machine can reuse the encrypted local grant until it expires.
+
 If the reference does not exist yet, still request it with a clear message. The user can create the missing secret from the approval screen and approve the same request.
 
 For password rotation, request the current ref and a new, specific ref in the same `sickrat run` call. The user can generate the new value in the PWA, approve both values, and the child process can complete the provider-specific password change:
@@ -128,6 +140,7 @@ Only update local config to the new ref after the provider confirms the password
 - Explain why the secret is needed before requesting it.
 - Put that explanation in `--message` so it appears on the user's approval screen.
 - It is valid to request a new reference that may not exist yet, but make the need specific and narrow.
+- Use `--access-for` only for active multi-step work where repeated approval would interrupt the task; prefer a short duration such as `15m` or `30m`.
 - Request the narrowest secret reference that satisfies the task.
 - Prefer `sickrat run` so plaintext only reaches the child process that needs it.
 - Never use `sickrat reveal` unless the user explicitly asks for plaintext output in a clearly non-production test.

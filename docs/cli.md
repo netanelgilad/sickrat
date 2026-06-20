@@ -15,7 +15,7 @@ sickrat self update [--yes]
 sickrat update [--yes]
 
 sickrat pair <worker-url>
-sickrat run [--env KEY=ref] [--env-file <file>] [--message <why>] -- <command> [args...]
+sickrat run [--env KEY=ref] [--env-file <file>] [--message <why>] [--access-for <duration>] -- <command> [args...]
 sickrat reveal <ref> [--message <why>]
 sickrat inject -i <template> -o <output>
 ```
@@ -42,11 +42,13 @@ Env-file auto-detection uses `sickrat://...` as the explicit marker so the CLI c
 Agents should include `--message` whenever they request approval so the phone screen explains the work being performed, not only the secret reference.
 Agents may request a reference that does not exist yet. The PWA should treat that as a just-in-time secret creation flow: collect the value from the user, save it encrypted into the vault, then continue the same approval.
 Agents may also request generated values for new refs when a workflow needs a fresh password or token. Keep that inside `sickrat run` rather than adding provider-specific commands. See [generated-secret-flows.md](generated-secret-flows.md).
+Agents may request a timed local grant with `--access-for <duration>` when a multi-step task is expected to need the same refs repeatedly. The phone approval screen should look distinct from one-shot approvals and should make the duration clear. After approval, the CLI may reuse those refs without another phone prompt until the local grant expires.
 
 Example:
 
 ```sh
 sickrat run --env OPENAI_API_KEY=openai/api-key -- npm test
+sickrat run --env OPENAI_API_KEY=openai/api-key --access-for 30m -- npm test
 sickrat run --env-file .env.sickrat -- npm test
 ```
 
@@ -65,7 +67,7 @@ Behavior:
 - Preserve ordinary env values from the env file unchanged in the child process.
 - Spawn the child process with resolved environment values.
 - Mask secret values in CLI diagnostics.
-- Never persist plaintext values to disk.
+- Never persist plaintext values to disk. Timed local grants may persist encrypted values until expiry so later `sickrat run` calls can reuse the user's approval.
 
 Use narrow, command-specific env files for least-privilege approvals. `sickrat run --env-file` requests every `sickrat://...` reference in the file.
 
@@ -125,5 +127,6 @@ The CLI stores:
 - device id
 - device private key in the OS keychain when possible
 - non-sensitive cache metadata
+- encrypted timed-grant cache entries with strict expiries
 
 The CLI must not store vault root keys or plaintext vault secrets.

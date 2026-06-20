@@ -20,6 +20,7 @@ export type ApprovalRequestCreate = {
 	command: string;
 	message?: string;
 	secretRefs: string[];
+	accessDurationSeconds?: number;
 	ephemeralPublicKey: JsonWebKey;
 	timestamp: string;
 	nonce: string;
@@ -29,6 +30,7 @@ export type ApprovalRequestCreate = {
 export type GrantPayload = {
 	secrets: Record<string, string>;
 	approvedAt: string;
+	accessExpiresAt?: string;
 };
 
 export type EncryptedGrant = {
@@ -44,6 +46,7 @@ export function canonicalApprovalPayload(input: Omit<ApprovalRequestCreate, "sig
 		command: input.command,
 		message: input.message,
 		secretRefs: input.secretRefs,
+		accessDurationSeconds: input.accessDurationSeconds,
 		ephemeralPublicKey: input.ephemeralPublicKey,
 		timestamp: input.timestamp,
 		nonce: input.nonce,

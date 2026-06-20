@@ -1842,6 +1842,14 @@ textarea {
 	padding: clamp(18px, 5vw, 32px);
 }
 
+.approval.timed-access {
+	background:
+		linear-gradient(135deg, rgba(43, 161, 255, 0.18), transparent 50%),
+		rgba(242, 245, 238, 0.035);
+	border-color: rgba(78, 181, 255, 0.7);
+	box-shadow: 0 0 0 1px rgba(78, 181, 255, 0.12), 0 24px 90px rgba(43, 161, 255, 0.14);
+}
+
 .approval-header {
 	align-items: center;
 	display: flex;
@@ -1858,6 +1866,46 @@ textarea {
 	font-size: clamp(38px, 12vw, 78px);
 	line-height: 0.88;
 	margin: 0;
+}
+
+.timed-access .approval-header h1 {
+	color: #dff3ff;
+	text-shadow: 0 0 28px rgba(78, 181, 255, 0.3);
+}
+
+.timed-access-banner {
+	background:
+		linear-gradient(135deg, rgba(78, 181, 255, 0.18), rgba(69, 255, 138, 0.08)),
+		rgba(2, 13, 20, 0.78);
+	border: 1px solid rgba(78, 181, 255, 0.64);
+	border-radius: 16px;
+	margin-top: 18px;
+	padding: 16px;
+}
+
+.timed-access-banner span {
+	color: #9bd8ff;
+	display: block;
+	font-family: var(--mono);
+	font-size: 12px;
+	font-weight: 900;
+	text-transform: uppercase;
+}
+
+.timed-access-banner strong {
+	color: #f2fbff;
+	display: block;
+	font-family: var(--mono);
+	font-size: clamp(28px, 9vw, 48px);
+	line-height: 1;
+	margin-top: 6px;
+	text-transform: uppercase;
+}
+
+.timed-access-banner p {
+	color: rgba(223, 243, 255, 0.78);
+	line-height: 1.45;
+	margin: 10px 0 0;
 }
 
 .pill {

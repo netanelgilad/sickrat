@@ -42,11 +42,13 @@ type ApprovalRequest = {
 	command: string;
 	message: string | null;
 	secretRefs: string[];
+	accessDurationSeconds: number | null;
 	status: "pending" | "approved" | "denied";
 	createdAt: string;
 	decidedAt: string | null;
 	ephemeralPublicKey: JsonWebKey | null;
 	grantReadyAt: string | null;
+	accessExpiresAt: string | null;
 };
 
 type SecretMetadata = {
@@ -557,7 +559,7 @@ async function decryptSecretValue(secret: SecretCiphertext, key: CryptoKey) {
 	return new TextDecoder().decode(plaintext);
 }
 
-async function encryptGrantForCli(payload: { secrets: Record<string, string>; approvedAt: string }, cliPublicKey: JsonWebKey) {
+async function encryptGrantForCli(payload: { secrets: Record<string, string>; approvedAt: string; accessExpiresAt?: string }, cliPublicKey: JsonWebKey) {
 	const cliKey = await crypto.subtle.importKey(
 		"jwk",
 		cliPublicKey,
@@ -632,6 +634,12 @@ function compareVersions(left: string, right: string) {
 		if (delta !== 0) return delta;
 	}
 	return 0;
+}
+
+function formatDuration(seconds: number) {
+	if (seconds % 3600 === 0) return `${seconds / 3600} hour${seconds === 3600 ? "" : "s"}`;
+	if (seconds % 60 === 0) return `${seconds / 60} minute${seconds === 60 ? "" : "s"}`;
+	return `${seconds} seconds`;
 }
 
 function arrayBuffersEqual(left: ArrayBuffer | null, right: Uint8Array) {
@@ -1488,6 +1496,10 @@ function AppShell({
 		setBusy(true);
 		try {
 			if (action === "approve" && approval.ephemeralPublicKey) {
+				const approvedAt = new Date();
+				const accessExpiresAt = approval.accessDurationSeconds
+					? new Date(approvedAt.getTime() + approval.accessDurationSeconds * 1000).toISOString()
+					: undefined;
 				let key = vaultKey;
 				if (!key) {
 					if (getPasskeyVaultRecord()) {
@@ -1532,7 +1544,7 @@ function AppShell({
 					for (const ref of missingApprovalRefs) plaintextSecrets[ref] = approvalSecretValues[ref];
 					setStatus("Encrypting ephemeral grant for the CLI...");
 					const grant = await encryptGrantForCli(
-						{ secrets: plaintextSecrets, approvedAt: new Date().toISOString() },
+						{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
 					);
 					await api.sendGrant(approval.id, grant, createdSecrets);
@@ -1568,7 +1580,7 @@ function AppShell({
 					}
 					setStatus("Encrypting ephemeral grant for the CLI...");
 					const grant = await encryptGrantForCli(
-						{ secrets: plaintextSecrets, approvedAt: new Date().toISOString() },
+						{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
 					);
 					await api.sendGrant(approval.id, grant);
@@ -1728,20 +1740,31 @@ function AppShell({
 	}
 
 	if (route === "approval" && requestId) {
+		const timedAccess = approval?.accessDurationSeconds ? approval.accessDurationSeconds : null;
 		return (
 			<main className="approval-screen">
 				<Link className="back-link" to="/">
 					Back to console
 				</Link>
 				{approval ? (
-					<section className="approval">
+					<section className={`approval ${timedAccess ? "timed-access" : ""}`}>
 						<div className="approval-header">
 							<div>
-								<p className="eyebrow">Quarantine event</p>
-								<h1>Release grant</h1>
+								<p className="eyebrow">{timedAccess ? "Timed access request" : "Quarantine event"}</p>
+								<h1>{timedAccess ? "Trust window" : "Release grant"}</h1>
 							</div>
 							<span className={`pill ${approval.status}`}>{approval.status}</span>
 						</div>
+						{timedAccess ? (
+							<div className="timed-access-banner">
+								<span>Auto-approve window</span>
+								<strong>{formatDuration(timedAccess)}</strong>
+								<p>
+									Approving grants this paired machine local reuse of these refs until the window expires.
+									Use this only while you expect the agent to keep working.
+								</p>
+							</div>
+						) : null}
 						<div className="request-meta">
 							<div>
 								<span>Device</span>
@@ -1762,15 +1785,29 @@ function AppShell({
 								<strong>{new Date(approval.createdAt).toLocaleString()}</strong>
 							</div>
 							<div>
-								<span>Grant TTL</span>
-								<strong>{approval.grantReadyAt ? "Grant sealed for CLI retrieval" : "Short-lived grant minted only after approval"}</strong>
+								<span>{timedAccess ? "Access mode" : "Grant TTL"}</span>
+								<strong>
+									{timedAccess
+										? approval.accessExpiresAt
+											? `Reusable until ${new Date(approval.accessExpiresAt).toLocaleString()}`
+											: `Reusable for ${formatDuration(timedAccess)} after approval`
+										: approval.grantReadyAt
+											? "Grant sealed for CLI retrieval"
+											: "Short-lived grant minted only after approval"}
+								</strong>
 							</div>
 						</div>
 						<ul className="secret-list">
 							{approval.secretRefs.map((ref) => (
 								<li className={missingApprovalRefs.includes(ref) ? "missing" : undefined} key={ref}>
 									<strong>{ref}</strong>
-									<span>{missingApprovalRefs.includes(ref) ? "Needs value. This approval will create and grant it." : "Stored in vault"}</span>
+									<span>
+										{missingApprovalRefs.includes(ref)
+											? "Needs value. This approval will create and grant it."
+											: timedAccess
+												? "Stored in vault. Reusable during the approved window."
+												: "Stored in vault"}
+									</span>
 								</li>
 							))}
 						</ul>

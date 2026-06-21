@@ -165,8 +165,16 @@ const api = {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ id }),
 		});
-		if (!response.ok) throw new Error(await response.text());
-		return response.json();
+		const text = await response.text();
+		const body = text ? ((() => {
+			try {
+				return JSON.parse(text) as { error?: string };
+			} catch {
+				return { error: text };
+			}
+		})()) : {};
+		if (!response.ok) throw new Error(body.error ?? text);
+		return body;
 	},
 	async getLatestNotification(endpoint: string) {
 		const response = await fetch("/api/notifications/latest", {
@@ -1251,9 +1259,15 @@ function AppShell({
 		}
 
 		navigator.serviceWorker.ready
-			.then((registration) => registration.pushManager.getSubscription())
-			.then((existing) => {
+			.then(async (registration) => {
+				const applicationServerKey = base64UrlToUint8Array(capabilities.push.vapidPublicKey!);
+				const existing = await registration.pushManager.getSubscription();
 				if (!existing) return;
+				if (!arrayBuffersEqual(existing.options.applicationServerKey, applicationServerKey)) {
+					await existing.unsubscribe();
+					setStatus("Push subscription key changed. Enable push again to refresh this device.");
+					return;
+				}
 				return api.saveSubscription(existing.toJSON());
 			})
 			.then((saved) => {
@@ -1381,16 +1395,13 @@ function AppShell({
 			const registration = await navigator.serviceWorker.ready;
 			const applicationServerKey = base64UrlToUint8Array(capabilities.push.vapidPublicKey);
 			const existing = await registration.pushManager.getSubscription();
-			if (existing && !arrayBuffersEqual(existing.options.applicationServerKey, applicationServerKey)) {
+			if (existing) {
 				await existing.unsubscribe();
 			}
-			const current = await registration.pushManager.getSubscription();
-			const nextSubscription =
-				current ??
-				(await registration.pushManager.subscribe({
-					userVisibleOnly: true,
-					applicationServerKey,
-				}));
+			const nextSubscription = await registration.pushManager.subscribe({
+				userVisibleOnly: true,
+				applicationServerKey,
+			});
 
 			const saved = await api.saveSubscription(nextSubscription.toJSON());
 			setSubscription(saved);

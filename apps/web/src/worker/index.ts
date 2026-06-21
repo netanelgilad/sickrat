@@ -483,10 +483,15 @@ async function sendEmptyWebPush(subscription: PushSubscriptionRecord, env: EnvWi
 	});
 
 	if (!response.ok && response.status !== 201) {
-		if ((response.status === 404 || response.status === 410) && env.DB) {
+		const responseText = await response.text();
+		const staleSubscription =
+			response.status === 404 ||
+			response.status === 410 ||
+			(response.status === 400 && responseText.includes("VapidPkHashMismatch"));
+		if (staleSubscription && env.DB) {
 			await env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(subscription.endpoint).run();
 		}
-		throw new Error(`Push service returned ${response.status}: ${await response.text()}`);
+		throw new Error(`Push service returned ${response.status}: ${responseText}`);
 	}
 
 	return response.status;
@@ -1074,19 +1079,31 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			.bind(requestId)
 			.first<ApprovalRequestRecord>();
 		const realtime = approvalRow ? await publishApproval(result.id, mapApproval(approvalRow), env) : null;
-		const status = await sendEmptyWebPush(
-			{
-				id: result.id,
-				endpoint: result.endpoint,
-				keys: {
-					p256dh: result.p256dh,
-					auth: result.auth,
+		try {
+			const status = await sendEmptyWebPush(
+				{
+					id: result.id,
+					endpoint: result.endpoint,
+					keys: {
+						p256dh: result.p256dh,
+						auth: result.auth,
+					},
+					created_at: result.created_at,
 				},
-				created_at: result.created_at,
-			},
-			env,
-		);
-		return json({ ok: true, status, requestId, realtime });
+				env,
+			);
+			return json({ ok: true, status, requestId, realtime });
+		} catch (error) {
+			return json(
+				{
+					ok: false,
+					requestId,
+					realtime,
+					error: error instanceof Error ? error.message : "Push delivery failed.",
+				},
+				{ status: 502 },
+			);
+		}
 	}
 
 	if (url.pathname === "/api/secrets" && request.method === "GET") {

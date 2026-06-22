@@ -16,6 +16,7 @@ type ApprovalRequestRecord = {
 	message: string | null;
 	secret_refs: string;
 	access_duration_seconds: number | null;
+	approval_wait_seconds: number | null;
 	status: "pending" | "approved" | "denied";
 	created_at: string;
 	decided_at: string | null;
@@ -345,6 +346,7 @@ async function ensureSchema(env: EnvWithBindings) {
 	await ensureColumn(env.DB, "approval_requests", "grant_ready_at", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "access_duration_seconds", "INTEGER");
 	await ensureColumn(env.DB, "approval_requests", "access_expires_at", "TEXT");
+	await ensureColumn(env.DB, "approval_requests", "approval_wait_seconds", "INTEGER");
 	return true;
 }
 
@@ -507,6 +509,7 @@ function mapApproval(row: ApprovalRequestRecord) {
 		message: row.message,
 		secretRefs: JSON.parse(row.secret_refs) as string[],
 		accessDurationSeconds: row.access_duration_seconds,
+		approvalWaitSeconds: row.approval_wait_seconds,
 		status: row.status,
 		createdAt: row.created_at,
 		decidedAt: row.decided_at,
@@ -547,6 +550,7 @@ function canonicalApprovalPayload(input: {
 	message?: string;
 	secretRefs: string[];
 	accessDurationSeconds?: number;
+	approvalWaitSeconds?: number;
 	ephemeralPublicKey: JsonWebKey;
 	timestamp: string;
 	nonce: string;
@@ -557,6 +561,7 @@ function canonicalApprovalPayload(input: {
 		message: input.message,
 		secretRefs: input.secretRefs,
 		accessDurationSeconds: input.accessDurationSeconds,
+		approvalWaitSeconds: input.approvalWaitSeconds,
 		ephemeralPublicKey: input.ephemeralPublicKey,
 		timestamp: input.timestamp,
 		nonce: input.nonce,
@@ -623,7 +628,7 @@ function randomPairingCode() {
 }
 
 const approvalSelect = `
-	SELECT id, subscription_id, device, command, secret_refs, access_duration_seconds, status, created_at, decided_at,
+	SELECT id, subscription_id, device, command, secret_refs, access_duration_seconds, approval_wait_seconds, status, created_at, decided_at,
 		device_id, message, ephemeral_public_key, grant_ciphertext, grant_ready_at, access_expires_at
 	FROM approval_requests
 `;
@@ -637,6 +642,10 @@ function isValidApprovalMessage(message: unknown) {
 }
 
 function isValidAccessDurationSeconds(value: unknown) {
+	return value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= 60 && value <= 8 * 60 * 60);
+}
+
+function isValidApprovalWaitSeconds(value: unknown) {
 	return value === undefined || (typeof value === "number" && Number.isInteger(value) && value >= 60 && value <= 8 * 60 * 60);
 }
 
@@ -969,6 +978,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			message?: string;
 			secretRefs?: string[];
 			accessDurationSeconds?: number;
+			approvalWaitSeconds?: number;
 			ephemeralPublicKey?: JsonWebKey;
 			timestamp?: string;
 			nonce?: string;
@@ -989,6 +999,9 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		if (!isValidAccessDurationSeconds(body.accessDurationSeconds)) {
 			return json({ error: "Access duration must be between 1 minute and 8 hours." }, { status: 400 });
 		}
+		if (!isValidApprovalWaitSeconds(body.approvalWaitSeconds)) {
+			return json({ error: "Approval timeout must be between 1 minute and 8 hours." }, { status: 400 });
+		}
 
 		const subscription = await env.DB.prepare("SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions ORDER BY created_at DESC LIMIT 1")
 			.first<PushSubscriptionRecord & { p256dh: string; auth: string }>();
@@ -998,8 +1011,8 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		const createdAt = new Date().toISOString();
 		await env.DB.prepare(
 			`INSERT INTO approval_requests
-				(id, subscription_id, device, command, message, secret_refs, access_duration_seconds, status, created_at, decided_at, device_id, ephemeral_public_key, grant_ciphertext, grant_ready_at, access_expires_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, NULL, NULL, NULL)`,
+				(id, subscription_id, device, command, message, secret_refs, access_duration_seconds, approval_wait_seconds, status, created_at, decided_at, device_id, ephemeral_public_key, grant_ciphertext, grant_ready_at, access_expires_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, NULL, NULL, NULL)`,
 		)
 			.bind(
 				id,
@@ -1009,6 +1022,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 				body.message ?? null,
 				JSON.stringify(body.secretRefs),
 				body.accessDurationSeconds ?? null,
+				body.approvalWaitSeconds ?? null,
 				createdAt,
 				device.id,
 				JSON.stringify(body.ephemeralPublicKey),

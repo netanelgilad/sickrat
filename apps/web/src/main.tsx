@@ -43,6 +43,7 @@ type ApprovalRequest = {
 	message: string | null;
 	secretRefs: string[];
 	accessDurationSeconds: number | null;
+	approvalWaitSeconds: number | null;
 	status: "pending" | "approved" | "denied";
 	createdAt: string;
 	decidedAt: string | null;
@@ -650,6 +651,22 @@ function formatDuration(seconds: number) {
 	return `${seconds} seconds`;
 }
 
+function formatAgo(timestamp: string) {
+	const elapsedSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(timestamp)) / 1000));
+	if (elapsedSeconds < 60) return `${elapsedSeconds} seconds ago`;
+	const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+	if (elapsedMinutes < 60) return `${elapsedMinutes} minute${elapsedMinutes === 1 ? "" : "s"} ago`;
+	const elapsedHours = Math.floor(elapsedMinutes / 60);
+	if (elapsedHours < 24) return `${elapsedHours} hour${elapsedHours === 1 ? "" : "s"} ago`;
+	const elapsedDays = Math.floor(elapsedHours / 24);
+	return `${elapsedDays} day${elapsedDays === 1 ? "" : "s"} ago`;
+}
+
+function approvalWaitLabel(approval: Pick<ApprovalRequest, "approvalWaitSeconds">) {
+	if (!approval.approvalWaitSeconds) return null;
+	return `Agent asked CLI to wait ${formatDuration(approval.approvalWaitSeconds)}`;
+}
+
 function arrayBuffersEqual(left: ArrayBuffer | null, right: Uint8Array) {
 	if (!left) return false;
 	const leftBytes = new Uint8Array(left);
@@ -1082,10 +1099,11 @@ function AppShell({
 
 	function describePendingNotification(notification: PendingNotification): NotificationToast {
 		if (notification.type === "approval.requested") {
+			const waitLabel = approvalWaitLabel(notification.approval);
 			return {
 				url: notification.url,
 				title: "Secret access requested",
-				body: `${notification.approval.device} wants ${notification.approval.secretRefs.length} secrets`,
+				body: `${notification.approval.device} wants ${notification.approval.secretRefs.length} secrets${waitLabel ? `. ${waitLabel}.` : ""}`,
 			};
 		}
 		return {
@@ -1833,6 +1851,7 @@ function AppShell({
 
 	if (route === "approval" && requestId) {
 		const timedAccess = approval?.accessDurationSeconds ? approval.accessDurationSeconds : null;
+		const waitLabel = approval ? approvalWaitLabel(approval) : null;
 		return (
 			<main className="approval-screen">
 				<Link className="back-link" to="/">
@@ -1857,6 +1876,13 @@ function AppShell({
 								</p>
 							</div>
 						) : null}
+						{waitLabel ? (
+							<div className="approval-wait-banner">
+								<span>Approval wait</span>
+								<strong>{waitLabel}</strong>
+								<p>Longer waits usually mean the agent expects you may not see the notification immediately.</p>
+							</div>
+						) : null}
 						<div className="request-meta">
 							<div>
 								<span>Device</span>
@@ -1874,7 +1900,8 @@ function AppShell({
 							) : null}
 							<div>
 								<span>Created</span>
-								<strong>{new Date(approval.createdAt).toLocaleString()}</strong>
+								<strong>{formatAgo(approval.createdAt)}</strong>
+								<small>{new Date(approval.createdAt).toLocaleString()}</small>
 							</div>
 							<div>
 								<span>{timedAccess ? "Access mode" : "Grant TTL"}</span>
@@ -2472,7 +2499,8 @@ function AppShell({
 									<span className={`pill ${item.status}`}>{item.status}</span>
 									<strong>{item.command}</strong>
 									<small>{item.message ?? `${item.secretRefs.length} refs requested`}</small>
-									<time>{new Date(item.createdAt).toLocaleString()}</time>
+									<time>{formatAgo(item.createdAt)}</time>
+									{approvalWaitLabel(item) ? <small>{approvalWaitLabel(item)}</small> : null}
 								</Link>
 							</li>
 						))}
@@ -2508,8 +2536,15 @@ function AppShell({
 									) : null}
 									<div>
 										<span>Created</span>
-										<strong>{new Date(approval.createdAt).toLocaleString()}</strong>
+										<strong>{formatAgo(approval.createdAt)}</strong>
+										<small>{new Date(approval.createdAt).toLocaleString()}</small>
 									</div>
+									{approvalWaitLabel(approval) ? (
+										<div>
+											<span>Approval wait</span>
+											<strong>{approvalWaitLabel(approval)}</strong>
+										</div>
+									) : null}
 									<div>
 										<span>Decided</span>
 										<strong>{approval.decidedAt ? new Date(approval.decidedAt).toLocaleString() : "Pending"}</strong>

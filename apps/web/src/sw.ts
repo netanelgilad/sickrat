@@ -8,6 +8,7 @@ type PendingApproval = {
 	device: string;
 	command: string;
 	secretRefs: string[];
+	approvalWaitSeconds: number | null;
 };
 
 type PendingPairing = {
@@ -43,6 +44,12 @@ async function notifyVisibleClients(payload: { url: string; title: string; body:
 precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
+function formatDuration(seconds: number) {
+	if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+	if (seconds % 60 === 0) return `${seconds / 60}m`;
+	return `${seconds}s`;
+}
+
 self.addEventListener("message", (event) => {
 	if (event.data?.type === "SKIP_WAITING") {
 		self.skipWaiting();
@@ -77,6 +84,7 @@ self.addEventListener("push", (event) => {
 			if (notification?.type === "approval.requested") {
 				title = "Secret access requested";
 				body = `${notification.approval.device} wants ${notification.approval.secretRefs.length} secrets`;
+				if (notification.approval.approvalWaitSeconds) body += `, waiting ${formatDuration(notification.approval.approvalWaitSeconds)}`;
 				tag = notification.approval.id;
 			} else if (notification?.type === "pairing.requested") {
 				title = "Pairing requested";

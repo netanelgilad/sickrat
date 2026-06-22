@@ -156,7 +156,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.19";
+const cliVersion = "0.1.20";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -340,8 +340,8 @@ Usage:
   sickrat self update [--yes]
   sickrat update [--yes]
   sickrat pair <worker-url> [--label <name>]
-  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] -- <command...>
-  sickrat reveal <ref> [--message <why>]
+  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] [--approval-timeout <duration>] -- <command...>
+  sickrat reveal <ref> [--message <why>] [--approval-timeout <duration>]
 
 Examples:
   sickrat login
@@ -351,6 +351,7 @@ Examples:
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
   sickrat run --env SERVICE_TOKEN=service/api-token -- npm test
   sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm test
+  sickrat run --env SERVICE_TOKEN=service/api-token --approval-timeout 15m -- npm test
   sickrat reveal service/api-token --message "Manual debug reveal"
 `;
 	printAndExit(output, exitCode);
@@ -410,20 +411,22 @@ Pairs this machine with an existing Sickrat vault after phone approval.
 		run: `sickrat run
 
 Usage:
-  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] -- <command...>
+  sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] [--approval-timeout <duration>] -- <command...>
 
 Requests phone approval for referenced secrets, injects approved values into the child process environment, and never prints secret values.
 Use --access-for, for example 15m or 1h, to ask the user for a timed local grant that can be reused by later sickrat run calls until it expires.
+Use --approval-timeout, for example 10m or 1h, when the CLI should wait longer for you to approve the current request.
 
 Examples:
   sickrat run --env SERVICE_USERNAME=service/username --env SERVICE_PASSWORD=service/password -- npm run sync:service
   sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm run sync:service
+  sickrat run --env SERVICE_TOKEN=service/api-token --approval-timeout 15m -- npm run sync:service
   sickrat run --env-file .env.sickrat -- npm run sync:service
 `,
 		reveal: `sickrat reveal
 
 Usage:
-  sickrat reveal <ref> [--message <why>]
+  sickrat reveal <ref> [--message <why>] [--approval-timeout <duration>]
 
 Requests a secret from a paired Sickrat vault and prints it to stdout. This is explicit manual/debug reveal mode.
 `,
@@ -509,17 +512,25 @@ function randomBase64Url(byteLength: number) {
 	return bytesToBase64Url(bytes);
 }
 
-function parseAccessDuration(value: string | undefined) {
+function parseDuration(value: string | undefined, label: string) {
 	if (!value) return undefined;
 	const match = value.trim().match(/^(\d+)(s|m|h)?$/i);
-	if (!match) throw new Error("Access duration must look like 10m, 1h, or 3600s.");
+	if (!match) throw new Error(`${label} must look like 10m, 1h, or 3600s.`);
 	const amount = Number.parseInt(match[1], 10);
 	const unit = (match[2] ?? "m").toLowerCase();
 	const seconds = unit === "h" ? amount * 3600 : unit === "s" ? amount : amount * 60;
 	if (!Number.isInteger(seconds) || seconds < 60 || seconds > 8 * 60 * 60) {
-		throw new Error("Access duration must be between 1 minute and 8 hours.");
+		throw new Error(`${label} must be between 1 minute and 8 hours.`);
 	}
 	return seconds;
+}
+
+function parseAccessDuration(value: string | undefined) {
+	return parseDuration(value, "Access duration");
+}
+
+function parseApprovalTimeout(value: string | undefined) {
+	return parseDuration(value, "Approval timeout");
 }
 
 function formatDuration(seconds: number) {
@@ -1782,9 +1793,10 @@ function uniqueRefs(refs: string[]) {
 	return unique;
 }
 
-async function requestGrant(input: { refs: string[]; message?: string; command: string; accessDurationSeconds?: number; allowCache?: boolean }) {
+async function requestGrant(input: { refs: string[]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean }) {
 	validateRequestMessage(input.message);
 	const refs = uniqueRefs(input.refs);
+	const approvalWaitSeconds = input.approvalWaitSeconds ?? 2 * 60;
 	const config = await readConfig();
 	if (!config.workerUrl || !config.deviceId) {
 		throw new Error("No paired device config found. Run sickrat pair <worker-url> first.");
@@ -1808,6 +1820,7 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 		message: input.message,
 		secretRefs: refs,
 		accessDurationSeconds: input.accessDurationSeconds,
+		approvalWaitSeconds,
 		ephemeralPublicKey,
 		timestamp: new Date().toISOString(),
 		nonce: bytesToBase64Url(crypto.getRandomValues(new Uint8Array(16))),
@@ -1822,12 +1835,16 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 			? `Timed access request ${created.requestId} sent for ${formatDuration(input.accessDurationSeconds)}. Waiting for phone approval...`
 			: `Approval request ${created.requestId} sent. Waiting for phone approval...`,
 	);
+	if (approvalWaitSeconds !== 2 * 60) {
+		console.error(`CLI will wait up to ${formatDuration(approvalWaitSeconds)} for approval.`);
+	}
 	console.error(`Requested refs: ${refs.join(", ")}`);
 	console.error(`If the notification does not appear, open ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)} on your phone.`);
 
 	const started = Date.now();
 	let lastHeartbeatAt = 0;
-	while (Date.now() - started < 2 * 60 * 1000) {
+	const approvalWaitMs = approvalWaitSeconds * 1000;
+	while (Date.now() - started < approvalWaitMs) {
 		await new Promise((resolve) => setTimeout(resolve, 1500));
 		const result = await api<{
 			status: "pending" | "approved" | "denied";
@@ -1861,9 +1878,9 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 		}
 		const now = Date.now();
 		if (now - lastHeartbeatAt > 10_000) {
-			const remainingSeconds = Math.max(0, Math.ceil((2 * 60 * 1000 - (now - started)) / 1000));
+			const remainingSeconds = Math.max(0, Math.ceil((approvalWaitMs - (now - started)) / 1000));
 			console.error(
-				`Still waiting for phone approval. Request expires in ${remainingSeconds}s. Fallback: ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)}`,
+				`Still waiting for phone approval. CLI wait ends in ${remainingSeconds}s. Fallback: ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)}`,
 			);
 			lastHeartbeatAt = now;
 		}
@@ -1873,12 +1890,22 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 }
 
 async function revealSecret(args: string[]) {
-	const ref = args.find((arg, index) => index > 0 && !arg.startsWith("-") && args[index - 1] !== "--message" && args[index - 1] !== "-m");
+	const ref = args.find((arg, index) => index > 0 && !arg.startsWith("-") && args[index - 1] !== "--message" && args[index - 1] !== "-m" && args[index - 1] !== "--approval-timeout");
 	if (!ref?.trim() || ref.trim() !== ref) commandHelp("reveal");
 	const message = getAnyArgValue(args, ["--message", "-m"]) ?? undefined;
+	const approvalWaitSeconds = parseApprovalTimeout(getAnyArgValue(args, ["--approval-timeout"]) ?? undefined);
+	for (let index = 1; index < args.length; index += 1) {
+		const arg = args[index];
+		if (arg === "--message" || arg === "-m" || arg === "--approval-timeout") {
+			index += 1;
+			continue;
+		}
+		if (arg !== ref) throw new Error(`Unknown sickrat reveal option: ${arg}`);
+	}
 	const grant = await requestGrant({
 		refs: [ref],
 		message,
+		approvalWaitSeconds,
 		command: `sickrat reveal ${ref}`,
 		allowCache: false,
 	});
@@ -1947,11 +1974,12 @@ async function runWithSecrets(args: string[]) {
 	const envFiles = getAllArgValues(beforeCommand, "--env-file");
 	const message = getAnyArgValue(beforeCommand, ["--message", "-m"]) ?? undefined;
 	const accessDurationSeconds = parseAccessDuration(getAnyArgValue(beforeCommand, ["--access-for"]) ?? undefined);
+	const approvalWaitSeconds = parseApprovalTimeout(getAnyArgValue(beforeCommand, ["--approval-timeout"]) ?? undefined);
 	validateRequestMessage(message);
 
 	for (let index = 0; index < beforeCommand.length; index += 1) {
 		const arg = beforeCommand[index];
-		if (arg === "--env" || arg === "--env-file" || arg === "--message" || arg === "-m" || arg === "--access-for") {
+		if (arg === "--env" || arg === "--env-file" || arg === "--message" || arg === "-m" || arg === "--access-for" || arg === "--approval-timeout") {
 			index += 1;
 			continue;
 		}
@@ -1986,6 +2014,7 @@ async function runWithSecrets(args: string[]) {
 		refs,
 		message,
 		accessDurationSeconds,
+		approvalWaitSeconds,
 		command: `sickrat run -- ${formatCommand(commandArgs)}`,
 	});
 	for (const [key, ref] of refByKey) {

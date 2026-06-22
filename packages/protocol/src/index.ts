@@ -21,6 +21,7 @@ export type ApprovalRequestCreate = {
 	message?: string;
 	secretRefs: string[];
 	accessDurationSeconds?: number;
+	approvalWaitSeconds?: number;
 	ephemeralPublicKey: JsonWebKey;
 	timestamp: string;
 	nonce: string;
@@ -47,6 +48,7 @@ export function canonicalApprovalPayload(input: Omit<ApprovalRequestCreate, "sig
 		message: input.message,
 		secretRefs: input.secretRefs,
 		accessDurationSeconds: input.accessDurationSeconds,
+		approvalWaitSeconds: input.approvalWaitSeconds,
 		ephemeralPublicKey: input.ephemeralPublicKey,
 		timestamp: input.timestamp,
 		nonce: input.nonce,

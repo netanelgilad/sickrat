@@ -106,6 +106,18 @@ For explicit manual debugging only, `sickrat reveal <secret-ref> --message "<why
 
 The user receives an approval prompt. After approval, Sickrat returns a short-lived grant for the CLI process.
 
+If the user may not see the approval notification right away, ask the CLI to wait longer for that approval:
+
+```sh
+sickrat run \
+  --env SERVICE_TOKEN=service/api-token \
+  --approval-timeout 15m \
+  --message "Run the requested integration task; wait longer in case the approval notification is missed" \
+  -- npm run sync:service
+```
+
+Use `--approval-timeout` only to extend how long the current CLI command waits for the phone approval. It does not grant reusable access. Prefer `10m` or `15m` when the user is nearby but notifications may be delayed; use longer waits only when the request is important and the user has asked for more time. The approval screen and notification show the requested wait duration.
+
 For long-running or multi-step work that may need the same refs repeatedly, the agent may ask for a timed local grant:
 
 ```sh
@@ -139,6 +151,7 @@ Only update local config to the new ref after the provider confirms the password
 - Do not read, print, summarize, upload, or inspect `~/.sickrat/config.json`; it is CLI-private state and may contain Cloudflare OAuth tokens and device keys.
 - Explain why the secret is needed before requesting it.
 - Put that explanation in `--message` so it appears on the user's approval screen.
+- Use `--approval-timeout` when a missed or delayed phone notification would otherwise make the CLI give up too soon; this is only a wait-time extension for the current approval.
 - It is valid to request a new reference that may not exist yet, but make the need specific and narrow.
 - Use `--access-for` only for active multi-step work where repeated approval would interrupt the task; prefer a short duration such as `15m` or `30m`.
 - Request the narrowest secret reference that satisfies the task.

@@ -9,11 +9,27 @@ html,
 body,
 #root {
 	height: 100%;
+	width: 100%;
+	overflow: hidden;
+	overscroll-behavior: none;
 }
 
 body {
+	inset: 0;
 	margin: 0;
-	overscroll-behavior: none;
+	position: fixed;
+}
+
+#root {
+	position: fixed;
+	inset: 0;
+}
+
+.k-page {
+	height: 100dvh;
+	overflow: auto;
+	-webkit-overflow-scrolling: touch;
+	overscroll-behavior: contain;
 }
 
 button,

@@ -16,8 +16,6 @@ import {
 	Panel,
 	Segmented,
 	SegmentedButton,
-	Tabbar,
-	TabbarLink,
 	Toast,
 	Toggle,
 } from "konsta/react";
@@ -211,6 +209,59 @@ function useSystemColorScheme() {
 
 		return () => {
 			mediaQuery.removeEventListener("change", applySystemScheme);
+		};
+	}, []);
+}
+
+function useTouchBoundaryGuard() {
+	const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+	useEffect(() => {
+		function findScrollContainer(target: EventTarget | null) {
+			if (target instanceof Element) {
+				const page = target.closest(".k-page");
+				if (page instanceof HTMLElement) return page;
+			}
+			const page = document.querySelector(".k-page");
+			return page instanceof HTMLElement ? page : null;
+		}
+
+		function handleTouchStart(event: TouchEvent) {
+			if (event.touches.length !== 1) {
+				touchStartRef.current = null;
+				return;
+			}
+			const touch = event.touches[0];
+			touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+		}
+
+		function handleTouchMove(event: TouchEvent) {
+			if (event.touches.length !== 1 || !touchStartRef.current) return;
+
+			const touch = event.touches[0];
+			const deltaX = touch.clientX - touchStartRef.current.x;
+			const deltaY = touch.clientY - touchStartRef.current.y;
+			if (Math.abs(deltaX) > Math.abs(deltaY)) return;
+
+			const scrollContainer = findScrollContainer(event.target);
+			if (!scrollContainer) return;
+
+			const atTop = scrollContainer.scrollTop <= 0;
+			const atBottom = Math.ceil(scrollContainer.scrollTop + scrollContainer.clientHeight) >= scrollContainer.scrollHeight;
+			const pullingDown = deltaY > 0;
+			const pullingUp = deltaY < 0;
+
+			if ((atTop && pullingDown) || (atBottom && pullingUp)) {
+				event.preventDefault();
+			}
+		}
+
+		document.addEventListener("touchstart", handleTouchStart, { passive: true });
+		document.addEventListener("touchmove", handleTouchMove, { passive: false });
+
+		return () => {
+			document.removeEventListener("touchstart", handleTouchStart);
+			document.removeEventListener("touchmove", handleTouchMove);
 		};
 	}, []);
 }
@@ -1056,9 +1107,6 @@ function AppShell({
 	const edgeSwipeRef = useRef<{ x: number; y: number } | null>(null);
 
 	const installed = useMemo(isStandalone, []);
-	const vaultKeyState = vaultKey ? "Unlocked" : getPasskeyVaultRecord() ? "Locked" : "No key";
-	const pushState = subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline";
-	const cloudflareState = capabilities?.vault.deployedBy === "sickrat-cli" ? "Private" : cloudflareToken ? "Connected" : "Local";
 	const vaultName = capabilities?.vault.name ?? "default";
 	const updateAvailable = Boolean(
 		capabilities?.vault.version &&
@@ -2264,17 +2312,70 @@ function AppShell({
 							: route.charAt(0).toUpperCase() + route.slice(1);
 		let routeContent: React.ReactNode;
 		if (route === "app") {
+			const hasPasskeyVault = Boolean(getPasskeyVaultRecord());
+			const vaultKeyTitle = vaultKey ? "Vault key open" : hasPasskeyVault ? "Vault key locked" : "Vault key not created";
+			const vaultKeySubtitle = vaultKey
+				? "New refs can be encrypted until the app reloads."
+				: hasPasskeyVault
+					? "Unlock before adding or releasing secret values."
+					: "Create a passkey-protected key before storing refs.";
+			const vaultKeyAction = vaultKey ? "Reset Key" : hasPasskeyVault ? "Unlock" : "Create Passkey";
+			const vaultKeyActionHandler = vaultKey ? resetVaultKey : hasPasskeyVault ? unlockVaultKey : setupVaultKey;
+
 			routeContent = (
 				<>
 					<Card outline header="Private vault" footer="Approve exact secret refs from paired machines without sending plaintext through chat.">
-						<div className="text-3xl font-bold leading-tight">Ready when agents ask</div>
+						<div className="flex items-start justify-between gap-4">
+							<div className="text-3xl font-bold leading-tight">Ready when agents ask</div>
+							<div
+								className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${
+									vaultKey ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" : "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
+								}`}
+								aria-label={vaultKeyTitle}
+								title={vaultKeyTitle}
+							>
+								<LockKeyhole size={24} />
+							</div>
+						</div>
 					</Card>
-					<BlockTitle>Status</BlockTitle>
-					<List strong inset>
-						<ListItem title="Vault" after={cloudflareState} media={<Cloud size={22} />} />
-						<ListItem title="Push" after={pushState} media={<Bell size={22} />} />
-						<ListItem title="Vault Key" after={vaultKeyState} media={<LockKeyhole size={22} />} />
-					</List>
+					<Card outline>
+						<div className="flex items-center justify-between gap-4">
+							<div className="flex min-w-0 items-center gap-3">
+								<div
+									className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+										vaultKey ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" : "bg-black/5 text-black/55 dark:bg-white/10 dark:text-white/60"
+									}`}
+								>
+									<LockKeyhole size={20} />
+								</div>
+								<div className="min-w-0">
+									<div className="font-semibold">{vaultKeyTitle}</div>
+									<div className="text-sm text-black/55 dark:text-white/55">{vaultKeySubtitle}</div>
+								</div>
+							</div>
+							<Button rounded small outline={Boolean(vaultKey)} type="button" disabled={busy} onClick={vaultKeyActionHandler}>
+								{vaultKeyAction}
+							</Button>
+						</div>
+					</Card>
+					{!subscription ? (
+						<Card outline>
+							<div className="flex items-center justify-between gap-4">
+								<div className="flex min-w-0 items-center gap-3">
+									<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+										<Bell size={20} />
+									</div>
+									<div className="min-w-0">
+										<div className="font-semibold">Push approvals are off</div>
+										<div className="text-sm text-black/55 dark:text-white/55">{status}</div>
+									</div>
+								</div>
+								<Button rounded small disabled={busy} onClick={enablePush}>
+									Enable
+								</Button>
+							</div>
+						</Card>
+					) : null}
 					<BlockTitle>Overview</BlockTitle>
 					<List strong inset>
 						<ListItem link onClick={() => navigate("/vaults")} title="Vault" after={vaultName} subtitle={capabilities?.database.configured ? "Private deployment healthy" : "Vault storage needs setup"} media={<Cloud size={22} />} />
@@ -2282,15 +2383,6 @@ function AppShell({
 						<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
 						<ListItem link onClick={() => navigate("/devices")} title="Active devices" after={String(activeDevices.length)} subtitle="Paired machines that can request access" media={<Laptop size={22} />} />
 					</List>
-					{renderVaultKeyPanel()}
-					<BlockTitle>Push Approvals</BlockTitle>
-					<List strong inset>
-						<ListItem title={subscription ? "Push Enabled" : "Push Setup"} subtitle={subscription ? "Notifications are ready. New agent requests open directly on this phone." : status} media={<Bell size={22} />} />
-					</List>
-					<Block inset className="grid grid-cols-2 gap-3">
-						<Button rounded disabled={busy || Boolean(subscription)} onClick={enablePush}>{subscription ? "Push Enabled" : "Enable Push"}</Button>
-						<Button rounded outline disabled={busy || !subscription} onClick={sendTest}>Send Test</Button>
-					</Block>
 					<BlockTitle>Install Health</BlockTitle>
 					<InstallPrompt />
 					<BlockTitle>Storyboard</BlockTitle>
@@ -2509,25 +2601,6 @@ function AppShell({
 						</Card>
 					) : null}
 					{routeContent}
-					<div className="h-24" />
-					<Tabbar labels icons className="left-0 bottom-0 fixed">
-						{primaryNavItems.map((item) => {
-							const ItemIcon = item.icon;
-							const active =
-								item.route === "app"
-									? route === "app"
-									: route === item.route || (item.route === "approvals" && route === "approval-detail");
-							return (
-								<TabbarLink
-									key={item.route}
-									active={active}
-									label={item.label}
-									icon={<ItemIcon size={22} />}
-									onClick={() => navigate(item.href)}
-								/>
-							);
-						})}
-					</Tabbar>
 					<Panel side="left" opened={navigationOpen} onBackdropClick={() => setNavigationOpen(false)}>
 						<Page>
 								<Navbar
@@ -2592,6 +2665,7 @@ function AppShell({
 
 function App() {
 	useSystemColorScheme();
+	useTouchBoundaryGuard();
 
 	return (
 		<KonstaApp theme="ios" safeAreas>

@@ -1,7 +1,47 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Link, Navigate, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import {
+	App as KonstaApp,
+	Badge,
+	Block,
+	BlockTitle,
+	Button,
+	Card,
+	List,
+	ListInput,
+	ListItem,
+	Navbar,
+	NavbarBackLink,
+	Page,
+	Panel,
+	Segmented,
+	SegmentedButton,
+	Tabbar,
+	TabbarLink,
+	Toast,
+	Toggle,
+} from "konsta/react";
+import {
+	Bell,
+	BookOpen,
+	Cloud,
+	Copy,
+	Database,
+	ExternalLink,
+	Home,
+	KeyRound,
+	Laptop,
+	LockKeyhole,
+	Menu,
+	Search,
+	Settings,
+	ShieldCheck,
+	Smartphone,
+	Sparkles,
+} from "lucide-react";
+import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { useRegisterSW } from "virtual:pwa-register/react";
+import { Storyboard } from "./storyboard";
 import "./styles.css";
 
 type Capabilities = {
@@ -144,6 +184,36 @@ type PendingSecretOptions = {
 	symbols: boolean;
 	copied: boolean;
 };
+
+const primaryNavItems: Array<{ route: AppRoute; href: string; label: string; icon: React.ComponentType<{ size?: number }> }> = [
+	{ route: "app", href: "/", label: "Home", icon: Home },
+	{ route: "secrets", href: "/secrets", label: "Secrets", icon: KeyRound },
+	{ route: "approvals", href: "/approvals", label: "Grants", icon: ShieldCheck },
+	{ route: "devices", href: "/devices", label: "Machines", icon: Laptop },
+	{ route: "settings", href: "/settings", label: "Settings", icon: Settings },
+];
+
+function useSystemColorScheme() {
+	useEffect(() => {
+		if (!window.matchMedia) return undefined;
+
+		const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+		const themeColor = document.querySelector('meta[name="theme-color"]');
+
+		function applySystemScheme(eventOrQuery: MediaQueryList | MediaQueryListEvent) {
+			const dark = eventOrQuery.matches;
+			document.documentElement.classList.toggle("dark", dark);
+			themeColor?.setAttribute("content", dark ? "#000000" : "#f2f2f7");
+		}
+
+		applySystemScheme(mediaQuery);
+		mediaQuery.addEventListener("change", applySystemScheme);
+
+		return () => {
+			mediaQuery.removeEventListener("change", applySystemScheme);
+		};
+	}, []);
+}
 
 const api = {
 	async getCapabilities() {
@@ -377,6 +447,20 @@ async function sha256Base64Url(value: string) {
 	const bytes = new TextEncoder().encode(value);
 	const digest = await crypto.subtle.digest("SHA-256", bytes);
 	return bytesToBase64Url(new Uint8Array(digest));
+}
+
+function friendlyError(error: unknown, fallback: string) {
+	const raw = error instanceof Error ? error.message : typeof error === "string" ? error : fallback;
+	try {
+		const parsed = JSON.parse(raw) as { error?: string };
+		if (parsed.error) return friendlyError(parsed.error, fallback);
+	} catch {
+		// Plain text error.
+	}
+	if (/D1|binding|Worker|VAPID|Cloudflare/i.test(raw)) {
+		return "This vault is not fully set up yet. Update or recreate the vault from the Sickrat command line, then reopen the app.";
+	}
+	return raw || fallback;
 }
 
 const legacyVaultKeyStorageKey = "sickrat.vault.key";
@@ -726,46 +810,50 @@ function InstallPrompt() {
 
 	if (standalone) {
 		return (
-			<div className="install-card installed">
-				<strong>Installed</strong>
-				<span>Sickrat is running from the home screen.</span>
-			</div>
+			<List strong inset>
+				<ListItem title="Installed" subtitle="Sickrat is running from the home screen." media={<Smartphone size={22} />} />
+			</List>
 		);
 	}
 
 	if (promptEvent) {
 		return (
-			<div className="install-card">
-				<div>
-					<strong>Install Sickrat</strong>
-					<span>Use the installed PWA for phone approvals and foreground navigation.</span>
-				</div>
-				<button type="button" onClick={install}>
-					Install
-				</button>
-				{installStatus ? <span className="mini-status">{installStatus}</span> : null}
-			</div>
+			<List strong inset>
+				<ListItem
+					title="Install Sickrat"
+					subtitle="Use the installed app for phone approvals and foreground navigation."
+					media={<Smartphone size={22} />}
+					after={
+						<Button small rounded type="button" onClick={install}>
+							Install
+						</Button>
+					}
+					footer={installStatus || undefined}
+				/>
+			</List>
 		);
 	}
 
 	if (ios) {
 		return (
-			<div className="install-card">
-				<strong>{iosSafari ? "Add to Home Screen" : "Open in Safari"}</strong>
-				<span>
-					{iosSafari
-						? "Tap Share, then Add to Home Screen. Open Sickrat from the new icon to enable phone approvals."
-						: "iOS installs web apps from Safari. Open this vault URL in Safari, then use Share -> Add to Home Screen."}
-				</span>
-			</div>
+			<List strong inset>
+				<ListItem
+					title={iosSafari ? "Add to Home Screen" : "Open in Safari"}
+					subtitle={
+						iosSafari
+							? "Tap Share, then Add to Home Screen. Open Sickrat from the new icon to enable phone approvals."
+							: "iOS installs web apps from Safari. Open this vault URL in Safari, then use Share, Add to Home Screen."
+					}
+					media={<Smartphone size={22} />}
+				/>
+			</List>
 		);
 	}
 
 	return (
-		<div className="install-card">
-			<strong>Browser session</strong>
-			<span>If your browser supports install prompts, the install button will appear here.</span>
-		</div>
+		<List strong inset>
+			<ListItem title="Browser session" subtitle="If your browser supports install prompts, the install button will appear here." media={<Smartphone size={22} />} />
+		</List>
 	);
 }
 
@@ -790,75 +878,46 @@ function InstalledPwaGate({ children }: { children: React.ReactNode }) {
 	}
 
 	return (
-		<main className="install-gate" aria-labelledby="install-gate-title">
-			<section className="install-gate-panel">
-				<div className="brand-lockup install-gate-brand">
-					<span className="brand-mark" aria-hidden="true">
-						<span className="mark-core">SR</span>
-					</span>
-					<span>Sickrat</span>
-				</div>
-				<div className="install-gate-copy">
-					<p className="eyebrow">Home-screen app required</p>
-					<h1 id="install-gate-title">Install Sickrat to use this console.</h1>
-					<p>
-						Phone approvals depend on the installed PWA context so notifications, realtime routing, and the
-						vault console all open in the same app container.
-					</p>
-				</div>
-				{promptEvent ? (
-					<div className="install-gate-actions">
-						<button type="button" onClick={install}>
-							Install App
-						</button>
-						{installStatus ? <span className="mini-status">{installStatus}</span> : null}
-					</div>
-				) : ios ? (
-					<ol className="install-steps" aria-label="Install steps">
-						<li>
-							<span>01</span>
-							<div>
-								<strong>Open the share menu</strong>
-								<small>
-									{iosSafari
-										? "Tap the Share button in Safari."
-										: "In Chrome on iPhone, tap Share from the browser menu."}
-								</small>
-							</div>
-						</li>
-						<li>
-							<span>02</span>
-							<div>
-								<strong>Add to Home Screen</strong>
-								<small>Choose Add to Home Screen from the iOS share sheet.</small>
-							</div>
-						</li>
-						<li>
-							<span>03</span>
-							<div>
-								<strong>Open Sickrat</strong>
-								<small>Launch the new icon, then enable push approvals.</small>
-							</div>
-						</li>
-					</ol>
-				) : (
-					<div className="install-steps single">
-						<div>
-							<strong>Use your browser install control</strong>
-							<small>Look for Install app in the address bar or browser menu, then open Sickrat from the installed app.</small>
-						</div>
-					</div>
-				)}
-				<div className="install-gate-footer">
-					<button type="button" className="secondary" onClick={copyUrl}>
-						{copied ? "Copied" : "Copy URL"}
-					</button>
-					<a className="button-link secondary-link" href="https://sickrat.dev">
-						Back To Site
-					</a>
-				</div>
-			</section>
-		</main>
+		<Page>
+			<Navbar title="Sickrat" subtitle="Home-screen app required" />
+			<Block strong inset>
+				<h1 id="install-gate-title" className="m-0 text-3xl font-bold leading-tight">
+					Install Sickrat to approve from this phone.
+				</h1>
+				<p className="mb-0 text-black/55 dark:text-white/55">
+					Phone approvals depend on the installed app so notifications and grant links open in the same trusted place.
+				</p>
+			</Block>
+			{promptEvent ? (
+				<Block inset>
+					<Button large rounded type="button" onClick={install}>
+						Install App
+					</Button>
+					{installStatus ? <p className="text-center text-sm text-black/45 dark:text-white/45">{installStatus}</p> : null}
+				</Block>
+			) : ios ? (
+				<>
+					<BlockTitle>Install Steps</BlockTitle>
+					<List strong inset>
+						<ListItem title="Open the share menu" subtitle={iosSafari ? "Tap the Share button in Safari." : "In Chrome on iPhone, tap Share from the browser menu."} after="1" />
+						<ListItem title="Add to Home Screen" subtitle="Choose Add to Home Screen from the iOS share sheet." after="2" />
+						<ListItem title="Open Sickrat" subtitle="Launch the new icon, then enable push approvals." after="3" />
+					</List>
+				</>
+			) : (
+				<List strong inset>
+					<ListItem title="Use your browser install control" subtitle="Look for Install app in the address bar or browser menu, then open Sickrat from the new icon." />
+				</List>
+			)}
+			<Block inset className="grid grid-cols-2 gap-3">
+				<Button rounded type="button" outline onClick={copyUrl}>
+					{copied ? "Copied" : "Copy URL"}
+				</Button>
+				<Button rounded outline component="a" href="https://sickrat.dev">
+					Back To Site
+				</Button>
+			</Block>
+		</Page>
 	);
 }
 
@@ -912,25 +971,17 @@ function PwaUpdatePrompt() {
 	};
 
 	return (
-		<div className="update-bar" role="status">
-			<span>{updating ? "Updating..." : "Update available"}</span>
-			<div>
-				{needRefresh ? (
-					<button disabled={updating} onClick={reloadApp}>
-						{updating ? "Reloading" : "Reload"}
-					</button>
-				) : null}
-				<button
-					disabled={updating}
-					onClick={() => {
-						setOfflineReady(false);
-						setNeedRefresh(false);
-					}}
-				>
-					Dismiss
-				</button>
-			</div>
-		</div>
+		<Toast
+			opened={needRefresh}
+			position="center"
+			button={
+				<Button clear small disabled={updating} onClick={reloadApp}>
+					{updating ? "Reloading" : "Reload"}
+				</Button>
+			}
+		>
+			{updating ? "Updating Sickrat..." : "Update available"}
+		</Toast>
 	);
 }
 
@@ -967,7 +1018,7 @@ function AppShell({
 }) {
 	const navigate = useNavigate();
 	const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
-	const [status, setStatus] = useState("Loading Cloudflare Worker capabilities...");
+	const [status, setStatus] = useState("Loading vault status...");
 	const [subscription, setSubscription] = useState<PushRecord | null>(null);
 	const [approval, setApproval] = useState<ApprovalRequest | null>(null);
 	const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
@@ -988,7 +1039,7 @@ function AppShell({
 	const [approvalTouchStart, setApprovalTouchStart] = useState<{ id: string; x: number } | null>(null);
 	const [pairingCode, setPairingCode] = useState("");
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
-	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown by the CLI.");
+	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown in your terminal.");
 	const [pushSubscriptionChecked, setPushSubscriptionChecked] = useState(false);
 	const [cloudflareConfig, setCloudflareConfig] = useState<CloudflareOAuthConfig | null>(null);
 	const [cloudflareToken, setCloudflareToken] = useState<string | null>(() => localStorage.getItem("sickrat.cf.accessToken"));
@@ -996,16 +1047,18 @@ function AppShell({
 	const [selectedAccountId, setSelectedAccountId] = useState("");
 	const [provisioning, setProvisioning] = useState<CloudflareProvisioning | null>(null);
 	const [cloudflareStatus, setCloudflareStatus] = useState(
-		cloudflareToken ? "Cloudflare session found in this browser." : "Cloudflare login is not connected.",
+		cloudflareToken ? "Vault setup session found in this browser." : "Browser setup is not connected.",
 	);
 	const [notificationToast, setNotificationToast] = useState<NotificationToast | null>(null);
 	const [latestRelease, setLatestRelease] = useState<LatestReleaseMetadata | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [navigationOpen, setNavigationOpen] = useState(false);
+	const edgeSwipeRef = useRef<{ x: number; y: number } | null>(null);
 
 	const installed = useMemo(isStandalone, []);
 	const vaultKeyState = vaultKey ? "Unlocked" : getPasskeyVaultRecord() ? "Locked" : "No key";
 	const pushState = subscription ? "Enabled" : capabilities?.push.configured ? "Ready" : "Offline";
-	const cloudflareState = capabilities?.vault.deployedBy === "sickrat-cli" ? "CLI provisioned" : cloudflareToken ? "Connected" : "Standalone";
+	const cloudflareState = capabilities?.vault.deployedBy === "sickrat-cli" ? "Private" : cloudflareToken ? "Connected" : "Local";
 	const vaultName = capabilities?.vault.name ?? "default";
 	const updateAvailable = Boolean(
 		capabilities?.vault.version &&
@@ -1064,7 +1117,7 @@ function AppShell({
 		try {
 			setSecrets(await api.listSecrets());
 		} catch (error) {
-			setSecretStatus(error instanceof Error ? error.message : "Failed to load secrets.");
+			setSecretStatus(friendlyError(error, "Failed to load secrets."));
 		}
 	}
 
@@ -1073,7 +1126,7 @@ function AppShell({
 			setApprovals([]);
 			setApprovals(await api.listApprovals(status));
 		} catch (error) {
-			setStatus(error instanceof Error ? error.message : "Failed to load approvals.");
+			setStatus(friendlyError(error, "Failed to load approvals."));
 		}
 	}
 
@@ -1081,7 +1134,7 @@ function AppShell({
 		try {
 			setDevices(await api.listDevices());
 		} catch (error) {
-			setPairingStatus(error instanceof Error ? error.message : "Failed to load paired devices.");
+			setPairingStatus(friendlyError(error, "Failed to load paired machines."));
 		}
 	}
 
@@ -1148,9 +1201,9 @@ function AppShell({
 			.getCapabilities()
 			.then((next) => {
 				setCapabilities(next);
-				setStatus(next.push.configured ? "Push backend is configured." : "Add VAPID keys to enable remote push.");
+				setStatus(next.push.configured ? "Notifications are ready to enable." : "This vault needs notification setup from the command line.");
 			})
-			.catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Failed to load capabilities."));
+			.catch((error: unknown) => setStatus(friendlyError(error, "Failed to load this vault.")));
 	}, []);
 
 	useEffect(() => {
@@ -1192,7 +1245,7 @@ function AppShell({
 		if (!code) return;
 		setPairing(null);
 		setPairingCode("");
-		setPairingStatus("Pairing request opened. Type the six-digit code shown by the CLI to verify this device.");
+		setPairingStatus("Pairing request opened. Type the six-digit code shown in your terminal to verify this machine.");
 		navigate("/devices", { replace: true });
 	}, [navigate, route]);
 
@@ -1201,9 +1254,9 @@ function AppShell({
 			.getCloudflareOAuthConfig()
 			.then((config) => {
 				setCloudflareConfig(config);
-				if (!config.clientId) setCloudflareStatus("Cloudflare control-plane login is handled by the Sickrat CLI.");
+				if (!config.clientId) setCloudflareStatus("Vault setup is handled by the Sickrat command line.");
 			})
-			.catch(() => setCloudflareStatus("Cloudflare control-plane login is handled by the Sickrat CLI."));
+			.catch(() => setCloudflareStatus("Vault setup is handled by the Sickrat command line."));
 	}, []);
 
 	useEffect(() => {
@@ -1211,7 +1264,7 @@ function AppShell({
 		const params = new URLSearchParams(window.location.search);
 		const error = params.get("error");
 		if (error) {
-			setCloudflareStatus(params.get("error_description") ?? error);
+			setCloudflareStatus(friendlyError(params.get("error_description") ?? error, "Sign-in failed."));
 			return;
 		}
 		const code = params.get("code");
@@ -1219,12 +1272,12 @@ function AppShell({
 		const expectedState = sessionStorage.getItem("sickrat.cf.state");
 		const codeVerifier = sessionStorage.getItem("sickrat.cf.codeVerifier");
 		if (!code || !state || state !== expectedState || !codeVerifier || !cloudflareConfig.clientId) {
-			setCloudflareStatus("Cloudflare login callback is missing a valid code, state, or PKCE verifier.");
+			setCloudflareStatus("Sign-in could not be completed. Try setup again from the command line.");
 			return;
 		}
 
 		setBusy(true);
-		setCloudflareStatus("Completing Cloudflare login...");
+		setCloudflareStatus("Completing sign-in...");
 		api
 			.exchangeCloudflareCode(code, codeVerifier, cloudflareConfig.redirectUri)
 			.then((accessToken) => {
@@ -1234,11 +1287,11 @@ function AppShell({
 				sessionStorage.removeItem("sickrat.cf.codeVerifier");
 				sessionStorage.removeItem("sickrat.cf.redirectTo");
 				setCloudflareToken(accessToken);
-				setCloudflareStatus("Cloudflare login complete. Loading accounts...");
+				setCloudflareStatus("Sign-in complete. Loading vault accounts...");
 				navigate(redirectTo, { replace: true });
 			})
 			.catch((error: unknown) =>
-				setCloudflareStatus(error instanceof Error ? error.message : "Cloudflare login failed."),
+				setCloudflareStatus(friendlyError(error, "Sign-in failed.")),
 			)
 			.finally(() => setBusy(false));
 	}, [cloudflareConfig, isCloudflareCallback, navigate]);
@@ -1254,14 +1307,14 @@ function AppShell({
 			.then((accounts) => {
 				setCloudflareAccounts(accounts);
 				setSelectedAccountId((current) => current || accounts[0]?.id || "");
-				setCloudflareStatus(accounts.length > 0 ? "Cloudflare login complete. Select an account to create a vault." : "Cloudflare login complete, but no accounts were returned.");
+				setCloudflareStatus(accounts.length > 0 ? "Sign-in complete. Select an account to create a vault." : "Sign-in complete, but no accounts were returned.");
 			})
 			.catch((error: unknown) => {
 				localStorage.removeItem("sickrat.cf.accessToken");
 				setCloudflareToken(null);
 				setCloudflareAccounts([]);
 				setSelectedAccountId("");
-				setCloudflareStatus(error instanceof Error ? `Cloudflare session expired: ${error.message}` : "Cloudflare session expired.");
+				setCloudflareStatus(friendlyError(error, "Setup session expired."));
 			});
 	}, [cloudflareToken]);
 
@@ -1294,7 +1347,7 @@ function AppShell({
 				setStatus("Push is already enabled on this device.");
 			})
 			.catch((error: unknown) => {
-				setStatus(error instanceof Error ? error.message : "Failed to sync existing push subscription.");
+				setStatus(friendlyError(error, "Failed to sync existing notification setup."));
 			})
 			.finally(() => setPushSubscriptionChecked(true));
 	}, [capabilities]);
@@ -1307,7 +1360,7 @@ function AppShell({
 				setApproval(next);
 				setStatus(`Loaded request from ${next.device}.`);
 			})
-			.catch((error: unknown) => setStatus(error instanceof Error ? error.message : "Failed to load request."));
+			.catch((error: unknown) => setStatus(friendlyError(error, "Failed to load request.")));
 	}, [requestId]);
 
 	useEffect(() => {
@@ -1394,11 +1447,11 @@ function AppShell({
 
 	async function enablePush() {
 		if (!capabilities?.push.vapidPublicKey) {
-			setStatus("VAPID keys are missing. Run `npm run vapid` and set Worker secrets.");
+			setStatus("Notifications are not configured for this vault yet.");
 			return;
 		}
 		if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-			setStatus("This browser does not expose Service Worker PushManager.");
+			setStatus("This browser cannot receive app notifications.");
 			return;
 		}
 
@@ -1423,9 +1476,9 @@ function AppShell({
 
 			const saved = await api.saveSubscription(nextSubscription.toJSON());
 			setSubscription(saved);
-			setStatus("Push subscription saved in Cloudflare D1.");
+			setStatus("Notifications are enabled for this phone.");
 		} catch (error) {
-			setStatus(error instanceof Error ? error.message : "Push subscription failed.");
+			setStatus(friendlyError(error, "Could not enable notifications."));
 		} finally {
 			setBusy(false);
 		}
@@ -1442,7 +1495,7 @@ function AppShell({
 			await refreshApprovals("pending");
 			setStatus("Test push request sent to the browser push endpoint.");
 		} catch (error) {
-			setStatus(error instanceof Error ? error.message : "Test push failed.");
+			setStatus(friendlyError(error, "Could not send a test notification."));
 		} finally {
 			setBusy(false);
 		}
@@ -1450,7 +1503,7 @@ function AppShell({
 
 	async function loginWithCloudflare(redirectTo = "/") {
 		if (!cloudflareConfig?.clientId) {
-			setCloudflareStatus("Cloudflare OAuth client is not configured on this Worker.");
+			setCloudflareStatus("Browser sign-in is not configured for this vault.");
 			return;
 		}
 		const state = randomBase64Url(24);
@@ -1469,7 +1522,7 @@ function AppShell({
 			code_challenge: codeChallenge,
 			code_challenge_method: "S256",
 		});
-		setCloudflareStatus("Redirecting to Cloudflare...");
+		setCloudflareStatus("Redirecting to sign-in...");
 		window.location.href = `${cloudflareConfig.authUrl}?${params.toString()}`;
 	}
 
@@ -1482,17 +1535,17 @@ function AppShell({
 		setCloudflareAccounts([]);
 		setSelectedAccountId("");
 		setProvisioning(null);
-		setCloudflareStatus("Cloudflare session cleared from this browser.");
+		setCloudflareStatus("Setup session cleared from this browser.");
 		navigate("/", { replace: true });
 	}
 
 	async function provisionSelectedAccount() {
 		if (!cloudflareToken) {
-			setCloudflareStatus("Log in with Cloudflare first.");
+			setCloudflareStatus("Start browser setup first.");
 			return;
 		}
 		if (!selectedAccountId) {
-			setCloudflareStatus("Select a Cloudflare account first.");
+			setCloudflareStatus("Select an account first.");
 			return;
 		}
 
@@ -1501,13 +1554,13 @@ function AppShell({
 			ok: false,
 			accountId: selectedAccountId,
 			steps: [
-				{ id: "d1", label: "D1 database", status: "pending", detail: "Creating or finding sickrat-vault..." },
-				{ id: "secrets-store", label: "Secrets Store", status: "pending", detail: "Creating or finding sickrat..." },
+				{ id: "d1", label: "Vault storage", status: "pending", detail: "Preparing encrypted vault records..." },
+				{ id: "secrets-store", label: "Secret storage", status: "pending", detail: "Preparing secret metadata..." },
 			],
 			resources: {},
 			next: "",
 		});
-		setCloudflareStatus("Creating account-owned Sickrat vault resources...");
+		setCloudflareStatus("Creating your private vault resources...");
 		try {
 			const result = await api.provisionCloudflare(cloudflareToken, selectedAccountId);
 			setProvisioning(result);
@@ -1517,7 +1570,7 @@ function AppShell({
 					: "Vault resource creation completed with errors. See step details below.",
 			);
 		} catch (error) {
-			setCloudflareStatus(error instanceof Error ? error.message : "Cloudflare vault creation failed.");
+			setCloudflareStatus(friendlyError(error, "Vault creation failed."));
 		} finally {
 			setBusy(false);
 		}
@@ -1530,7 +1583,7 @@ function AppShell({
 			navigate(`/approve/${encodeURIComponent(target.id)}`);
 			throw new Error("Open the approval screen to create missing secret values before approving.");
 		}
-		if (!target.ephemeralPublicKey) throw new Error("This approval request cannot receive an encrypted CLI grant.");
+			if (!target.ephemeralPublicKey) throw new Error("This approval request cannot receive a sealed machine grant.");
 
 		const approvedAt = new Date();
 		const accessExpiresAt = target.accessDurationSeconds
@@ -1545,17 +1598,17 @@ function AppShell({
 				setStatus("Creating a passkey-protected vault key...");
 				key = await createPasskeyWrappedVaultKey();
 			}
-			if (!key) throw new Error("Unlock or create the vault key before approving this CLI request.");
+			if (!key) throw new Error("Unlock or create the vault key before approving this machine request.");
 			setVaultKey(key);
 		}
 
-		setStatus("Loading encrypted secrets from Cloudflare...");
+		setStatus("Preparing the requested secrets...");
 		const encryptedSecrets = await api.resolveSecrets(target.secretRefs);
 		const plaintextSecrets: Record<string, string> = {};
 		for (const secret of encryptedSecrets) {
 			plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 		}
-		setStatus("Encrypting ephemeral grant for the CLI...");
+		setStatus("Sealing a short-lived grant for this machine...");
 		const grant = await encryptGrantForCli(
 			{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 			target.ephemeralPublicKey,
@@ -1574,9 +1627,9 @@ function AppShell({
 			}
 			if (approval?.id === target.id) setApproval(await api.getApproval(target.id));
 			await refreshApprovals(approvalFilter);
-			setStatus(action === "approve" ? "Approved. The CLI can now decrypt its ephemeral grant." : "Denied. The request is closed.");
+			setStatus(action === "approve" ? "Approved. This machine can continue." : "Denied. The request is closed.");
 		} catch (error) {
-			setStatus(error instanceof Error ? error.message : "Decision failed.");
+			setStatus(friendlyError(error, "Decision failed."));
 		} finally {
 			setBusy(false);
 		}
@@ -1600,7 +1653,7 @@ function AppShell({
 						setStatus("Creating a passkey-protected vault key...");
 						key = await createPasskeyWrappedVaultKey();
 					}
-					if (!key) throw new Error("Unlock or create the vault key before approving this CLI request.");
+					if (!key) throw new Error("Unlock or create the vault key before approving this machine request.");
 					setVaultKey(key);
 				}
 				if (missingApprovalRefs.length > 0) {
@@ -1625,7 +1678,7 @@ function AppShell({
 							...encrypted,
 						});
 					}
-					setStatus("Loading existing encrypted secrets from Cloudflare...");
+					setStatus("Preparing existing secrets...");
 					const existingRefs = approval.secretRefs.filter((ref) => !missingApprovalRefs.includes(ref));
 					const encryptedSecrets = existingRefs.length > 0 ? await api.resolveSecrets(existingRefs) : [];
 					const plaintextSecrets: Record<string, string> = {};
@@ -1633,7 +1686,7 @@ function AppShell({
 						plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 					}
 					for (const ref of missingApprovalRefs) plaintextSecrets[ref] = approvalSecretValues[ref];
-					setStatus("Encrypting ephemeral grant for the CLI...");
+					setStatus("Sealing a short-lived grant for this machine...");
 					const grant = await encryptGrantForCli(
 						{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
@@ -1663,13 +1716,13 @@ function AppShell({
 						return next;
 					});
 				} else {
-					setStatus("Loading encrypted secrets from Cloudflare...");
+					setStatus("Preparing the requested secrets...");
 					const encryptedSecrets = await api.resolveSecrets(approval.secretRefs);
 					const plaintextSecrets: Record<string, string> = {};
 					for (const secret of encryptedSecrets) {
 						plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 					}
-					setStatus("Encrypting ephemeral grant for the CLI...");
+					setStatus("Sealing a short-lived grant for this machine...");
 					const grant = await encryptGrantForCli(
 						{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
@@ -1682,9 +1735,9 @@ function AppShell({
 			const next = await api.getApproval(approval.id);
 			setApproval(next);
 			await refreshApprovals(approvalFilter);
-			setStatus(action === "approve" ? "Approved. The CLI can now decrypt its ephemeral grant." : "Denied. The request is closed.");
+			setStatus(action === "approve" ? "Approved. This machine can continue." : "Denied. The request is closed.");
 		} catch (error) {
-			setStatus(error instanceof Error ? error.message : "Decision failed.");
+			setStatus(friendlyError(error, "Decision failed."));
 		} finally {
 			setBusy(false);
 		}
@@ -1703,7 +1756,7 @@ function AppShell({
 			setPairing(details);
 			setPairingStatus(details.expired ? "This pairing code has expired." : `Ready to pair ${details.label}.`);
 		} catch (error) {
-			setPairingStatus(error instanceof Error ? error.message : "Failed to load pairing code.");
+			setPairingStatus(friendlyError(error, "Failed to load pairing code."));
 		} finally {
 			setBusy(false);
 		}
@@ -1725,7 +1778,7 @@ function AppShell({
 			await refreshDevices();
 			setPairingStatus(`${details.label} is paired and can request approvals.`);
 		} catch (error) {
-			setPairingStatus(error instanceof Error ? error.message : "Failed to approve pairing.");
+			setPairingStatus(friendlyError(error, "Failed to approve pairing."));
 		} finally {
 			setBusy(false);
 		}
@@ -1750,7 +1803,7 @@ function AppShell({
 			setVaultKey(key);
 			setSecretStatus("Vault key is protected by passkey. New secrets will use this key automatically.");
 		} catch (error) {
-			setSecretStatus(error instanceof Error ? error.message : "Failed to create passkey-protected vault key.");
+			setSecretStatus(friendlyError(error, "Failed to create passkey-protected vault key."));
 		} finally {
 			setBusy(false);
 		}
@@ -1768,7 +1821,7 @@ function AppShell({
 			setVaultKey(key);
 			setSecretStatus("Vault unlocked with passkey.");
 		} catch (error) {
-			setSecretStatus(error instanceof Error ? error.message : "Failed to unlock vault.");
+			setSecretStatus(friendlyError(error, "Failed to unlock vault."));
 		} finally {
 			setBusy(false);
 		}
@@ -1800,7 +1853,7 @@ function AppShell({
 		setSecretStatus("Encrypting secret locally...");
 		try {
 			const encrypted = await encryptSecretValue(secretForm.value, vaultKey);
-			setSecretStatus("Uploading ciphertext to Cloudflare D1...");
+			setSecretStatus("Saving encrypted value to your vault...");
 			const saved = await api.saveSecret({
 				ref: secretForm.ref,
 				label: secretForm.label || secretForm.ref,
@@ -1808,9 +1861,9 @@ function AppShell({
 			});
 			setSecrets((current) => [saved, ...current.filter((secret) => secret.ref !== saved.ref)]);
 			setSecretForm({ label: "", ref: "", value: "" });
-			setSecretStatus("Secret saved. Only encrypted ciphertext was uploaded.");
+			setSecretStatus("Secret saved. Only encrypted data left this phone.");
 		} catch (error) {
-			setSecretStatus(error instanceof Error ? error.message : "Failed to save secret.");
+			setSecretStatus(friendlyError(error, "Failed to save secret."));
 		} finally {
 			setBusy(false);
 		}
@@ -1824,7 +1877,7 @@ function AppShell({
 			setDevices((current) => current.map((item) => (item.id === device.id ? device : item)));
 			setPairingStatus(`${device.label} is revoked.`);
 		} catch (error) {
-			setPairingStatus(error instanceof Error ? error.message : "Failed to revoke device.");
+			setPairingStatus(friendlyError(error, "Failed to revoke machine."));
 		} finally {
 			setBusy(false);
 		}
@@ -1849,238 +1902,204 @@ function AppShell({
 		setSwipedApprovalId(null);
 	}
 
+	function handleShellTouchStart(event: React.TouchEvent<HTMLDivElement>) {
+		const touch = event.touches[0];
+		if (!touch) return;
+		edgeSwipeRef.current = touch.clientX <= 24 ? { x: touch.clientX, y: touch.clientY } : null;
+	}
+
+	function handleShellTouchEnd(event: React.TouchEvent<HTMLDivElement>) {
+		if (!edgeSwipeRef.current) return;
+		const touch = event.changedTouches[0];
+		if (!touch) return;
+		const deltaX = touch.clientX - edgeSwipeRef.current.x;
+		const deltaY = Math.abs(touch.clientY - edgeSwipeRef.current.y);
+		if (deltaX > 72 && deltaY < 72) setNavigationOpen(true);
+		edgeSwipeRef.current = null;
+	}
+
 	if (route === "approval" && requestId) {
 		const timedAccess = approval?.accessDurationSeconds ? approval.accessDurationSeconds : null;
 		const waitLabel = approval ? approvalWaitLabel(approval) : null;
 		return (
-			<main className="approval-screen">
-				<Link className="back-link" to="/">
-					Back to console
-				</Link>
+			<Page>
+				<Navbar title={timedAccess ? "Trust Window" : "Release Grant"} left={<NavbarBackLink onClick={() => navigate("/")}>App</NavbarBackLink>} />
 				{approval ? (
-					<section className={`approval ${timedAccess ? "timed-access" : ""}`}>
-						<div className="approval-header">
-							<div>
-								<p className="eyebrow">{timedAccess ? "Timed access request" : "Quarantine event"}</p>
-								<h1>{timedAccess ? "Trust window" : "Release grant"}</h1>
+					<>
+						<Block strong inset>
+							<div className="flex items-start justify-between gap-4">
+								<div>
+									<div className="text-sm text-black/45 dark:text-white/45">{timedAccess ? "Timed access request" : "Quarantine event"}</div>
+									<h1 className="m-0 mt-1 text-3xl font-bold leading-tight">{timedAccess ? "Trust window" : "Release grant"}</h1>
+								</div>
+								<Badge colors={{ bg: approval.status === "approved" ? "bg-green-500" : approval.status === "denied" ? "bg-red-500" : "bg-orange-500" }}>
+									{approval.status}
+								</Badge>
 							</div>
-							<span className={`pill ${approval.status}`}>{approval.status}</span>
-						</div>
+						</Block>
 						{timedAccess ? (
-							<div className="timed-access-banner">
-								<span>Auto-approve window</span>
-								<strong>{formatDuration(timedAccess)}</strong>
-								<p>
+							<Card outline header="Auto-approve window" footer="Use this only while you expect the agent to keep working.">
+								<div className="text-2xl font-semibold">{formatDuration(timedAccess)}</div>
+								<p className="mb-0 text-black/55 dark:text-white/55">
 									Approving grants this paired machine local reuse of these refs until the window expires.
-									Use this only while you expect the agent to keep working.
 								</p>
-							</div>
+							</Card>
 						) : null}
 						{waitLabel ? (
-							<div className="approval-wait-banner">
-								<span>Approval wait</span>
-								<strong>{waitLabel}</strong>
-								<p>Longer waits usually mean the agent expects you may not see the notification immediately.</p>
-							</div>
+							<Card outline header="Approval wait">
+								<div className="text-xl font-semibold">{waitLabel}</div>
+								<p className="mb-0 text-black/55 dark:text-white/55">Longer waits usually mean the agent expects you may not see the notification immediately.</p>
+							</Card>
 						) : null}
-						<div className="request-meta">
-							<div>
-								<span>Device</span>
-								<strong>{approval.device}</strong>
-							</div>
-							<div>
-								<span>Command</span>
-								<strong>{approval.command}</strong>
-							</div>
-							{approval.message ? (
-								<div>
-									<span>Message</span>
-									<strong>{approval.message}</strong>
-								</div>
-							) : null}
-							<div>
-								<span>Created</span>
-								<strong>{formatAgo(approval.createdAt)}</strong>
-								<small>{new Date(approval.createdAt).toLocaleString()}</small>
-							</div>
-							<div>
-								<span>{timedAccess ? "Access mode" : "Grant TTL"}</span>
-								<strong>
-									{timedAccess
-										? approval.accessExpiresAt
-											? `Reusable until ${new Date(approval.accessExpiresAt).toLocaleString()}`
-											: `Reusable for ${formatDuration(timedAccess)} after approval`
-										: approval.grantReadyAt
-											? "Grant sealed for CLI retrieval"
-											: "Short-lived grant minted only after approval"}
-								</strong>
-							</div>
-						</div>
-						<ul className="secret-list">
+						<BlockTitle>Request</BlockTitle>
+						<List strong inset>
+							<ListItem title="Device" after={approval.device} media={<Laptop size={22} />} />
+							<ListItem title="Command" subtitle={approval.command} media={<Sparkles size={22} />} />
+							{approval.message ? <ListItem title="Message" subtitle={approval.message} /> : null}
+							<ListItem title="Created" after={formatAgo(approval.createdAt)} footer={new Date(approval.createdAt).toLocaleString()} />
+								<ListItem
+									title={timedAccess ? "Access mode" : "Grant TTL"}
+									subtitle={
+										timedAccess
+											? approval.accessExpiresAt
+												? `Reusable until ${new Date(approval.accessExpiresAt).toLocaleString()}`
+												: `Reusable for ${formatDuration(timedAccess)} after approval`
+											: approval.grantReadyAt
+												? "Grant sealed for machine retrieval"
+												: "Short-lived grant minted only after approval"
+									}
+								/>
+						</List>
+						<BlockTitle>Requested Refs</BlockTitle>
+						<List strong inset>
 							{approval.secretRefs.map((ref) => (
-								<li className={missingApprovalRefs.includes(ref) ? "missing" : undefined} key={ref}>
-									<strong>{ref}</strong>
-									<span>
-										{missingApprovalRefs.includes(ref)
-											? "Needs value. This approval will create and grant it."
-											: timedAccess
-												? "Stored in vault. Reusable during the approved window."
-												: "Stored in vault"}
-									</span>
-								</li>
+								<ListItem
+									key={ref}
+									title={ref}
+										media={<KeyRound size={22} />}
+										after={missingApprovalRefs.includes(ref) ? "Missing" : undefined}
+										subtitle={
+											missingApprovalRefs.includes(ref)
+												? "Needs value. This approval will create and grant it."
+												: timedAccess
+													? "Stored in vault. Reusable during the approved window."
+													: "Stored in vault"
+										}
+									/>
 							))}
-						</ul>
+						</List>
 						{missingApprovalRefs.length > 0 ? (
-							<div className="missing-secret-panel">
-								<h2>Create missing secrets</h2>
-								<p>
-									The agent requested references that are not in this vault yet. Values entered here stay
-									on this device until you approve. Approval encrypts, saves, and grants them in one step.
-								</p>
-								<div className="vault-panel">
-									<div>
-										<strong>
-											{vaultKey
-												? "Vault unlocked"
-												: getPasskeyVaultRecord()
-													? "Vault locked"
-													: "No passkey vault on this device"}
-										</strong>
-										<span>
-											{vaultKey
+							<>
+								<BlockTitle>Create Missing Secrets</BlockTitle>
+								<Block strong inset>
+									The agent requested references that are not in this vault yet. Values entered here stay on this device until you approve.
+								</Block>
+								<List strong inset>
+									<ListItem
+										title={vaultKey ? "Vault unlocked" : getPasskeyVaultRecord() ? "Vault locked" : "No passkey vault on this device"}
+										subtitle={
+											vaultKey
 												? "New values will be encrypted before upload."
 												: getPasskeyVaultRecord()
 													? "Approving will ask you to unlock with your passkey."
-													: "Approving will first create a passkey-protected vault key."}
-										</span>
-									</div>
-								</div>
-								<div className="missing-secret-list">
-									{missingApprovalRefs.map((ref) => (
-										<div className="missing-secret-editor" key={ref}>
-											<div className="missing-secret-title">
-												<div>
-													<span>New secret ref</span>
-													<strong>{ref}</strong>
-												</div>
-												<em>Needs value</em>
-											</div>
-											<label>
-												Secret value
-												<input
+													: "Approving will first create a passkey-protected vault key."
+										}
+										media={<LockKeyhole size={22} />}
+									/>
+								</List>
+								{missingApprovalRefs.map((ref) => {
+									const options = getPendingSecretOptions(ref);
+									return (
+										<React.Fragment key={ref}>
+											<BlockTitle>{ref}</BlockTitle>
+											<List strong inset>
+												<ListInput
+													label="Secret value"
+													type={options.show ? "text" : "password"}
 													autoCapitalize="none"
 													autoComplete="new-password"
-													spellCheck={false}
-													type={getPendingSecretOptions(ref).show ? "text" : "password"}
+													spellCheck="false"
 													value={approvalSecretValues[ref] ?? ""}
 													onChange={(event) =>
 														setApprovalSecretValues((current) => ({ ...current, [ref]: event.target.value }))
 													}
 													placeholder="Type, paste, or generate"
 												/>
-											</label>
-											<div className="password-tools">
-												<label className="toggle-row">
-													<input
-														type="checkbox"
-														checked={getPendingSecretOptions(ref).symbols}
-														onChange={(event) => updatePendingSecretOptions(ref, { symbols: event.target.checked })}
-													/>
-													<span>Allow symbols</span>
-												</label>
-												<button className="secondary" type="button" onClick={() => generateMissingSecret(ref)}>
-													Generate secure password
-												</button>
-											</div>
-											<div className="password-tools">
-												<button
-													className="secondary"
-													type="button"
-													disabled={!approvalSecretValues[ref]}
-													onClick={() => updatePendingSecretOptions(ref, { show: !getPendingSecretOptions(ref).show })}
-												>
-													{getPendingSecretOptions(ref).show ? "Hide" : "Show"}
-												</button>
-												<button
-													className="secondary"
-													type="button"
-													disabled={!approvalSecretValues[ref]}
+												<ListItem
+													title="Allow symbols"
+													after={<Toggle checked={options.symbols} onChange={(event) => updatePendingSecretOptions(ref, { symbols: event.target.checked })} />}
+												/>
+												<ListItem
+													title="Generate secure password"
+													link
+													media={<Sparkles size={22} />}
+													onClick={() => generateMissingSecret(ref)}
+												/>
+												<ListItem
+													title={options.show ? "Hide value" : "Show value"}
+													link
+													onClick={() => updatePendingSecretOptions(ref, { show: !options.show })}
+												/>
+												<ListItem
+													title={options.copied ? "Copied" : "Copy value"}
+													link
+													media={<Copy size={22} />}
 													onClick={() => void copyMissingSecret(ref)}
-												>
-													{getPendingSecretOptions(ref).copied ? "Copied" : "Copy"}
-												</button>
-												<span className="mini-status">Default: 22 chars, uppercase, lowercase, digits.</span>
-											</div>
-										</div>
-									))}
-								</div>
-							</div>
+													footer="Default generation uses 22 characters with uppercase, lowercase, and digits."
+												/>
+											</List>
+										</React.Fragment>
+									);
+								})}
+							</>
 						) : null}
-						<div className="decision-row">
-							<button disabled={busy || approval.status !== "pending"} onClick={() => decide("deny")} className="deny">
+						<Block inset className="grid grid-cols-2 gap-3">
+							<Button rounded outline disabled={busy || approval.status !== "pending"} onClick={() => decide("deny")}>
 								Deny
-							</button>
-							<button disabled={busy || approval.status !== "pending"} onClick={() => decide("approve")}>
+							</Button>
+							<Button rounded disabled={busy || approval.status !== "pending"} onClick={() => decide("approve")}>
 								Approve
-							</button>
-						</div>
-						<p className="screen-status">{status}</p>
-					</section>
+							</Button>
+						</Block>
+						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{status}</Block>
+					</>
 				) : (
-					<section className="approval loading">
-						<h1>Loading request</h1>
-						<p>{status}</p>
-					</section>
+					<Block strong inset>
+						<h1 className="m-0 text-2xl font-semibold">Loading request</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">{status}</p>
+					</Block>
 				)}
-			</main>
+			</Page>
 		);
 	}
 
 	if (isCloudflareCallback && !cloudflareToken) {
 		return (
-			<main className="auth-page">
-				<section className="auth-card">
-					<Link className="brand-lockup" to="/">
-						<span className="brand-mark" aria-hidden="true">
-							<span className="mark-core">SR</span>
-						</span>
-						<span>Sickrat</span>
-					</Link>
-					<div>
-						<p className="eyebrow">Cloudflare callback</p>
-						<h1>Completing login</h1>
-						<p>Finishing the OAuth exchange and returning you to the console.</p>
-					</div>
-					<p className="screen-status">{cloudflareStatus}</p>
-				</section>
-			</main>
+			<Page>
+				<Navbar title="Sickrat" subtitle="Vault setup" />
+				<Block strong inset>
+					<h1 className="m-0 text-3xl font-bold">Completing login</h1>
+					<p className="mb-0 text-black/55 dark:text-white/55">Finishing sign-in and returning you to the app.</p>
+				</Block>
+				<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{cloudflareStatus}</Block>
+			</Page>
 		);
 	}
 
 	if (route === "login") {
 		return (
-			<main className="auth-page">
-				<section className="auth-card">
-					<Link className="brand-lockup" to="/">
-						<span className="brand-mark" aria-hidden="true">
-							<span className="mark-core">SR</span>
-						</span>
-						<span>Sickrat</span>
-					</Link>
-					<div>
-						<p className="eyebrow">CLI provisioned</p>
-						<h1>Open your vault console</h1>
-						<p>This vault is owned by the Cloudflare account that deployed it with the Sickrat CLI.</p>
-					</div>
-					<div className="actions">
-						<Link className="button-link" to="/">Open Console</Link>
-						<a className="button-link secondary-link" href="https://sickrat.dev">
-							Back Home
-						</a>
-					</div>
-					<p className="screen-status">Cloudflare login and vault creation now happen in the CLI.</p>
-				</section>
-			</main>
+			<Page>
+				<Navbar title="Sickrat" subtitle="Private vault" />
+				<Block strong inset>
+					<h1 className="m-0 text-3xl font-bold">Open your vault</h1>
+					<p className="mb-0 text-black/55 dark:text-white/55">This private vault is ready for approvals from your phone.</p>
+				</Block>
+				<Block inset className="grid grid-cols-2 gap-3">
+					<Button rounded onClick={() => navigate("/")}>Open Console</Button>
+					<Button rounded outline component="a" href="https://sickrat.dev">Back Home</Button>
+				</Block>
+				<Block inset className="text-center text-sm text-black/45 dark:text-white/45">Vault setup is handled by the Sickrat command line.</Block>
+			</Page>
 		);
 	}
 
@@ -2093,179 +2112,143 @@ function AppShell({
 		!isCloudflareCallback
 	) {
 		return (
-			<main className="auth-page">
-				<section className="auth-card">
-					<Link className="brand-lockup" to="/">
-						<span className="brand-mark" aria-hidden="true">
-							<span className="mark-core">SR</span>
-						</span>
-						<span>Sickrat</span>
-					</Link>
-					<div>
-						<p className="eyebrow">First launch</p>
-						<h1>Enable push approvals.</h1>
-						<p>
-							Sickrat uses push notifications for pairing requests and agent approval prompts. Enable
-							push on this installed app before pairing an agent machine.
-						</p>
-					</div>
-					<div className="actions">
-						<button disabled={busy} onClick={enablePush}>
-							{busy ? "Enabling" : "Enable Push"}
-						</button>
-						<a className="button-link secondary-link" href="https://sickrat.dev/skills/sickrat.md">
-							Agent Skill
-						</a>
-					</div>
-					<p className="screen-status">{status}</p>
-				</section>
-			</main>
+			<Page>
+				<Navbar title="Sickrat" subtitle="First launch" />
+				<Block strong inset>
+					<h1 className="m-0 text-3xl font-bold">Enable push approvals.</h1>
+					<p className="mb-0 text-black/55 dark:text-white/55">
+						Sickrat uses push notifications for pairing requests and agent approval prompts. Enable push on this installed app before pairing an agent machine.
+					</p>
+				</Block>
+				<Block inset className="grid grid-cols-2 gap-3">
+					<Button rounded disabled={busy} onClick={enablePush}>{busy ? "Enabling" : "Enable Push"}</Button>
+					<Button rounded outline component="a" href="https://sickrat.dev/skills/sickrat.md">Agent Skill</Button>
+				</Block>
+				<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{status}</Block>
+			</Page>
 		);
 	}
 
 	{
 		const renderCloudflareControls = () => (
-			<section className="console app-panel cloudflare-panel">
-				<div>
-					<h2>CLI Control Plane</h2>
-					<p>This vault was deployed by `sickrat vault create`. Cloudflare account access stays in the CLI; this PWA manages secrets, devices, and approvals for the deployed vault.</p>
-					<div className="request-meta">
-						<div>
-							<span>Vault</span>
-							<strong>{capabilities?.vault.name ?? "default"}</strong>
-						</div>
-						<div>
-							<span>Origin</span>
-							<strong>{window.location.origin}</strong>
-						</div>
-						<div>
-							<span>D1</span>
-							<strong>{capabilities?.database.configured ? "Configured" : "Missing binding"}</strong>
-						</div>
-					</div>
-				</div>
-				<div className="actions">
-					<a className="button-link secondary-link" href="https://sickrat.dev/skills/sickrat.md">
-						Agent Skill
-					</a>
-				</div>
-			</section>
+			<>
+				<BlockTitle>Vault Health</BlockTitle>
+				<List strong inset>
+					<ListItem title="Vault" after={capabilities?.vault.name ?? "default"} media={<Cloud size={22} />} />
+					<ListItem title="Origin" subtitle={window.location.origin} media={<ExternalLink size={22} />} />
+					<ListItem title="Storage" after={capabilities?.database.configured ? "Ready" : "Needs setup"} media={<Database size={22} />} />
+					<ListItem link title="Agent Skill" subtitle="Open Sickrat setup instructions" media={<BookOpen size={22} />} component="a" href="https://sickrat.dev/skills/sickrat.md" />
+				</List>
+			</>
 		);
 
 		const renderVaultKeyPanel = () => (
-			<section className="console app-panel">
-				<div>
-					<h2>Vault Key</h2>
-					<p>{secretStatus}</p>
-					<div className="vault-panel">
-						<div>
-							<strong>{vaultKey ? "Vault unlocked" : getPasskeyVaultRecord() ? "Vault locked" : "No passkey vault on this device"}</strong>
-							<span>
-								{vaultKey
-									? "This browser can encrypt new refs until the app reloads."
-									: getPasskeyVaultRecord()
-										? "Unlock with your platform passkey to add secrets."
-										: "Create a passkey-protected vault key before adding secrets."}
-							</span>
-						</div>
-					</div>
-				</div>
-				<div className="actions">
+			<>
+				<BlockTitle>Vault Key</BlockTitle>
+				<List strong inset>
+					<ListItem
+						title={vaultKey ? "Vault unlocked" : getPasskeyVaultRecord() ? "Vault locked" : "No passkey vault on this device"}
+						subtitle={
+							vaultKey
+								? "This browser can encrypt new refs until the app reloads."
+								: getPasskeyVaultRecord()
+									? "Unlock with your platform passkey to add secrets."
+									: "Create a passkey-protected vault key before adding secrets."
+						}
+						footer={secretStatus}
+						media={<LockKeyhole size={22} />}
+					/>
+				</List>
+				<Block inset>
 					{vaultKey ? (
-						<button className="secondary" type="button" disabled={busy} onClick={resetVaultKey}>
+						<Button rounded outline type="button" disabled={busy} onClick={resetVaultKey}>
 							Reset Key
-						</button>
+						</Button>
 					) : getPasskeyVaultRecord() ? (
-						<button type="button" disabled={busy} onClick={unlockVaultKey}>
+						<Button rounded type="button" disabled={busy} onClick={unlockVaultKey}>
 							Unlock
-						</button>
+						</Button>
 					) : (
-						<button type="button" disabled={busy} onClick={setupVaultKey}>
+						<Button rounded type="button" disabled={busy} onClick={setupVaultKey}>
 							Create Passkey
-						</button>
+						</Button>
 					)}
-				</div>
-			</section>
+				</Block>
+			</>
 		);
 
 		const renderSecretForm = () => (
-			<form className="secret-form" onSubmit={saveSecret}>
-				<label>
-					Label
-					<input
+			<form onSubmit={saveSecret}>
+				<List strong inset>
+					<ListInput
+						label="Label"
+						type="text"
 						autoComplete="off"
 						value={secretForm.label}
 						onChange={(event) => setSecretForm((current) => ({ ...current, label: event.target.value }))}
 						placeholder="OpenAI API key"
 					/>
-				</label>
-				<label>
-					Reference
-					<input
+					<ListInput
+						label="Reference"
+						type="text"
 						autoCapitalize="none"
 						autoComplete="off"
 						value={secretForm.ref}
 						onChange={(event) => setSecretForm((current) => ({ ...current, ref: event.target.value }))}
 						placeholder="openai/api-key or prod/database/url"
 					/>
-				</label>
-				<label>
-					Secret value
-					<textarea
+					<ListInput
+						label="Secret value"
+						type="textarea"
 						autoCapitalize="none"
 						autoComplete="off"
 						value={secretForm.value}
 						onChange={(event) => setSecretForm((current) => ({ ...current, value: event.target.value }))}
 						placeholder="Paste secret value"
-						rows={4}
 					/>
-				</label>
-				<button disabled={busy || !vaultKey}>{busy ? "Saving" : "Encrypt And Save"}</button>
+				</List>
+				<Block inset>
+					<Button rounded type="submit" disabled={busy || !vaultKey}>{busy ? "Saving" : "Encrypt And Save"}</Button>
+				</Block>
 			</form>
 		);
 
 		const renderPairForm = () => (
 			<>
-				<form className="secret-form" onSubmit={loadPairingCode}>
-					<label>
-						Pairing code
-						<input
+				<form onSubmit={loadPairingCode}>
+					<List strong inset>
+						<ListInput
+							label="Pairing code"
+							type="text"
 							inputMode="numeric"
 							autoComplete="one-time-code"
 							value={pairingCode}
 							onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
 							placeholder="482913"
 						/>
-					</label>
-					<button disabled={busy}>{busy ? "Loading" : "Load Device"}</button>
+					</List>
+					<Block inset>
+						<Button rounded type="submit" disabled={busy}>{busy ? "Loading" : "Load Device"}</Button>
+					</Block>
 				</form>
 				{pairing ? (
-					<div className="pairing-card">
-						<div className="request-meta">
-							<div>
-								<span>Device</span>
-								<strong>{pairing.label}</strong>
-							</div>
-							<div>
-								<span>Device ID</span>
-								<strong>{pairing.deviceId}</strong>
-							</div>
-							<div>
-								<span>Expires</span>
-								<strong>{new Date(pairing.expiresAt).toLocaleString()}</strong>
-							</div>
-						</div>
-						<div className="decision-row">
-							<button className="secondary" type="button" onClick={() => setPairing(null)}>
+					<>
+						<List strong inset>
+							<ListItem title="Device" after={pairing.label} media={<Laptop size={22} />} />
+							<ListItem title="Device ID" subtitle={pairing.deviceId} />
+							<ListItem title="Expires" after={new Date(pairing.expiresAt).toLocaleString()} />
+						</List>
+						<Block inset className="grid grid-cols-2 gap-3">
+							<Button rounded outline type="button" onClick={() => setPairing(null)}>
 								Cancel
-							</button>
-							<button disabled={busy || pairing.expired || Boolean(pairing.approvedAt)} onClick={approvePairing}>
+							</Button>
+							<Button rounded disabled={busy || pairing.expired || Boolean(pairing.approvedAt)} onClick={approvePairing}>
 								{pairing.approvedAt ? "Paired" : "Approve Device"}
-							</button>
-						</div>
-					</div>
+							</Button>
+						</Block>
+					</>
 				) : null}
-				<p className="screen-status">{pairingStatus}</p>
+				<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{pairingStatus}</Block>
 			</>
 		);
 
@@ -2283,466 +2266,361 @@ function AppShell({
 		if (route === "app") {
 			routeContent = (
 				<>
-					<section className="app-command">
-						<div>
-							<p className="eyebrow">Owner console</p>
-							<h1>Dashboard</h1>
-							<p className="lede">
-								Manage encrypted refs, admitted devices, phone approvals, and account-owned Cloudflare
-								resources from one owner console.
-							</p>
-						</div>
-						<div className="app-status-board" aria-label="Console status">
-							<div>
-								<span>Account</span>
-								<strong>{cloudflareState}</strong>
-							</div>
-							<div>
-								<span>Push</span>
-								<strong>{pushState}</strong>
-							</div>
-							<div>
-								<span>Vault Key</span>
-								<strong>{vaultKeyState}</strong>
-							</div>
-						</div>
-					</section>
-					<section className="dashboard-grid">
-						<Link className="dashboard-card" to="/vaults">
-							<span>Vault</span>
-							<strong>{vaultName}</strong>
-							<small>{capabilities?.database.configured ? "D1 binding configured" : "D1 binding missing"}</small>
-						</Link>
-						<Link className="dashboard-card" to="/secrets">
-							<span>Secrets</span>
-							<strong>{secrets.length}</strong>
-							<small>Encrypted refs stored in D1</small>
-						</Link>
-						<Link className="dashboard-card" to="/approvals">
-							<span>Pending approvals</span>
-							<strong>{pendingApprovals.length}</strong>
-							<small>Approve a grant, not a permanent credential</small>
-						</Link>
-						<Link className="dashboard-card" to="/devices">
-							<span>Active devices</span>
-							<strong>{activeDevices.length}</strong>
-							<small>Paired CLIs that can request access</small>
-						</Link>
-					</section>
-					<section className="app-grid">
-						{renderVaultKeyPanel()}
-						<section className="console app-panel">
-							<div>
-								<h2>Push Approvals</h2>
-								<p>{status}</p>
-							</div>
-							<div className="actions">
-								<button disabled={busy || Boolean(subscription)} onClick={enablePush}>
-									{subscription ? "Push Enabled" : "Enable Push"}
-								</button>
-								<button disabled={busy || !subscription} onClick={sendTest}>
-									Send Test
-								</button>
-							</div>
-						</section>
-						<section className="console app-panel">
-							<div>
-								<h2>Install Health</h2>
-								<InstallPrompt />
-							</div>
-						</section>
-					</section>
+					<Card outline header="Private vault" footer="Approve exact secret refs from paired machines without sending plaintext through chat.">
+						<div className="text-3xl font-bold leading-tight">Ready when agents ask</div>
+					</Card>
+					<BlockTitle>Status</BlockTitle>
+					<List strong inset>
+						<ListItem title="Vault" after={cloudflareState} media={<Cloud size={22} />} />
+						<ListItem title="Push" after={pushState} media={<Bell size={22} />} />
+						<ListItem title="Vault Key" after={vaultKeyState} media={<LockKeyhole size={22} />} />
+					</List>
+					<BlockTitle>Overview</BlockTitle>
+					<List strong inset>
+						<ListItem link onClick={() => navigate("/vaults")} title="Vault" after={vaultName} subtitle={capabilities?.database.configured ? "Private deployment healthy" : "Vault storage needs setup"} media={<Cloud size={22} />} />
+						<ListItem link onClick={() => navigate("/secrets")} title="Secrets" after={String(secrets.length)} subtitle="Encrypted refs saved in your vault" media={<KeyRound size={22} />} />
+						<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
+						<ListItem link onClick={() => navigate("/devices")} title="Active devices" after={String(activeDevices.length)} subtitle="Paired machines that can request access" media={<Laptop size={22} />} />
+					</List>
+					{renderVaultKeyPanel()}
+					<BlockTitle>Push Approvals</BlockTitle>
+					<List strong inset>
+						<ListItem title={subscription ? "Push Enabled" : "Push Setup"} subtitle={subscription ? "Notifications are ready. New agent requests open directly on this phone." : status} media={<Bell size={22} />} />
+					</List>
+					<Block inset className="grid grid-cols-2 gap-3">
+						<Button rounded disabled={busy || Boolean(subscription)} onClick={enablePush}>{subscription ? "Push Enabled" : "Enable Push"}</Button>
+						<Button rounded outline disabled={busy || !subscription} onClick={sendTest}>Send Test</Button>
+					</Block>
+					<BlockTitle>Install Health</BlockTitle>
+					<InstallPrompt />
+					<BlockTitle>Storyboard</BlockTitle>
+					<List strong inset>
+						<ListItem link onClick={() => navigate("/storyboard")} title="Open Storyboard" subtitle="Review the main mobile states with realistic data." media={<Smartphone size={22} />} />
+					</List>
 				</>
 			);
 		} else if (route === "vaults") {
 			routeContent = (
-				<section className="route-panel">
-					<div className="route-heading">
-						<p className="eyebrow">User-owned deployment</p>
-						<h1>Vaults</h1>
-						<p>Vaults are isolated Sickrat deployments created by the CLI in your Cloudflare account.</p>
-					</div>
-					<div className="app-grid">
-						<section className="console app-panel">
-							<div>
-								<h2>Current Vault</h2>
-								<div className="request-meta">
-									<div>
-										<span>Name</span>
-										<strong>{vaultName}</strong>
-									</div>
-									<div>
-										<span>Origin</span>
-										<strong>{window.location.origin}</strong>
-									</div>
-									<div>
-										<span>D1</span>
-										<strong>{capabilities?.database.configured ? "Configured" : "Missing binding"}</strong>
-									</div>
-									<div>
-										<span>Realtime</span>
-										<strong>Durable Object channel configured by Worker binding</strong>
-									</div>
-								</div>
-							</div>
-						</section>
-						{renderCloudflareControls()}
-					</div>
-				</section>
+				<>
+					<Block strong inset>
+						<h1 className="m-0 text-3xl font-bold">Vault</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">This phone app controls your private vault. Keep it installed for approvals.</p>
+					</Block>
+					<BlockTitle>Current Vault</BlockTitle>
+					<List strong inset>
+						<ListItem title="Name" after={vaultName} media={<Cloud size={22} />} />
+						<ListItem title="Origin" subtitle={window.location.origin} media={<ExternalLink size={22} />} />
+						<ListItem title="Storage" after={capabilities?.database.configured ? "Ready" : "Needs setup"} media={<Database size={22} />} />
+						<ListItem title="Realtime" after={subscription ? "Connected" : "Enable push"} media={<Bell size={22} />} />
+					</List>
+					{renderCloudflareControls()}
+				</>
 			);
 		} else if (route === "secrets") {
 			routeContent = (
-				<section className="route-panel">
-					<div className="route-heading">
-						<p className="eyebrow">Encrypted references</p>
-						<h1>Secrets</h1>
-						<p>Values are encrypted locally before upload. Agents can request missing refs and you can create them at approval time.</p>
-					</div>
-					<div className="app-grid">
-						{renderVaultKeyPanel()}
-						<section className="console app-panel">
-							<div>
-								<h2>Add Or Update Ref</h2>
-								{renderSecretForm()}
-								<p className="screen-status">{secretStatus}</p>
-							</div>
-						</section>
-						<section className="console app-panel stored-refs-panel">
-							<div>
-								<h2>Stored References</h2>
-								<label className="select-label">
-									Search
-									<input
-										autoCapitalize="none"
-										autoComplete="off"
-										value={secretQuery}
-										onChange={(event) => setSecretQuery(event.target.value)}
-										placeholder="Filter refs"
-									/>
-								</label>
-								{filteredSecrets.length > 0 ? (
-									<ul className="secret-list">
-										{filteredSecrets.map((secret) => (
-											<li key={secret.id}>
-												<strong>{secret.label}</strong>
-												<span>{secret.ref}</span>
-											</li>
-										))}
-									</ul>
-								) : (
-									<p className="screen-status">No matching encrypted refs.</p>
-								)}
-							</div>
-						</section>
-					</div>
-				</section>
+				<>
+					<Block strong inset>
+						<h1 className="m-0 text-3xl font-bold">Secrets</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">Values are encrypted on this device. Agents ask for refs; you decide what gets released.</p>
+					</Block>
+					{renderVaultKeyPanel()}
+					<BlockTitle>Add Or Update Ref</BlockTitle>
+					{renderSecretForm()}
+					<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{secretStatus}</Block>
+					<BlockTitle>Stored References</BlockTitle>
+					<List strong inset>
+						<ListInput
+							label="Search"
+							type="text"
+							autoCapitalize="none"
+							autoComplete="off"
+							value={secretQuery}
+							onChange={(event) => setSecretQuery(event.target.value)}
+							placeholder="Filter refs"
+							media={<Search size={22} />}
+						/>
+						{filteredSecrets.length > 0 ? (
+							filteredSecrets.map((secret) => (
+								<ListItem key={secret.id} title={secret.label} subtitle={secret.ref} media={<KeyRound size={22} />} />
+							))
+						) : (
+							<ListItem title="No matching encrypted refs" />
+						)}
+					</List>
+				</>
 			);
 		} else if (route === "approvals") {
 			routeContent = (
-				<section className="route-panel">
-					<div className="route-heading">
-						<p className="eyebrow">Grant history</p>
-						<h1>Approvals</h1>
-						<p>Review pending and decided requests from paired devices.</p>
-					</div>
-					<div className="segmented-control">
-						{(["pending", "approved", "denied", "all"] as const).map((statusOption) => (
-							<button
-								className={approvalFilter === statusOption ? "active" : "secondary"}
-								key={statusOption}
-								type="button"
-								onClick={() => setApprovalFilter(statusOption)}
-							>
-								{statusOption}
-							</button>
-						))}
-					</div>
-					<ul className="approval-list">
+				<>
+					<Block strong inset>
+						<h1 className="m-0 text-3xl font-bold">Grants</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">Review requests from paired machines. Pending grants can be approved or denied.</p>
+					</Block>
+					<Block inset>
+						<Segmented strong>
+							{(["pending", "approved", "denied", "all"] as const).map((statusOption) => (
+								<SegmentedButton key={statusOption} active={approvalFilter === statusOption} onClick={() => setApprovalFilter(statusOption)}>
+									{statusOption}
+								</SegmentedButton>
+							))}
+						</Segmented>
+					</Block>
+					<List strong inset>
 						{approvals.map((item) => (
-							<li
-								className={swipedApprovalId === item.id ? "swiped" : undefined}
+							<ListItem
 								key={item.id}
-								onTouchStart={(event) => handleApprovalTouchStart(item, event)}
-								onTouchEnd={(event) => handleApprovalTouchEnd(item, event)}
-							>
-								<div className="approval-row-actions" aria-hidden={swipedApprovalId !== item.id}>
-									{item.status === "pending" ? (
-										<>
-											<button
-												className="quick-deny"
-												disabled={busy}
-												type="button"
-												onClick={() => void decideApprovalRequest(item, "deny")}
-											>
-												Deny
-											</button>
-											<button
-												className="quick-approve"
-												disabled={busy}
-												type="button"
-												onClick={() => void decideApprovalRequest(item, "approve")}
-											>
-												Approve
-											</button>
-										</>
-									) : (
-										<button className="quick-archive" type="button" onClick={() => hideApprovalRow(item.id)}>
-											Archive
-										</button>
-									)}
-								</div>
-								<Link
-									className="approval-row-card"
-									to={`/approvals/${encodeURIComponent(item.id)}`}
-									onClick={() => setSwipedApprovalId(null)}
-								>
-									<span className={`pill ${item.status}`}>{item.status}</span>
-									<strong>{item.command}</strong>
-									<small>{item.message ?? `${item.secretRefs.length} refs requested`}</small>
-									<time>{formatAgo(item.createdAt)}</time>
-									{approvalWaitLabel(item) ? <small>{approvalWaitLabel(item)}</small> : null}
-								</Link>
-							</li>
+								link
+								title={item.command}
+								subtitle={item.message ?? `${item.secretRefs.length} refs requested`}
+								after={formatAgo(item.createdAt)}
+								footer={approvalWaitLabel(item) ?? undefined}
+								media={<ShieldCheck size={22} />}
+								onClick={() => {
+									setSwipedApprovalId(null);
+									navigate(`/approvals/${encodeURIComponent(item.id)}`);
+								}}
+							/>
 						))}
-					</ul>
-					{approvals.length === 0 ? <p className="screen-status">No approvals in this view.</p> : null}
-				</section>
+						{approvals.length === 0 ? <ListItem title="No approvals in this view" /> : null}
+					</List>
+				</>
 			);
 		} else if (route === "approval-detail") {
 			routeContent = (
-				<section className="route-panel">
-					<div className="route-heading">
-						<p className="eyebrow">Approval event</p>
-						<h1>Request detail</h1>
-						<p>Inspect the command, device, message, and requested refs.</p>
-					</div>
+				<>
+					<Block strong inset>
+						<h1 className="m-0 text-3xl font-bold">Request detail</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">Inspect the command, device, message, and requested refs.</p>
+					</Block>
 					{approval ? (
-						<section className="console app-panel">
-							<div>
-								<div className="approval-header compact">
-									<h2>{approval.device}</h2>
-									<span className={`pill ${approval.status}`}>{approval.status}</span>
-								</div>
-								<div className="request-meta">
-									<div>
-										<span>Command</span>
-										<strong>{approval.command}</strong>
-									</div>
-									{approval.message ? (
-										<div>
-											<span>Message</span>
-											<strong>{approval.message}</strong>
-										</div>
-									) : null}
-									<div>
-										<span>Created</span>
-										<strong>{formatAgo(approval.createdAt)}</strong>
-										<small>{new Date(approval.createdAt).toLocaleString()}</small>
-									</div>
-									{approvalWaitLabel(approval) ? (
-										<div>
-											<span>Approval wait</span>
-											<strong>{approvalWaitLabel(approval)}</strong>
-										</div>
-									) : null}
-									<div>
-										<span>Decided</span>
-										<strong>{approval.decidedAt ? new Date(approval.decidedAt).toLocaleString() : "Pending"}</strong>
-									</div>
-								</div>
-								<ul className="secret-list">
-									{approval.secretRefs.map((ref) => (
-										<li key={ref}>
-											<strong>{ref}</strong>
-											<span>Requested ref</span>
-										</li>
-									))}
-								</ul>
-							</div>
-							<div className="actions">
+						<>
+							<BlockTitle>{approval.device}</BlockTitle>
+							<List strong inset>
+								<ListItem title="Status" after={approval.status} media={<ShieldCheck size={22} />} />
+								<ListItem title="Command" subtitle={approval.command} />
+								{approval.message ? <ListItem title="Message" subtitle={approval.message} /> : null}
+								<ListItem title="Created" after={formatAgo(approval.createdAt)} footer={new Date(approval.createdAt).toLocaleString()} />
+								{approvalWaitLabel(approval) ? <ListItem title="Approval wait" after={approvalWaitLabel(approval) ?? undefined} /> : null}
+								<ListItem title="Decided" after={approval.decidedAt ? new Date(approval.decidedAt).toLocaleString() : "Pending"} />
+							</List>
+							<BlockTitle>Requested Refs</BlockTitle>
+							<List strong inset>
+								{approval.secretRefs.map((ref) => (
+									<ListItem key={ref} title={ref} subtitle="Requested ref" media={<KeyRound size={22} />} />
+								))}
+							</List>
+							<Block inset className="grid grid-cols-2 gap-3">
 								{approval.status === "pending" ? (
-									<Link className="button-link" to={`/approve/${encodeURIComponent(approval.id)}`}>
-										Open Approval
-									</Link>
+									<Button rounded onClick={() => navigate(`/approve/${encodeURIComponent(approval.id)}`)}>Open Approval</Button>
 								) : null}
-								<Link className="button-link secondary-link" to="/approvals">
-									Back To Approvals
-								</Link>
-							</div>
-						</section>
+								<Button rounded outline onClick={() => navigate("/approvals")}>Approvals</Button>
+							</Block>
+						</>
 					) : (
-						<p className="screen-status">{status}</p>
+						<Block strong inset>{status}</Block>
 					)}
-				</section>
+				</>
 			);
 		} else if (route === "devices") {
 			routeContent = (
-				<section className="route-panel">
-					<div className="route-heading">
-						<p className="eyebrow">Device admission</p>
-						<h1>Devices</h1>
-						<p>Pair CLIs that can request grants. Revoked devices cannot request new approvals.</p>
-					</div>
-					<div className="app-grid">
-						<section className="console app-panel">
-							<div>
-								<h2>Pair CLI</h2>
-								<p>Run <code>sickrat pair {window.location.origin}</code>, then enter the six-digit code here.</p>
-								{renderPairForm()}
-							</div>
-						</section>
-						<section className="console app-panel stored-refs-panel">
-							<div>
-								<h2>Paired Devices</h2>
-								{devices.length > 0 ? (
-									<ul className="device-list">
-										{devices.map((device) => (
-											<li key={device.id}>
-												<div>
-													<strong>{device.label}</strong>
-													<span>{device.id}</span>
-													<small>{device.revokedAt ? `Revoked ${new Date(device.revokedAt).toLocaleString()}` : `Paired ${new Date(device.createdAt).toLocaleString()}`}</small>
-												</div>
-												{device.revokedAt ? <span className="pill denied">revoked</span> : <button className="secondary" disabled={busy} onClick={() => revokeDevice(device.id)}>Revoke</button>}
-											</li>
-										))}
-									</ul>
-								) : (
-									<p className="screen-status">No paired devices yet.</p>
-								)}
-							</div>
-						</section>
-					</div>
-				</section>
+				<>
+					<Block strong inset>
+						<h1 className="m-0 text-3xl font-bold">Machines</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">Only paired machines can ask this phone to release grants.</p>
+					</Block>
+					<BlockTitle>Pair A Machine</BlockTitle>
+					<Block strong inset>
+						Run <code>sickrat pair {window.location.origin}</code>, then enter the six-digit code here.
+					</Block>
+					{renderPairForm()}
+					<BlockTitle>Paired Devices</BlockTitle>
+					<List strong inset>
+						{devices.length > 0 ? (
+							devices.map((device) => (
+								<ListItem
+									key={device.id}
+									title={device.label}
+									subtitle={device.id}
+									footer={device.revokedAt ? `Revoked ${new Date(device.revokedAt).toLocaleString()}` : `Paired ${new Date(device.createdAt).toLocaleString()}`}
+									media={<Laptop size={22} />}
+									after={
+										device.revokedAt ? (
+											<Badge colors={{ bg: "bg-red-500" }}>revoked</Badge>
+										) : (
+											<Button small rounded outline disabled={busy} onClick={() => revokeDevice(device.id)}>Revoke</Button>
+										)
+									}
+								/>
+							))
+						) : (
+							<ListItem title="No paired devices yet" />
+						)}
+					</List>
+				</>
 			);
 		} else {
 			routeContent = (
-				<section className="route-panel">
-					<div className="route-heading">
-						<p className="eyebrow">Console operations</p>
-						<h1>Settings</h1>
-						<p>Manage install state, push approvals, and the local vault key for this CLI-provisioned vault.</p>
-					</div>
-					<div className="app-grid">
-						{renderCloudflareControls()}
-						<section className="console app-panel">
-							<div>
-								<h2>PWA Install</h2>
-								<InstallPrompt />
-							</div>
-						</section>
-						<section className="console app-panel">
-							<div>
-								<h2>Push Approvals</h2>
-								<p>{status}</p>
-							</div>
-							<div className="actions">
-								<button disabled={busy || Boolean(subscription)} onClick={enablePush}>
-									{subscription ? "Push Enabled" : "Enable Push"}
-								</button>
-								<button disabled={busy || !subscription} onClick={sendTest}>
-									Send Test
-								</button>
-							</div>
-						</section>
-						{renderVaultKeyPanel()}
-					</div>
-				</section>
+				<>
+					<Block strong inset>
+						<h1 className="m-0 text-3xl font-bold">Settings</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">Manage install state, push approvals, and the passkey-protected vault key.</p>
+					</Block>
+					{renderCloudflareControls()}
+					<BlockTitle>App Install</BlockTitle>
+					<InstallPrompt />
+					<BlockTitle>Push Approvals</BlockTitle>
+					<List strong inset>
+						<ListItem title={subscription ? "Notifications enabled" : "Notifications"} subtitle={subscription ? "Notifications are enabled for new agent requests." : status} media={<Bell size={22} />} />
+					</List>
+					<Block inset className="grid grid-cols-2 gap-3">
+						<Button rounded disabled={busy || Boolean(subscription)} onClick={enablePush}>{subscription ? "Push Enabled" : "Enable Push"}</Button>
+						<Button rounded outline disabled={busy || !subscription} onClick={sendTest}>Send Test</Button>
+					</Block>
+					{renderVaultKeyPanel()}
+					<BlockTitle>Storyboard</BlockTitle>
+					<List strong inset>
+						<ListItem link onClick={() => navigate("/storyboard")} title="Open Storyboard" subtitle="Inspect native mobile states with mocked data." media={<Smartphone size={22} />} />
+					</List>
+				</>
 			);
 		}
 
 		return (
-			<main className="app-page">
-				<div className="console-shell">
-					<section className="console-main">
-						<header className="console-topbar">
-							<Link className="topbar-brand" to="/" aria-label="Sickrat dashboard">SR</Link>
-							<div className="topbar-title">
-								<span>{vaultName} vault</span>
-								<strong>{currentPageTitle}</strong>
-							</div>
-							<Link className="topbar-settings" to="/settings" aria-label="Settings">ST</Link>
-						</header>
-						{updateAvailable ? (
-							<div className="vault-update-banner" role="status">
-								<div>
-									<strong>Vault update available</strong>
-									<span>
-										This vault is running {capabilities?.vault.version}. Latest is {latestRelease?.version}.
-									</span>
-								</div>
-								<code>sickrat vault update {vaultName}</code>
-							</div>
-						) : null}
-						{notificationToast ? (
-							<div className="notification-toast" role="status">
-								<div>
-									<strong>{notificationToast.title}</strong>
-									<span>{notificationToast.body}</span>
-								</div>
-								<div className="notification-actions">
-									<button
-										className="secondary"
-										type="button"
-										onClick={() => setNotificationToast(null)}
-									>
-										Later
-									</button>
-									<button
-										type="button"
-										onClick={() => {
-											const next = notificationToast;
-											setNotificationToast(null);
-											routeNotification(next);
-										}}
-									>
-										Open
-									</button>
-								</div>
-							</div>
-						) : null}
-						{routeContent}
-					</section>
-					<nav className="bottom-nav" aria-label="Primary console navigation">
-						<NavLink end to="/"><span aria-hidden="true">DB</span>Home</NavLink>
-						<NavLink end to="/secrets"><span aria-hidden="true">SK</span>Secrets</NavLink>
-						<NavLink end to="/approvals"><span aria-hidden="true">GR</span>Grants</NavLink>
-						<NavLink end to="/devices"><span aria-hidden="true">MC</span>Devices</NavLink>
-						<NavLink end to="/settings"><span aria-hidden="true">ST</span>Settings</NavLink>
-					</nav>
+			<Page>
+				<div onTouchStart={handleShellTouchStart} onTouchEnd={handleShellTouchEnd}>
+					<Navbar
+						title={currentPageTitle}
+						subtitle={`${vaultName} vault`}
+						className="top-0 sticky"
+						left={
+							<Button clear small rounded onClick={() => setNavigationOpen(true)} aria-label="Open navigation">
+								<Menu size={24} />
+							</Button>
+						}
+						right={
+							<Button clear small rounded onClick={() => navigate("/settings")} aria-label="Settings">
+								<Settings size={22} />
+							</Button>
+						}
+					/>
+					{updateAvailable ? (
+						<Card outline header="Vault update available" footer={`Run: sickrat vault update ${vaultName}`}>
+							This vault is running {capabilities?.vault.version}. Latest is {latestRelease?.version}.
+						</Card>
+					) : null}
+					{routeContent}
+					<div className="h-24" />
+					<Tabbar labels icons className="left-0 bottom-0 fixed">
+						{primaryNavItems.map((item) => {
+							const ItemIcon = item.icon;
+							const active =
+								item.route === "app"
+									? route === "app"
+									: route === item.route || (item.route === "approvals" && route === "approval-detail");
+							return (
+								<TabbarLink
+									key={item.route}
+									active={active}
+									label={item.label}
+									icon={<ItemIcon size={22} />}
+									onClick={() => navigate(item.href)}
+								/>
+							);
+						})}
+					</Tabbar>
+					<Panel side="left" opened={navigationOpen} onBackdropClick={() => setNavigationOpen(false)}>
+						<Page>
+								<Navbar
+									title="Sickrat"
+									right={
+										<Button clear small rounded onClick={() => setNavigationOpen(false)} aria-label="Close navigation">
+											<Menu size={24} />
+										</Button>
+									}
+								/>
+							<BlockTitle>Navigation</BlockTitle>
+							<List strong inset>
+								{primaryNavItems.map((item) => {
+									const ItemIcon = item.icon;
+									const active =
+										item.route === "app"
+											? route === "app"
+											: route === item.route || (item.route === "approvals" && route === "approval-detail");
+									return (
+										<ListItem
+											key={item.route}
+											link
+											title={item.label}
+											after={active ? "Current" : undefined}
+											media={<ItemIcon size={22} />}
+											onClick={() => {
+												setNavigationOpen(false);
+												navigate(item.href);
+											}}
+										/>
+									);
+								})}
+							</List>
+						</Page>
+					</Panel>
+					<Toast
+						opened={Boolean(notificationToast)}
+						position="center"
+						button={
+							<Button
+								clear
+								small
+								onClick={() => {
+									if (!notificationToast) return;
+									const next = notificationToast;
+									setNotificationToast(null);
+									routeNotification(next);
+								}}
+							>
+								Open
+							</Button>
+						}
+					>
+						{notificationToast ? `${notificationToast.title}: ${notificationToast.body}` : ""}
+					</Toast>
 				</div>
-			</main>
+			</Page>
 		);
 	}
 
 }
 
 function App() {
+	useSystemColorScheme();
+
 	return (
-		<InstalledPwaGate>
-			<PwaUpdatePrompt />
-			<Routes>
-				<Route path="/" element={<AppShell route="app" />} />
-				<Route path="/login" element={<AppShell route="login" />} />
-				<Route path="/vaults" element={<AppShell route="vaults" />} />
-				<Route path="/secrets" element={<AppShell route="secrets" />} />
-				<Route path="/approvals" element={<AppShell route="approvals" />} />
-				<Route path="/approvals/:requestId" element={<ApprovalDetailRoute />} />
-				<Route path="/devices" element={<AppShell route="devices" />} />
-				<Route path="/settings" element={<AppShell route="settings" />} />
-				<Route path="/cf/callback" element={<AppShell route="settings" isCloudflareCallback />} />
-				<Route path="/approve/:requestId" element={<ApprovalRoute />} />
-				<Route path="/app" element={<Navigate to="/" replace />} />
-				<Route path="/app/vaults" element={<Navigate to="/vaults" replace />} />
-				<Route path="/app/secrets" element={<Navigate to="/secrets" replace />} />
-				<Route path="/app/approvals" element={<Navigate to="/approvals" replace />} />
-				<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />
-				<Route path="/app/devices" element={<Navigate to="/devices" replace />} />
-				<Route path="/app/settings" element={<Navigate to="/settings" replace />} />
-				<Route path="/pair" element={<Navigate to="/devices" replace />} />
-				<Route path="*" element={<Navigate to="/" replace />} />
-			</Routes>
-		</InstalledPwaGate>
+		<KonstaApp theme="ios" safeAreas>
+			<InstalledPwaGate>
+				<PwaUpdatePrompt />
+				<Routes>
+					<Route path="/" element={<AppShell route="app" />} />
+					<Route path="/login" element={<AppShell route="login" />} />
+					<Route path="/vaults" element={<AppShell route="vaults" />} />
+					<Route path="/secrets" element={<AppShell route="secrets" />} />
+					<Route path="/approvals" element={<AppShell route="approvals" />} />
+					<Route path="/approvals/:requestId" element={<ApprovalDetailRoute />} />
+					<Route path="/devices" element={<AppShell route="devices" />} />
+					<Route path="/settings" element={<AppShell route="settings" />} />
+					<Route path="/storyboard" element={<Storyboard />} />
+					<Route path="/cf/callback" element={<AppShell route="settings" isCloudflareCallback />} />
+					<Route path="/approve/:requestId" element={<ApprovalRoute />} />
+					<Route path="/app" element={<Navigate to="/" replace />} />
+					<Route path="/app/vaults" element={<Navigate to="/vaults" replace />} />
+					<Route path="/app/secrets" element={<Navigate to="/secrets" replace />} />
+					<Route path="/app/approvals" element={<Navigate to="/approvals" replace />} />
+					<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />
+					<Route path="/app/devices" element={<Navigate to="/devices" replace />} />
+					<Route path="/app/settings" element={<Navigate to="/settings" replace />} />
+					<Route path="/pair" element={<Navigate to="/devices" replace />} />
+					<Route path="*" element={<Navigate to="/" replace />} />
+				</Routes>
+			</InstalledPwaGate>
+		</KonstaApp>
 	);
 }
 

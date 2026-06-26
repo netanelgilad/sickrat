@@ -27,9 +27,13 @@ body {
 
 .k-page {
 	height: 100dvh;
-	overflow: auto;
 	-webkit-overflow-scrolling: touch;
 	overscroll-behavior: contain;
+	touch-action: pan-y;
+}
+
+.app-scroll-content {
+	padding-bottom: calc(env(safe-area-inset-bottom) + 2rem);
 }
 
 button,

@@ -2595,12 +2595,14 @@ function AppShell({
 							</Button>
 						}
 					/>
-					{updateAvailable ? (
-						<Card outline header="Vault update available" footer={`Run: sickrat vault update ${vaultName}`}>
-							This vault is running {capabilities?.vault.version}. Latest is {latestRelease?.version}.
-						</Card>
-					) : null}
-					{routeContent}
+					<main className="app-scroll-content">
+						{updateAvailable ? (
+							<Card outline header="Vault update available" footer={`Run: sickrat vault update ${vaultName}`}>
+								This vault is running {capabilities?.vault.version}. Latest is {latestRelease?.version}.
+							</Card>
+						) : null}
+						{routeContent}
+					</main>
 					<Panel side="left" opened={navigationOpen} onBackdropClick={() => setNavigationOpen(false)}>
 						<Page>
 								<Navbar

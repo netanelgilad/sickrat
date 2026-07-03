@@ -26,7 +26,7 @@ Agentic tools often need credentials to do useful work, but handing long-lived s
 - approvals return short-lived encrypted grants for the specific request
 - infrastructure lives in the user's own Cloudflare account
 
-See [docs/architecture.md](docs/architecture.md) and [docs/threat-model.md](docs/threat-model.md) for the deeper design.
+The planned OAuth gateway extends the same approval model to short-lived provider access tokens for connected services. See [docs/oauth-gateway.md](docs/oauth-gateway.md), [docs/architecture.md](docs/architecture.md), and [docs/threat-model.md](docs/threat-model.md) for the deeper design.
 
 ## Repository Layout
 

@@ -7,10 +7,12 @@
 - Cloudflare storage is read by an attacker.
 - A paired CLI device is stolen or copied.
 - Plaintext secrets leak through process environment inspection, shell history, logs, crash reports, or child process behavior.
+- OAuth refresh tokens or access tokens are over-broad, stale, or released with scopes the user did not intend.
 
 ## Security Goals
 
 - Cloudflare stores ciphertext for vault secrets.
+- OAuth refresh tokens are stored as encrypted vault records.
 - CLI devices cannot decrypt vault storage directly.
 - Every secret access requires mobile approval unless the user explicitly configures a policy later.
 - Approval responses are short-lived and single-use.
@@ -31,9 +33,16 @@
 - command
 - working directory
 - requested secret refs
+- requested OAuth provider, account, and scopes
 - timestamp
 - location or IP signal if available
 - previous approval history for this device/ref if useful
+
+## OAuth Token Exchange
+
+OAuth refresh can require the user-owned Worker to act as a transient token-exchange proxy because provider token endpoints often require a client secret or block browser CORS. In that mode, the PWA decrypts the refresh token only after passkey unlock and approval intent, sends it to the user's Worker over HTTPS, and the Worker exchanges it without persisting plaintext token material.
+
+This is a weaker property than static secret approval, where the Worker does not need to see plaintext. Provider connections should record whether refresh is PWA-direct or Worker-assisted, and the approval UI should make scope breadth and account identity visible before release.
 
 ## Local Machine Risks
 

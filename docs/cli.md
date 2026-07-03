@@ -20,9 +20,11 @@ sickrat reveal <ref> [--message <why>]
 sickrat inject -i <template> -o <output>
 ```
 
-## Secret References
+## Sickrat References
 
-Secret refs are arbitrary unique strings inside a vault. URI-style refs are optional, not required.
+Sickrat references use the `sickrat://` URI scheme so the CLI can distinguish values it should resolve from ordinary environment values.
+
+Vault secret refs are arbitrary unique strings inside a vault. URI-style refs are optional for direct `--env KEY=ref` mappings, but env-file auto-detection should use `sickrat://...`.
 
 Examples of valid refs:
 
@@ -33,7 +35,15 @@ prod/database/url
 sickrat://default/openai/api-key
 ```
 
-Env-file auto-detection uses `sickrat://...` as the explicit marker so the CLI can distinguish literal values from secret references without extra config. Direct `--env KEY=ref` mappings accept raw refs without a URI scheme.
+OAuth token requests also use the `sickrat://` scheme with the reserved `oauth` namespace:
+
+```text
+sickrat://oauth/github?scope=repo&scope=read:user
+sickrat://oauth/cloudflare?scope=workers-scripts.write&scope=d1.write
+sickrat://oauth/slack?scope=chat:write
+```
+
+These are request descriptors, not token material. The CLI parses them into typed OAuth resource requests, the PWA shows provider/account/scopes during approval, and the approved grant injects a short-lived access token into the target environment variable.
 
 ## `run`
 
@@ -42,6 +52,7 @@ Env-file auto-detection uses `sickrat://...` as the explicit marker so the CLI c
 Agents should include `--message` whenever they request approval so the phone screen explains the work being performed, not only the secret reference.
 Agents may request a reference that does not exist yet. The PWA should treat that as a just-in-time secret creation flow: collect the value from the user, save it encrypted into the vault, then continue the same approval.
 Agents may also request generated values for new refs when a workflow needs a fresh password or token. Keep that inside `sickrat run` rather than adding provider-specific commands. See [generated-secret-flows.md](generated-secret-flows.md).
+Agents may request OAuth access tokens from connected provider accounts. Keep the approval model the same: the PWA shows provider, account, scopes, command, device, and message, then returns a short-lived encrypted grant after approval. See [oauth-gateway.md](oauth-gateway.md).
 Agents may request a timed local grant with `--access-for <duration>` when a multi-step task is expected to need the same refs repeatedly. The phone approval screen should look distinct from one-shot approvals and should make the duration clear. After approval, the CLI may reuse those refs without another phone prompt until the local grant expires.
 
 Example:
@@ -49,6 +60,7 @@ Example:
 ```sh
 sickrat run --env OPENAI_API_KEY=openai/api-key -- npm test
 sickrat run --env OPENAI_API_KEY=openai/api-key --access-for 30m -- npm test
+sickrat run --env GITHUB_TOKEN='sickrat://oauth/github?scope=repo&scope=read:user' -- npm run inspect-repo
 sickrat run --env-file .env.sickrat -- npm test
 ```
 
@@ -57,19 +69,20 @@ Input `.env.sickrat`:
 ```env
 OPENAI_API_KEY=sickrat://default/openai/api-key
 DATABASE_URL=sickrat://prod/database/url
+GITHUB_TOKEN=sickrat://oauth/github?scope=repo&scope=read:user
 SHOW_BROWSER=true
 ```
 
 Behavior:
 
 - Parse `.env` without mutating it.
-- Request approval for all referenced secrets as one approval bundle.
+- Request approval for all referenced secrets and OAuth tokens as one approval bundle.
 - Preserve ordinary env values from the env file unchanged in the child process.
 - Spawn the child process with resolved environment values.
 - Mask secret values in CLI diagnostics.
 - Never persist plaintext values to disk. Timed local grants may persist encrypted values until expiry so later `sickrat run` calls can reuse the user's approval.
 
-Use narrow, command-specific env files for least-privilege approvals. `sickrat run --env-file` requests every `sickrat://...` reference in the file.
+Use narrow, command-specific env files for least-privilege approvals. `sickrat run --env-file` requests every `sickrat://...` value in the file and leaves ordinary values unchanged.
 
 ## `reveal`
 

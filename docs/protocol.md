@@ -43,6 +43,8 @@ This leaves room for rotation and sharing later without changing the storage for
 
 ## Approval Request
 
+Current secret-only requests use `refs`. The OAuth gateway extends this into typed resource requests while keeping `refs` for older CLIs.
+
 ```json
 {
   "request_id": "apr_...",
@@ -59,6 +61,28 @@ This leaves room for rotation and sharing later without changing the storage for
 }
 ```
 
+Typed requests can mix static secrets and OAuth access tokens:
+
+```json
+{
+  "request_id": "apr_...",
+  "device_id": "dev_...",
+  "command": ["npm", "run", "inspect-repo"],
+  "resource_requests": [
+    { "type": "secret", "ref": "openai/api-key" },
+    {
+      "type": "oauth_token",
+      "provider_id": "github",
+      "scopes": ["repo", "read:user"],
+      "env": "GITHUB_TOKEN"
+    }
+  ],
+  "request_public_key": "base64...",
+  "created_at": "2026-06-26T00:00:00Z",
+  "expires_at": "2026-06-26T00:01:00Z"
+}
+```
+
 ## Approval Response
 
 ```json
@@ -70,7 +94,7 @@ This leaves room for rotation and sharing later without changing the storage for
 }
 ```
 
-The encrypted payload contains the resolved secret values, encrypted to the CLI request public key.
+The encrypted payload contains the resolved secret values and OAuth access tokens, encrypted to the CLI request public key. Refresh tokens are never returned to CLI devices.
 
 ## Denial Response
 

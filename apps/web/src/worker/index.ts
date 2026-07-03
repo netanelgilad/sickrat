@@ -118,6 +118,8 @@ const jsonHeaders = {
 	"content-type": "application/json; charset=utf-8",
 };
 
+const defaultApprovalWaitSeconds = 2 * 60;
+
 const vapidJwtCache = new Map<string, { token: string; expiresAt: number }>();
 
 export class ApprovalHub {
@@ -291,12 +293,13 @@ async function getLatestNotification(subscriptionId: string, env: EnvWithBinding
 		`${approvalSelect}
 		 WHERE subscription_id = ? AND status = 'pending'
 		 ORDER BY created_at DESC
-		 LIMIT 1`,
+		 LIMIT 10`,
 	)
 		.bind(subscriptionId)
-		.first<ApprovalRequestRecord>();
-	if (approval) {
-		const mapped = mapApproval(approval);
+		.all<ApprovalRequestRecord>();
+	const latestApproval = approval.results.find((row) => !isExpiredPendingApproval(row));
+	if (latestApproval) {
+		const mapped = mapApproval(latestApproval);
 		return {
 			type: "approval.requested",
 			approval: mapped,
@@ -500,6 +503,7 @@ async function sendEmptyWebPush(subscription: PushSubscriptionRecord, env: EnvWi
 }
 
 function mapApproval(row: ApprovalRequestRecord) {
+	const expiresAt = approvalExpiresAt(row);
 	return {
 		id: row.id,
 		subscriptionId: row.subscription_id,
@@ -512,11 +516,25 @@ function mapApproval(row: ApprovalRequestRecord) {
 		approvalWaitSeconds: row.approval_wait_seconds,
 		status: row.status,
 		createdAt: row.created_at,
+		expiresAt,
+		expired: row.status === "pending" && Date.parse(expiresAt) <= Date.now(),
 		decidedAt: row.decided_at,
 		ephemeralPublicKey: row.ephemeral_public_key ? (JSON.parse(row.ephemeral_public_key) as JsonWebKey) : null,
 		grantReadyAt: row.grant_ready_at,
 		accessExpiresAt: row.access_expires_at,
 	};
+}
+
+function approvalExpiresAt(row: Pick<ApprovalRequestRecord, "created_at" | "approval_wait_seconds">) {
+	return new Date(Date.parse(row.created_at) + (row.approval_wait_seconds ?? defaultApprovalWaitSeconds) * 1000).toISOString();
+}
+
+function isExpiredPendingApproval(row: Pick<ApprovalRequestRecord, "status" | "created_at" | "approval_wait_seconds">) {
+	return row.status === "pending" && Date.parse(approvalExpiresAt(row)) <= Date.now();
+}
+
+function expiredApprovalResponse() {
+	return json({ error: "Approval request expired." }, { status: 410 });
 }
 
 function mapPairing(row: PairingCodeRecord) {
@@ -1193,11 +1211,12 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			`${approvalSelect}
 			 WHERE subscription_id = ? AND status = 'pending'
 			 ORDER BY created_at DESC
-			 LIMIT 1`,
+			 LIMIT 10`,
 		)
 			.bind(subscription.id)
-			.first<ApprovalRequestRecord>();
-		return json({ approval: approval ? mapApproval(approval) : null });
+			.all<ApprovalRequestRecord>();
+		const latestApproval = approval.results.find((row) => !isExpiredPendingApproval(row));
+		return json({ approval: latestApproval ? mapApproval(latestApproval) : null });
 	}
 
 	if (url.pathname === "/api/pairing/latest" && request.method === "POST") {
@@ -1243,7 +1262,8 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			? env.DB.prepare(`${approvalSelect} WHERE status = ? ORDER BY created_at DESC LIMIT ?`).bind(status, limit)
 			: env.DB.prepare(`${approvalSelect} ORDER BY created_at DESC LIMIT ?`).bind(limit);
 		const result = await statement.all<ApprovalRequestRecord>();
-		return json({ approvals: result.results.map(mapApproval) });
+		const approvals = status === "pending" ? result.results.filter((row) => !isExpiredPendingApproval(row)) : result.results;
+		return json({ approvals: approvals.map(mapApproval) });
 	}
 
 	if (url.pathname.startsWith("/api/approvals/") && !url.pathname.endsWith("/grant") && request.method === "GET") {
@@ -1261,11 +1281,12 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const id = decodeURIComponent(approvalGrantMatch[1]);
 		const row = await env.DB.prepare(
-			"SELECT id, status, grant_ciphertext, grant_ready_at, access_expires_at FROM approval_requests WHERE id = ?",
+			"SELECT id, status, created_at, approval_wait_seconds, grant_ciphertext, grant_ready_at, access_expires_at FROM approval_requests WHERE id = ?",
 		)
 			.bind(id)
-			.first<{ id: string; status: "pending" | "approved" | "denied"; grant_ciphertext: string | null; grant_ready_at: string | null; access_expires_at: string | null }>();
+			.first<{ id: string; status: "pending" | "approved" | "denied"; created_at: string; approval_wait_seconds: number | null; grant_ciphertext: string | null; grant_ready_at: string | null; access_expires_at: string | null }>();
 		if (!row) return json({ error: "Approval request not found." }, { status: 404 });
+		if (isExpiredPendingApproval(row)) return expiredApprovalResponse();
 		return json({
 			requestId: row.id,
 			status: row.status,
@@ -1285,6 +1306,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			.first<ApprovalRequestRecord>();
 		if (!approval) return json({ error: "Approval request not found." }, { status: 404 });
 		if (approval.status !== "pending") return json({ error: `Approval request is already ${approval.status}.` }, { status: 409 });
+		if (isExpiredPendingApproval(approval)) return expiredApprovalResponse();
 
 		const requestedRefs = JSON.parse(approval.secret_refs) as string[];
 		const requestedRefSet = new Set(requestedRefs);
@@ -1346,7 +1368,13 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		}
 		const status = action === "approve" ? "approved" : "denied";
 		const decidedAt = new Date().toISOString();
-		await env.DB.prepare("UPDATE approval_requests SET status = ?, decided_at = ? WHERE id = ?")
+		const approval = await env.DB.prepare(`${approvalSelect} WHERE id = ?`)
+			.bind(id)
+			.first<ApprovalRequestRecord>();
+		if (!approval) return json({ error: "Approval request not found." }, { status: 404 });
+		if (approval.status !== "pending") return json({ error: `Approval request is already ${approval.status}.` }, { status: 409 });
+		if (isExpiredPendingApproval(approval)) return expiredApprovalResponse();
+		await env.DB.prepare("UPDATE approval_requests SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'")
 			.bind(status, decidedAt, id)
 			.run();
 		return json({ ok: true, id, status, decidedAt });

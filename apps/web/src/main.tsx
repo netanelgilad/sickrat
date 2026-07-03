@@ -84,6 +84,8 @@ type ApprovalRequest = {
 	approvalWaitSeconds: number | null;
 	status: "pending" | "approved" | "denied";
 	createdAt: string;
+	expiresAt: string;
+	expired: boolean;
 	decidedAt: string | null;
 	ephemeralPublicKey: JsonWebKey | null;
 	grantReadyAt: string | null;
@@ -797,9 +799,30 @@ function formatAgo(timestamp: string) {
 	return `${elapsedDays} day${elapsedDays === 1 ? "" : "s"} ago`;
 }
 
+function formatUntil(timestamp: string) {
+	const remainingSeconds = Math.max(0, Math.ceil((Date.parse(timestamp) - Date.now()) / 1000));
+	if (remainingSeconds < 60) return `${remainingSeconds} seconds`;
+	const remainingMinutes = Math.ceil(remainingSeconds / 60);
+	if (remainingMinutes < 60) return `${remainingMinutes} minute${remainingMinutes === 1 ? "" : "s"}`;
+	const remainingHours = Math.ceil(remainingMinutes / 60);
+	if (remainingHours < 24) return `${remainingHours} hour${remainingHours === 1 ? "" : "s"}`;
+	const remainingDays = Math.ceil(remainingHours / 24);
+	return `${remainingDays} day${remainingDays === 1 ? "" : "s"}`;
+}
+
 function approvalWaitLabel(approval: Pick<ApprovalRequest, "approvalWaitSeconds">) {
 	if (!approval.approvalWaitSeconds) return null;
-	return `Agent asked CLI to wait ${formatDuration(approval.approvalWaitSeconds)}`;
+	return `Approval link stays valid for ${formatDuration(approval.approvalWaitSeconds)}`;
+}
+
+function approvalStatusLabel(approval: Pick<ApprovalRequest, "status" | "expired">) {
+	return approval.expired ? "expired" : approval.status;
+}
+
+function approvalBadgeColor(approval: Pick<ApprovalRequest, "status" | "expired">) {
+	if (approval.expired || approval.status === "denied") return "bg-red-500";
+	if (approval.status === "approved") return "bg-green-500";
+	return "bg-orange-500";
 }
 
 function arrayBuffersEqual(left: ArrayBuffer | null, right: Uint8Array) {
@@ -1980,8 +2003,8 @@ function AppShell({
 									<div className="text-sm text-black/45 dark:text-white/45">{timedAccess ? "Timed access request" : "Quarantine event"}</div>
 									<h1 className="m-0 mt-1 text-3xl font-bold leading-tight">{timedAccess ? "Trust window" : "Release grant"}</h1>
 								</div>
-								<Badge colors={{ bg: approval.status === "approved" ? "bg-green-500" : approval.status === "denied" ? "bg-red-500" : "bg-orange-500" }}>
-									{approval.status}
+								<Badge colors={{ bg: approvalBadgeColor(approval) }}>
+									{approvalStatusLabel(approval)}
 								</Badge>
 							</div>
 						</Block>
@@ -1996,7 +2019,9 @@ function AppShell({
 						{waitLabel ? (
 							<Card outline header="Approval wait">
 								<div className="text-xl font-semibold">{waitLabel}</div>
-								<p className="mb-0 text-black/55 dark:text-white/55">Longer waits usually mean the agent expects you may not see the notification immediately.</p>
+								<p className="mb-0 text-black/55 dark:text-white/55">
+									Expires {new Date(approval.expiresAt).toLocaleString()}. Longer waits usually mean the agent expects you may not see the notification immediately.
+								</p>
 							</Card>
 						) : null}
 						<BlockTitle>Request</BlockTitle>
@@ -2005,18 +2030,19 @@ function AppShell({
 							<ListItem title="Command" subtitle={approval.command} media={<Sparkles size={22} />} />
 							{approval.message ? <ListItem title="Message" subtitle={approval.message} /> : null}
 							<ListItem title="Created" after={formatAgo(approval.createdAt)} footer={new Date(approval.createdAt).toLocaleString()} />
-								<ListItem
-									title={timedAccess ? "Access mode" : "Grant TTL"}
-									subtitle={
-										timedAccess
-											? approval.accessExpiresAt
-												? `Reusable until ${new Date(approval.accessExpiresAt).toLocaleString()}`
-												: `Reusable for ${formatDuration(timedAccess)} after approval`
-											: approval.grantReadyAt
-												? "Grant sealed for machine retrieval"
-												: "Short-lived grant minted only after approval"
-									}
-								/>
+							<ListItem title="Approval expires" after={approval.expired ? "Expired" : `In ${formatUntil(approval.expiresAt)}`} footer={new Date(approval.expiresAt).toLocaleString()} />
+							<ListItem
+								title={timedAccess ? "Access mode" : "Grant TTL"}
+								subtitle={
+									timedAccess
+										? approval.accessExpiresAt
+											? `Reusable until ${new Date(approval.accessExpiresAt).toLocaleString()}`
+											: `Reusable for ${formatDuration(timedAccess)} after approval`
+										: approval.grantReadyAt
+											? "Grant sealed for machine retrieval"
+											: "Short-lived grant minted only after approval"
+								}
+							/>
 						</List>
 						<BlockTitle>Requested Refs</BlockTitle>
 						<List strong inset>
@@ -2102,10 +2128,10 @@ function AppShell({
 							</>
 						) : null}
 						<Block inset className="grid grid-cols-2 gap-3">
-							<Button rounded outline disabled={busy || approval.status !== "pending"} onClick={() => decide("deny")}>
+							<Button rounded outline disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("deny")}>
 								Deny
 							</Button>
-							<Button rounded disabled={busy || approval.status !== "pending"} onClick={() => decide("approve")}>
+							<Button rounded disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("approve")}>
 								Approve
 							</Button>
 						</Block>
@@ -2488,11 +2514,12 @@ function AppShell({
 						<>
 							<BlockTitle>{approval.device}</BlockTitle>
 							<List strong inset>
-								<ListItem title="Status" after={approval.status} media={<ShieldCheck size={22} />} />
+								<ListItem title="Status" after={approvalStatusLabel(approval)} media={<ShieldCheck size={22} />} />
 								<ListItem title="Command" subtitle={approval.command} />
 								{approval.message ? <ListItem title="Message" subtitle={approval.message} /> : null}
 								<ListItem title="Created" after={formatAgo(approval.createdAt)} footer={new Date(approval.createdAt).toLocaleString()} />
 								{approvalWaitLabel(approval) ? <ListItem title="Approval wait" after={approvalWaitLabel(approval) ?? undefined} /> : null}
+								<ListItem title="Approval expires" after={approval.expired ? "Expired" : `In ${formatUntil(approval.expiresAt)}`} footer={new Date(approval.expiresAt).toLocaleString()} />
 								<ListItem title="Decided" after={approval.decidedAt ? new Date(approval.decidedAt).toLocaleString() : "Pending"} />
 							</List>
 							<BlockTitle>Requested Refs</BlockTitle>

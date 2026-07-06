@@ -592,6 +592,7 @@ async function verifyDeviceSignature(device: DeviceRecord, body: {
 	message?: string;
 	secretRefs?: string[];
 	accessDurationSeconds?: number;
+	approvalWaitSeconds?: number;
 	ephemeralPublicKey?: JsonWebKey;
 	timestamp?: string;
 	nonce?: string;
@@ -630,6 +631,7 @@ async function verifyDeviceSignature(device: DeviceRecord, body: {
 				message: body.message,
 				secretRefs: body.secretRefs,
 				accessDurationSeconds: body.accessDurationSeconds,
+				approvalWaitSeconds: body.approvalWaitSeconds,
 				ephemeralPublicKey: body.ephemeralPublicKey,
 				timestamp: body.timestamp,
 				nonce: body.nonce,

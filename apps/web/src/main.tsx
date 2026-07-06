@@ -39,7 +39,6 @@ import {
 } from "lucide-react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { useRegisterSW } from "virtual:pwa-register/react";
-import { Storyboard } from "./storyboard";
 import "./styles.css";
 
 type Capabilities = {
@@ -2409,14 +2408,8 @@ function AppShell({
 						<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
 						<ListItem link onClick={() => navigate("/devices")} title="Active devices" after={String(activeDevices.length)} subtitle="Paired machines that can request access" media={<Laptop size={22} />} />
 					</List>
-					<BlockTitle>Install Health</BlockTitle>
-					<InstallPrompt />
-					<BlockTitle>Storyboard</BlockTitle>
-					<List strong inset>
-						<ListItem link onClick={() => navigate("/storyboard")} title="Open Storyboard" subtitle="Review the main mobile states with realistic data." media={<Smartphone size={22} />} />
-					</List>
-				</>
-			);
+					</>
+				);
 		} else if (route === "vaults") {
 			routeContent = (
 				<>
@@ -2596,10 +2589,6 @@ function AppShell({
 						<Button rounded outline disabled={busy || !subscription} onClick={sendTest}>Send Test</Button>
 					</Block>
 					{renderVaultKeyPanel()}
-					<BlockTitle>Storyboard</BlockTitle>
-					<List strong inset>
-						<ListItem link onClick={() => navigate("/storyboard")} title="Open Storyboard" subtitle="Inspect native mobile states with mocked data." media={<Smartphone size={22} />} />
-					</List>
 				</>
 			);
 		}
@@ -2709,7 +2698,6 @@ function App() {
 					<Route path="/approvals/:requestId" element={<ApprovalDetailRoute />} />
 					<Route path="/devices" element={<AppShell route="devices" />} />
 					<Route path="/settings" element={<AppShell route="settings" />} />
-					<Route path="/storyboard" element={<Storyboard />} />
 					<Route path="/cf/callback" element={<AppShell route="settings" isCloudflareCallback />} />
 					<Route path="/approve/:requestId" element={<ApprovalRoute />} />
 					<Route path="/app" element={<Navigate to="/" replace />} />

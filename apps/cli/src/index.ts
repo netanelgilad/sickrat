@@ -156,7 +156,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.24";
+const cliVersion = "0.1.25";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -732,6 +732,10 @@ async function execD1(accountId: string, accessToken: string, databaseId: string
 
 async function ensureCloudflareConfig() {
 	const config = await readConfig();
+	const envAccessToken = process.env.SICKRAT_CF_ACCESS_TOKEN;
+	if (envAccessToken && config.cloudflare) {
+		return { config, cloudflare: { ...config.cloudflare, accessToken: envAccessToken } };
+	}
 	if (!config.cloudflare?.accessToken) {
 		throw new Error("Cloudflare is not logged in. Run sickrat login first.");
 	}

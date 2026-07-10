@@ -36,6 +36,21 @@ body {
 	padding-bottom: calc(env(safe-area-inset-bottom) + 2rem);
 }
 
+.approval-actions-sticky {
+	position: sticky;
+	bottom: 0;
+	z-index: 20;
+	margin-top: 1rem;
+	padding: 0.75rem 1rem calc(env(safe-area-inset-bottom) + 0.75rem);
+	background: linear-gradient(to top, rgba(242, 242, 247, 0.98) 72%, rgba(242, 242, 247, 0));
+	-webkit-backdrop-filter: blur(18px);
+	backdrop-filter: blur(18px);
+}
+
+.dark .approval-actions-sticky {
+	background: linear-gradient(to top, rgba(0, 0, 0, 0.98) 72%, rgba(0, 0, 0, 0));
+}
+
 button,
 a {
 	-webkit-tap-highlight-color: transparent;

@@ -1990,7 +1990,6 @@ function AppShell({
 
 	if (route === "approval" && requestId) {
 		const timedAccess = approval?.accessDurationSeconds ? approval.accessDurationSeconds : null;
-		const waitLabel = approval ? approvalWaitLabel(approval) : null;
 		return (
 			<Page>
 				<Navbar title={timedAccess ? "Trust Window" : "Release Grant"} left={<NavbarBackLink onClick={() => navigate("/")}>App</NavbarBackLink>} />
@@ -2007,31 +2006,15 @@ function AppShell({
 								</Badge>
 							</div>
 						</Block>
-						{timedAccess ? (
-							<Card outline header="Auto-approve window" footer="Use this only while you expect the agent to keep working.">
-								<div className="text-2xl font-semibold">{formatDuration(timedAccess)}</div>
-								<p className="mb-0 text-black/55 dark:text-white/55">
-									Approving grants this paired machine local reuse of these refs until the window expires.
-								</p>
-							</Card>
-						) : null}
-						{waitLabel ? (
-							<Card outline header="Approval wait">
-								<div className="text-xl font-semibold">{waitLabel}</div>
-								<p className="mb-0 text-black/55 dark:text-white/55">
-									Expires {new Date(approval.expiresAt).toLocaleString()}. Longer waits usually mean the agent expects you may not see the notification immediately.
-								</p>
-							</Card>
-						) : null}
 						<BlockTitle>Request</BlockTitle>
 						<List strong inset>
 							<ListItem title="Device" after={approval.device} media={<Laptop size={22} />} />
 							<ListItem title="Command" subtitle={approval.command} media={<Sparkles size={22} />} />
 							{approval.message ? <ListItem title="Message" subtitle={approval.message} /> : null}
 							<ListItem title="Created" after={formatAgo(approval.createdAt)} footer={new Date(approval.createdAt).toLocaleString()} />
-							<ListItem title="Approval expires" after={approval.expired ? "Expired" : `In ${formatUntil(approval.expiresAt)}`} footer={new Date(approval.expiresAt).toLocaleString()} />
 							<ListItem
-								title={timedAccess ? "Access mode" : "Grant TTL"}
+								title={timedAccess ? "Trust window" : "Grant TTL"}
+								after={timedAccess ? formatDuration(timedAccess) : undefined}
 								subtitle={
 									timedAccess
 										? approval.accessExpiresAt
@@ -2041,6 +2024,13 @@ function AppShell({
 											? "Grant sealed for machine retrieval"
 											: "Short-lived grant minted only after approval"
 								}
+								footer={timedAccess ? "Use this only while you expect the agent to keep working." : undefined}
+							/>
+							<ListItem
+								title="Approval link"
+								after={approval.expired ? "Expired" : `In ${formatUntil(approval.expiresAt)}`}
+								subtitle={approval.approvalWaitSeconds ? `Valid for ${formatDuration(approval.approvalWaitSeconds)}` : undefined}
+								footer={`Expires ${new Date(approval.expiresAt).toLocaleString()}`}
 							/>
 						</List>
 						<BlockTitle>Requested Refs</BlockTitle>
@@ -2126,15 +2116,17 @@ function AppShell({
 								})}
 							</>
 						) : null}
-						<Block inset className="grid grid-cols-2 gap-3">
-							<Button rounded outline disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("deny")}>
-								Deny
-							</Button>
-							<Button rounded disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("approve")}>
-								Approve
-							</Button>
-						</Block>
 						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{status}</Block>
+						<div className="approval-actions-sticky">
+							<div className="grid grid-cols-2 gap-3">
+								<Button rounded outline disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("deny")}>
+									Decline
+								</Button>
+								<Button rounded disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("approve")}>
+									Approve
+								</Button>
+							</div>
+						</div>
 					</>
 				) : (
 					<Block strong inset>

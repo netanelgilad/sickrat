@@ -12,7 +12,6 @@ export type OAuthProviderDefinition = {
 	authorizationEndpoint: string;
 	tokenEndpoint: string;
 	documentationUrl: string;
-	defaultScopes: string[];
 	identityScopes: string[];
 	scopes: OAuthScopeDefinition[];
 	supportsPkce: boolean;
@@ -41,7 +40,6 @@ const providers: OAuthProviderDefinition[] = [
 		authorizationEndpoint: "https://dash.cloudflare.com/oauth2/auth",
 		tokenEndpoint: "https://dash.cloudflare.com/oauth2/token",
 		documentationUrl: "https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/",
-		defaultScopes: ["user-details.read", "account-settings.read", "workers-platform.read"],
 		identityScopes: ["user-details.read"],
 		scopes: [
 			{ id: "user-details.read", label: "User details", description: "Identify the connected Cloudflare user.", risk: "low" },
@@ -77,7 +75,6 @@ export function publicOAuthProvider(provider: OAuthProviderDefinition, clientId:
 		description: provider.description,
 		authorizationEndpoint: provider.authorizationEndpoint,
 		documentationUrl: provider.documentationUrl,
-		defaultScopes: provider.defaultScopes,
 		identityScopes: provider.identityScopes,
 		scopes: provider.scopes,
 		supportsPkce: provider.supportsPkce,

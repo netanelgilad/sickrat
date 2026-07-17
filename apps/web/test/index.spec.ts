@@ -36,7 +36,7 @@ describe("OAuth gateway Worker API", () => {
 				id: "cloudflare",
 				configured: false,
 				redirectUri: "https://vault.example/oauth/callback/cloudflare",
-				defaultScopes: expect.arrayContaining(["workers-platform.read"]),
+				identityScopes: ["user-details.read"],
 			}),
 		);
 	});

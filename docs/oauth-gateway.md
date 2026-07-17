@@ -201,6 +201,8 @@ Provider OAuth apps are a separate product concern from vault ownership.
 
 V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL from the PWA into that client, and stores the public client ID from the Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant.
 
+A proactive connection requests only the provider's minimum identity scopes. Operational scopes come from an agent request and are authorized just in time. If an existing connection does not cover the requested scopes, the approval flow performs step-up authorization and replaces the encrypted refresh credential with the newly granted scope set. The provider-side OAuth client must still allow every scope Sickrat may request; that allowlist defines the client's maximum capability, while each authorization request and user consent define the connection's actual capability.
+
 Providers that require a client secret need a later extension because that secret must be encrypted before storage and decrypted only for Worker-assisted exchange. The longer-term modes are:
 
 - **User-provided OAuth app:** the user enters client id and client secret in the PWA; client secret is encrypted in the vault and used only during connect/refresh.

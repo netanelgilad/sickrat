@@ -128,7 +128,6 @@ type OAuthProvider = {
 	description: string;
 	authorizationEndpoint: string;
 	documentationUrl: string;
-	defaultScopes: string[];
 	identityScopes: string[];
 	scopes: OAuthScopeDefinition[];
 	supportsPkce: boolean;
@@ -1278,6 +1277,7 @@ function AppShell({
 	const [oauthProviders, setOAuthProviders] = useState<OAuthProvider[]>([]);
 	const [oauthConnections, setOAuthConnections] = useState<OAuthConnection[]>([]);
 	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
+	const [copiedOAuthCallbackProviderId, setCopiedOAuthCallbackProviderId] = useState<string | null>(null);
 	const [oauthStatus, setOAuthStatus] = useState("Connections are locked with the same passkey-protected vault key as secrets.");
 	const [secretQuery, setSecretQuery] = useState("");
 	const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
@@ -1865,6 +1865,20 @@ function AppShell({
 			setOAuthStatus(friendlyError(error, `Failed to configure ${provider.name}.`));
 		} finally {
 			setBusy(false);
+		}
+	}
+
+	async function copyOAuthCallbackUrl(provider: OAuthProvider) {
+		try {
+			await navigator.clipboard.writeText(provider.redirectUri);
+			setCopiedOAuthCallbackProviderId(provider.id);
+			setOAuthStatus(`${provider.name} callback URL copied.`);
+			window.setTimeout(() => {
+				setCopiedOAuthCallbackProviderId((current) => (current === provider.id ? null : current));
+			}, 2_000);
+		} catch (error) {
+			setCopiedOAuthCallbackProviderId(null);
+			setOAuthStatus(friendlyError(error, "Could not copy the callback URL."));
 		}
 	}
 
@@ -2976,7 +2990,14 @@ function AppShell({
 											after={provider.configured ? `${activeConnections.length} connected` : "Setup needed"}
 											media={<Cloud size={22} />}
 										/>
-										<ListItem title="Callback URL" subtitle={provider.redirectUri} media={<ExternalLink size={22} />} />
+										<ListItem
+											link
+											title="Callback URL"
+											subtitle={provider.redirectUri}
+											after={copiedOAuthCallbackProviderId === provider.id ? "Copied" : undefined}
+											media={<Copy size={22} />}
+											onClick={() => void copyOAuthCallbackUrl(provider)}
+										/>
 										<ListInput
 											label="OAuth client ID"
 											type="text"
@@ -2996,7 +3017,7 @@ function AppShell({
 									</List>
 									<Block inset className="grid grid-cols-2 gap-3">
 										<Button rounded outline disabled={busy} onClick={() => void configureOAuthProvider(provider)}>Save Client</Button>
-										<Button rounded disabled={busy || !provider.configured} onClick={() => void connectOAuthProvider(provider.id, provider.defaultScopes)}>Connect</Button>
+										<Button rounded disabled={busy || !provider.configured} onClick={() => void connectOAuthProvider(provider.id, provider.identityScopes)}>Connect</Button>
 									</Block>
 								</React.Fragment>
 							);

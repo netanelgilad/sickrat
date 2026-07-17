@@ -157,7 +157,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.30";
+const cliVersion = "0.1.31";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -1107,6 +1107,26 @@ async function releaseUpdateLock(vault: ConfiguredVault, accessToken: string) {
 	await execD1(vault.accountId, accessToken, vault.d1Id, "DELETE FROM sickrat_update_locks WHERE id = ?", ["vault-update"]);
 }
 
+async function waitForVaultVersion(workerUrl: string, expectedVersion: string) {
+	let observedVersion = "unavailable";
+	for (let attempt = 0; attempt < 15; attempt += 1) {
+		try {
+			const response = await fetch(`${workerUrl}/api/capabilities?deployment-check=${Date.now()}`, {
+				headers: { "cache-control": "no-cache" },
+			});
+			if (response.ok) {
+				const capabilities = (await response.json()) as { vault?: { version?: string } };
+				observedVersion = capabilities.vault?.version ?? "missing";
+				if (observedVersion === expectedVersion) return;
+			}
+		} catch {
+			observedVersion = "unavailable";
+		}
+		await new Promise((resolve) => setTimeout(resolve, 1_000));
+	}
+	throw new Error(`Updated Worker health check expected ${expectedVersion}, but the live vault reported ${observedVersion}.`);
+}
+
 async function ensureD1Database(accountId: string, accessToken: string, databaseName: string) {
 	const databases = await readCloudflareApi<CloudflareD1Database[]>(
 		`/accounts/${accountId}/d1/database?name=${encodeURIComponent(databaseName)}&per_page=50`,
@@ -1314,7 +1334,7 @@ async function uploadVaultWorker(input: {
 			jwt: input.assetsJwt,
 			config: {
 				not_found_handling: "single-page-application",
-				run_worker_first: ["/api/*"],
+				run_worker_first: ["/api/*", "/oauth/callback/*"],
 			},
 		},
 		bindings: [
@@ -1683,8 +1703,7 @@ async function vaultUpdate(args: string[]) {
 			vapid: vault.vapidPublicKey && vault.vapidPrivateKey ? { publicKey: vault.vapidPublicKey, privateKey: vault.vapidPrivateKey } : undefined,
 		});
 		await markUpdateStep(vault, cloudflare.accessToken, "deploy_worker");
-		const response = await fetch(`${vault.workerUrl}/api/capabilities`);
-		if (!response.ok) throw new Error(`Updated Worker health check failed with HTTP ${response.status}.`);
+		await waitForVaultVersion(vault.workerUrl, targetVersion);
 		const manifest = createVaultManifest({
 			vault,
 			version: targetVersion,

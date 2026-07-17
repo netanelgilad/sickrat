@@ -1,11 +1,11 @@
 ---
 name: sickrat
-description: Provision a user-owned Sickrat Cloudflare vault and request secrets through phone-approved CLI grants without asking users to paste credentials into chat.
+description: Provision and update a user-owned Sickrat Cloudflare vault, then request secrets or short-lived OAuth access tokens through phone-approved CLI grants without asking users to paste credentials into chat. Use for agent workflows that need private configuration, API credentials, or access to a connected OAuth provider.
 ---
 
 # Sickrat Agent Skill
 
-Use Sickrat when a task needs a secret, API key, token, password, or private configuration value.
+Use Sickrat when a task needs a secret, API key, password, private configuration value, or short-lived OAuth access to a connected service.
 
 ## Principle
 
@@ -144,6 +144,27 @@ sickrat run \
 
 Only update local config to the new ref after the provider confirms the password change succeeded.
 
+## Requesting OAuth Access
+
+Cloudflare is the first supported OAuth provider. Request an access token through the existing `sickrat run` environment flow with a `sickrat://oauth/<provider>` descriptor and one or more explicit `scope` parameters:
+
+```sh
+sickrat run \
+  --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare?scope=account-settings.read&scope=workers-platform.read' \
+  --message "List the user's deployed Cloudflare Workers" \
+  -- sh -c 'curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts"'
+```
+
+Use CLI version `0.1.28` or newer for OAuth requests. Keep non-sensitive values such as `CF_ACCOUNT_ID` in the normal process environment or env file.
+
+The user manages provider accounts from **Connections** in the installed PWA. It is valid to request Cloudflare access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
+
+Request the narrowest scopes required by the command. Every scope must appear as a repeated `scope` query parameter. Do not invent provider ids or request providers that are not shown in the PWA catalog.
+
+The PWA decrypts the provider refresh token only after passkey unlock, mints an access token through the user-owned Worker, and seals that access token to the requesting CLI. The CLI receives only the approved access token. Never ask the user for an OAuth client secret, refresh token, access token, authorization code, or callback URL in chat.
+
+Timed access with `--access-for` also applies to OAuth grants. The CLI caches only the encrypted access-token grant, capped by both the approval window and provider token expiry; it never caches refresh tokens.
+
 ## Agent Behavior
 
 - For a first-time user, run `sickrat login` and `sickrat vault create` before pairing.
@@ -155,6 +176,8 @@ Only update local config to the new ref after the provider confirms the password
 - It is valid to request a new reference that may not exist yet, but make the need specific and narrow.
 - Use `--access-for` only for active multi-step work where repeated approval would interrupt the task; prefer a short duration such as `15m` or `30m`.
 - Request the narrowest secret reference that satisfies the task.
+- For OAuth, request only providers shown in Connections and the narrowest scopes required by the command.
 - Prefer `sickrat run` so plaintext only reaches the child process that needs it.
+- Keep OAuth access tokens inside the child process environment and never print, inspect, or return them to chat.
 - Never use `sickrat reveal` unless the user explicitly asks for plaintext output in a clearly non-production test.
 - When a new secret value is needed, prefer the PWA approval flow so the user enters or generates the value on their device instead of sending plaintext through chat.

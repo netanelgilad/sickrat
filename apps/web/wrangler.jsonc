@@ -12,6 +12,7 @@
 		"global_fetch_strictly_public"
 	],
 	"assets": {
+		"directory": "./dist/client",
 		"not_found_handling": "single-page-application",
 		"binding": "ASSETS",
 		"run_worker_first": [
@@ -22,6 +23,13 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "sickrat-local",
+			"database_id": "00000000-0000-0000-0000-000000000000"
+		}
+	],
 	"durable_objects": {
 		"bindings": [
 			{

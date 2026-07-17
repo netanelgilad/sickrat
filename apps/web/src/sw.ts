@@ -8,6 +8,7 @@ type PendingApproval = {
 	device: string;
 	command: string;
 	secretRefs: string[];
+	resourceRequests: Array<{ type: "secret" | "oauth_token" }>;
 	approvalWaitSeconds: number | null;
 };
 
@@ -82,8 +83,8 @@ self.addEventListener("push", (event) => {
 			let body = "Open Sickrat to review the latest request.";
 			let tag = "sickrat-request";
 			if (notification?.type === "approval.requested") {
-				title = "Secret access requested";
-				body = `${notification.approval.device} wants ${notification.approval.secretRefs.length} secrets`;
+				title = "Vault access requested";
+				body = `${notification.approval.device} wants ${notification.approval.resourceRequests.length} resources`;
 				if (notification.approval.approvalWaitSeconds) body += `, waiting ${formatDuration(notification.approval.approvalWaitSeconds)}`;
 				tag = notification.approval.id;
 			} else if (notification?.type === "pairing.requested") {

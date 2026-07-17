@@ -9,6 +9,7 @@ import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { canonicalApprovalPayload, type ApprovalRequestCreate, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
+import { parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
 import QRCode from "qrcode";
 
 type Config = {
@@ -43,16 +44,16 @@ type Config = {
 };
 
 type GrantCache = {
-	version: 1;
+	version: 2;
 	entries: GrantCacheEntry[];
 };
 
 type GrantCacheEntry = {
 	workerUrl: string;
 	deviceId: string;
-	refs: string[];
-	secretsCiphertext: string;
-	secretsIv: string;
+	resourceKeys: string[];
+	grantCiphertext: string;
+	grantIv: string;
 	approvedAt: string;
 	expiresAt: string;
 	command: string;
@@ -156,7 +157,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.27";
+const cliVersion = "0.1.28";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -581,9 +582,9 @@ async function writeConfig(config: Config) {
 async function readGrantCache() {
 	try {
 		const cache = JSON.parse(await readFile(grantCachePath, "utf8")) as GrantCache;
-		return cache.version === 1 && Array.isArray(cache.entries) ? cache : ({ version: 1, entries: [] } satisfies GrantCache);
+		return cache.version === 2 && Array.isArray(cache.entries) ? cache : ({ version: 2, entries: [] } satisfies GrantCache);
 	} catch {
-		return { version: 1, entries: [] } satisfies GrantCache;
+		return { version: 2, entries: [] } satisfies GrantCache;
 	}
 }
 
@@ -599,35 +600,66 @@ async function deriveGrantCacheKey(config: Config) {
 	return crypto.subtle.importKey("raw", digest, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 
-async function encryptCachedSecrets(secrets: Record<string, string>, key: CryptoKey) {
+async function encryptCachedGrant(grant: GrantPayload, key: CryptoKey) {
 	const iv = crypto.getRandomValues(new Uint8Array(12));
-	const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, textEncoder.encode(JSON.stringify(secrets)));
+	const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, textEncoder.encode(JSON.stringify(grant)));
 	return {
-		secretsIv: bytesToBase64Url(iv),
-		secretsCiphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
+		grantIv: bytesToBase64Url(iv),
+		grantCiphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
 	};
 }
 
-async function decryptCachedSecrets(entry: GrantCacheEntry, key: CryptoKey) {
+async function decryptCachedGrant(entry: GrantCacheEntry, key: CryptoKey) {
 	const plaintext = await crypto.subtle.decrypt(
-		{ name: "AES-GCM", iv: base64UrlToBytes(entry.secretsIv) },
+		{ name: "AES-GCM", iv: base64UrlToBytes(entry.grantIv) },
 		key,
-		base64UrlToBytes(entry.secretsCiphertext),
+		base64UrlToBytes(entry.grantCiphertext),
 	);
-	return JSON.parse(textDecoder.decode(plaintext)) as Record<string, string>;
+	return JSON.parse(textDecoder.decode(plaintext)) as GrantPayload;
 }
 
-async function findCachedGrant(input: { workerUrl: string; deviceId: string; refs: string[]; config: Config }) {
+function cacheResourceKeys(refs: string[], resourceRequests?: ApprovalRequestCreate["resourceRequests"]) {
+	const keys = new Set(refs.map((ref) => `secret:${ref}`));
+	for (const request of resourceRequests ?? []) {
+		if (request.type === "secret") keys.add(`secret:${request.ref}`);
+		else keys.add(`oauth:${request.providerId}:${request.env ?? ""}:${request.scopes.slice().sort().join(",")}`);
+	}
+	return [...keys].sort();
+}
+
+function cachedGrantCovers(grant: GrantPayload, refs: string[], resourceRequests?: ApprovalRequestCreate["resourceRequests"]) {
+	const secrets = grant.secrets ?? {};
+	if (refs.some((ref) => secrets[ref] === undefined)) return false;
+	for (const request of resourceRequests ?? []) {
+		if (request.type !== "oauth_token") continue;
+		if (!request.env) return false;
+		const token = grant.oauthTokens?.[request.env];
+		if (!token || token.providerId !== request.providerId) return false;
+		if (request.scopes.some((scope) => !token.scopes.includes(scope))) return false;
+		if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) return false;
+	}
+	return true;
+}
+
+async function findCachedGrant(input: {
+	workerUrl: string;
+	deviceId: string;
+	refs: string[];
+	resourceRequests?: ApprovalRequestCreate["resourceRequests"];
+	config: Config;
+}) {
 	const cache = await readGrantCache();
 	const now = Date.now();
 	const activeEntries = cache.entries.filter((entry) => Date.parse(entry.expiresAt) > now);
-	if (activeEntries.length !== cache.entries.length) await writeGrantCache({ version: 1, entries: activeEntries });
+	if (activeEntries.length !== cache.entries.length) await writeGrantCache({ version: 2, entries: activeEntries });
 	const key = await deriveGrantCacheKey(input.config);
+	const requestedKeys = cacheResourceKeys(input.refs, input.resourceRequests);
 	for (const entry of activeEntries) {
 		if (entry.workerUrl !== input.workerUrl || entry.deviceId !== input.deviceId) continue;
+		if (requestedKeys.some((resourceKey) => !entry.resourceKeys.includes(resourceKey))) continue;
 		try {
-			const secrets = await decryptCachedSecrets(entry, key);
-			if (input.refs.every((ref) => secrets[ref] !== undefined)) return { entry, secrets };
+			const grant = await decryptCachedGrant(entry, key);
+			if (cachedGrantCovers(grant, input.refs, input.resourceRequests)) return { entry, grant };
 		} catch {
 			// Ignore stale cache entries that cannot be decrypted with the current device key.
 		}
@@ -641,12 +673,10 @@ async function saveCachedGrant(entry: GrantCacheEntry) {
 	const nextEntries = cache.entries.filter((current) => {
 		if (Date.parse(current.expiresAt) <= Date.now()) return false;
 		if (current.workerUrl !== entry.workerUrl || current.deviceId !== entry.deviceId) return true;
-		const currentRefs = current.refs.slice().sort().join("\n");
-		const nextRefs = entry.refs.slice().sort().join("\n");
-		return currentRefs !== nextRefs;
+		return current.resourceKeys.join("\n") !== entry.resourceKeys.join("\n");
 	});
 	nextEntries.push(entry);
-	await writeGrantCache({ version: 1, entries: nextEntries });
+	await writeGrantCache({ version: 2, entries: nextEntries });
 }
 
 function openBrowser(url: string) {
@@ -1784,7 +1814,7 @@ function validateRequestMessage(message: string | undefined) {
 	}
 }
 
-function uniqueRefs(refs: string[]) {
+function uniqueRefs(refs: string[], allowEmpty = false) {
 	const unique: string[] = [];
 	const seen = new Set<string>();
 	for (const ref of refs) {
@@ -1793,27 +1823,24 @@ function uniqueRefs(refs: string[]) {
 		seen.add(ref);
 		unique.push(ref);
 	}
-	if (unique.length === 0) throw new Error("At least one Sickrat reference is required.");
+	if (!allowEmpty && unique.length === 0) throw new Error("At least one Sickrat reference is required.");
 	return unique;
 }
 
-async function requestGrant(input: { refs: string[]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean }) {
+async function requestGrant(input: { refs: string[]; resourceRequests?: ApprovalRequestCreate["resourceRequests"]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean }) {
 	validateRequestMessage(input.message);
-	const refs = uniqueRefs(input.refs);
+	const hasOAuthRequests = input.resourceRequests?.some((request) => request.type === "oauth_token") ?? false;
+	const refs = uniqueRefs(input.refs, hasOAuthRequests);
 	const approvalWaitSeconds = input.approvalWaitSeconds ?? 2 * 60;
 	const config = await readConfig();
 	if (!config.workerUrl || !config.deviceId) {
 		throw new Error("No paired device config found. Run sickrat pair <worker-url> first.");
 	}
 	if (input.allowCache !== false) {
-		const cached = await findCachedGrant({ workerUrl: config.workerUrl, deviceId: config.deviceId, refs, config });
+		const cached = await findCachedGrant({ workerUrl: config.workerUrl, deviceId: config.deviceId, refs, resourceRequests: input.resourceRequests, config });
 		if (cached) {
 			console.error(`Using timed local grant approved until ${cached.entry.expiresAt}.`);
-			return {
-				secrets: cached.secrets,
-				approvedAt: cached.entry.approvedAt,
-				accessExpiresAt: cached.entry.expiresAt,
-			} satisfies GrantPayload;
+			return cached.grant;
 		}
 	}
 	const keyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
@@ -1823,6 +1850,7 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 		command: input.command,
 		message: input.message,
 		secretRefs: refs,
+		resourceRequests: hasOAuthRequests ? input.resourceRequests : undefined,
 		accessDurationSeconds: input.accessDurationSeconds,
 		approvalWaitSeconds,
 		ephemeralPublicKey,
@@ -1842,7 +1870,10 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 	if (approvalWaitSeconds !== 2 * 60) {
 		console.error(`CLI will wait up to ${formatDuration(approvalWaitSeconds)} for approval.`);
 	}
-	console.error(`Requested refs: ${refs.join(", ")}`);
+	const oauthLabels = (input.resourceRequests ?? [])
+		.filter((request) => request.type === "oauth_token")
+		.map((request) => `${request.providerId} (${request.scopes.join(", ")})`);
+	console.error(`Requested resources: ${[...refs, ...oauthLabels].join(", ")}`);
 	console.error(`If the notification does not appear, open ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)} on your phone.`);
 
 	const started = Date.now();
@@ -1858,23 +1889,37 @@ async function requestGrant(input: { refs: string[]; message?: string; command: 
 		if (result.status === "denied") throw new Error("Request denied.");
 		if (result.status === "approved" && result.grantCiphertext) {
 			const grant = await decryptGrant(result.grantCiphertext, keyPair.privateKey);
+			const secrets = grant.secrets ?? {};
 			for (const ref of refs) {
-				if (grant.secrets[ref] === undefined) throw new Error(`Approved grant did not include ${ref}.`);
+				if (secrets[ref] === undefined) throw new Error(`Approved grant did not include ${ref}.`);
+			}
+			for (const request of input.resourceRequests ?? []) {
+				if (request.type !== "oauth_token") continue;
+				if (!request.env) throw new Error(`OAuth request for ${request.providerId} did not include an environment binding.`);
+				const token = grant.oauthTokens?.[request.env];
+				if (!token) throw new Error(`Approved grant did not include OAuth token ${request.env}.`);
+				if (token.providerId !== request.providerId) throw new Error(`OAuth grant provider mismatch for ${request.env}.`);
+				if (request.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`OAuth grant scopes do not cover ${request.env}.`);
+				if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) throw new Error(`OAuth grant for ${request.env} is already expired.`);
 			}
 			if (grant.accessExpiresAt && Date.parse(grant.accessExpiresAt) > Date.now()) {
+				const providerExpiries = Object.values(grant.oauthTokens ?? {})
+					.map((token) => token.expiresAt ? Date.parse(token.expiresAt) : Number.POSITIVE_INFINITY)
+					.filter(Number.isFinite);
+				const cacheExpiresAt = new Date(Math.min(Date.parse(grant.accessExpiresAt), ...providerExpiries)).toISOString();
 				const cacheKey = await deriveGrantCacheKey(config);
-				const encrypted = await encryptCachedSecrets(grant.secrets, cacheKey);
+				const encrypted = await encryptCachedGrant(grant, cacheKey);
 				await saveCachedGrant({
 					workerUrl: config.workerUrl,
 					deviceId: config.deviceId,
-					refs,
+					resourceKeys: cacheResourceKeys(refs, input.resourceRequests),
 					...encrypted,
 					approvedAt: grant.approvedAt,
-					expiresAt: grant.accessExpiresAt,
+					expiresAt: cacheExpiresAt,
 					command: input.command,
 					message: input.message,
 				});
-				console.error(`Approved. Timed local grant cached until ${grant.accessExpiresAt}.`);
+				console.error(`Approved. Timed local grant cached until ${cacheExpiresAt}.`);
 				return grant;
 			}
 			console.error("Approved. Grant received.");
@@ -1913,7 +1958,7 @@ async function revealSecret(args: string[]) {
 		command: `sickrat reveal ${ref}`,
 		allowCache: false,
 	});
-	process.stdout.write(grant.secrets[ref] ?? "");
+	process.stdout.write(grant.secrets?.[ref] ?? "");
 }
 
 function parseEnvAssignment(value: string) {
@@ -1955,14 +2000,6 @@ function parseDotenv(content: string, path: string) {
 	return values;
 }
 
-function sickratUriToRef(value: string) {
-	if (!value.startsWith("sickrat://")) return null;
-	const url = new URL(value);
-	const ref = `${url.hostname}${url.pathname}`.replace(/^\/+|\/+$/g, "");
-	if (!ref) throw new Error(`Invalid Sickrat reference URI: ${value}`);
-	return decodeURIComponent(ref);
-}
-
 function formatCommand(commandArgs: string[]) {
 	return commandArgs
 		.map((arg) => (/^[A-Za-z0-9_./:=@+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
@@ -1992,42 +2029,65 @@ async function runWithSecrets(args: string[]) {
 
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	const refByKey = new Map<string, string>();
+	const oauthByKey = new Map<string, Extract<ParsedEnvResource, { type: "oauth_token" }>>();
 	const preservedEnvFileKeys = new Set<string>();
 	for (const envFile of envFiles) {
 		const parsed = parseDotenv(await readFile(envFile, "utf8"), envFile);
 		for (const [key, value] of Object.entries(parsed)) {
-			const ref = sickratUriToRef(value);
-			if (ref) {
-				refByKey.set(key, ref);
+			const resource = parseSickratUri(value);
+			if (resource?.type === "secret") {
+				refByKey.set(key, resource.ref);
+				oauthByKey.delete(key);
+				preservedEnvFileKeys.delete(key);
+			} else if (resource?.type === "oauth_token") {
+				oauthByKey.set(key, resource);
+				refByKey.delete(key);
 				preservedEnvFileKeys.delete(key);
 			} else {
 				refByKey.delete(key);
+				oauthByKey.delete(key);
 				env[key] = value;
 				preservedEnvFileKeys.add(key);
 			}
 		}
 	}
 	for (const { key, value } of directEnv) {
-		refByKey.set(key, value);
+		const resource = parseSickratUri(value);
+		if (resource?.type === "oauth_token") {
+			oauthByKey.set(key, resource);
+			refByKey.delete(key);
+		} else {
+			refByKey.set(key, resource?.type === "secret" ? resource.ref : value);
+			oauthByKey.delete(key);
+		}
 		preservedEnvFileKeys.delete(key);
 	}
-	if (refByKey.size === 0) throw new Error("No Sickrat secret references found. Use --env KEY=ref or sickrat:// refs in --env-file.");
+	if (refByKey.size === 0 && oauthByKey.size === 0) throw new Error("No Sickrat resource references found. Use --env KEY=ref or sickrat:// refs in --env-file.");
 
-	const refs = uniqueRefs([...refByKey.values()]);
+	const refs = uniqueRefs([...refByKey.values()], oauthByKey.size > 0);
 	const grant = await requestGrant({
 		refs,
+		resourceRequests: [
+			...[...refByKey].map(([key, ref]) => resourceRequestForEnv({ type: "secret", ref }, key)),
+			...[...oauthByKey].map(([key, resource]) => resourceRequestForEnv(resource, key)),
+		],
 		message,
 		accessDurationSeconds,
 		approvalWaitSeconds,
 		command: `sickrat run -- ${formatCommand(commandArgs)}`,
 	});
 	for (const [key, ref] of refByKey) {
-		const value = grant.secrets[ref];
+		const value = grant.secrets?.[ref];
 		if (value === undefined) throw new Error(`Approved grant did not include ${ref}.`);
 		env[key] = value;
 	}
+	for (const [key] of oauthByKey) {
+		const token = grant.oauthTokens?.[key];
+		if (!token) throw new Error(`Approved grant did not include OAuth token ${key}.`);
+		env[key] = token.accessToken;
+	}
 
-	console.error(`Starting child process with ${refByKey.size} Sickrat env values and ${preservedEnvFileKeys.size} preserved env-file values.`);
+	console.error(`Starting child process with ${refByKey.size + oauthByKey.size} Sickrat env values and ${preservedEnvFileKeys.size} preserved env-file values.`);
 	const code = await runChild(commandArgs[0], commandArgs.slice(1), env);
 	process.exit(code);
 }

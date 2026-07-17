@@ -51,6 +51,37 @@ body {
 	background: linear-gradient(to top, rgba(0, 0, 0, 0.98) 72%, rgba(0, 0, 0, 0));
 }
 
+.oauth-callback-mark {
+	display: grid;
+	width: 3rem;
+	height: 3rem;
+	place-items: center;
+	border-radius: 0.75rem;
+	background: #dff4e8;
+	color: #176b45;
+}
+
+.oauth-callback-mark svg {
+	animation: oauth-refresh-spin 1.4s linear infinite;
+}
+
+.dark .oauth-callback-mark {
+	background: rgba(32, 152, 96, 0.2);
+	color: #7ee2ad;
+}
+
+@keyframes oauth-refresh-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.oauth-callback-mark svg {
+		animation: none;
+	}
+}
+
 button,
 a {
 	-webkit-tap-highlight-color: transparent;

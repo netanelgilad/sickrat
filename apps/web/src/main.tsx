@@ -29,13 +29,17 @@ import {
 	Home,
 	KeyRound,
 	Laptop,
+	Link2,
 	LockKeyhole,
 	Menu,
+	Plug,
+	RefreshCw,
 	Search,
 	Settings,
 	ShieldCheck,
 	Smartphone,
 	Sparkles,
+	Unplug,
 } from "lucide-react";
 import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { useRegisterSW } from "virtual:pwa-register/react";
@@ -79,6 +83,7 @@ type ApprovalRequest = {
 	command: string;
 	message: string | null;
 	secretRefs: string[];
+	resourceRequests: ApprovalResourceRequest[];
 	accessDurationSeconds: number | null;
 	approvalWaitSeconds: number | null;
 	status: "pending" | "approved" | "denied";
@@ -90,6 +95,10 @@ type ApprovalRequest = {
 	grantReadyAt: string | null;
 	accessExpiresAt: string | null;
 };
+
+type ApprovalResourceRequest =
+	| { type: "secret"; ref: string; env?: string }
+	| { type: "oauth_token"; providerId: string; scopes: string[]; env: string };
 
 type SecretMetadata = {
 	id: string;
@@ -104,6 +113,67 @@ type SecretCiphertext = SecretMetadata & {
 	ciphertext: string;
 	iv: string;
 	salt: string;
+};
+
+type OAuthScopeDefinition = {
+	id: string;
+	label: string;
+	description: string;
+	risk: "low" | "medium" | "high" | "sensitive";
+};
+
+type OAuthProvider = {
+	id: string;
+	name: string;
+	description: string;
+	authorizationEndpoint: string;
+	documentationUrl: string;
+	defaultScopes: string[];
+	identityScopes: string[];
+	scopes: OAuthScopeDefinition[];
+	supportsPkce: boolean;
+	supportsRefreshToken: boolean;
+	clientId: string | null;
+	configured: boolean;
+	redirectUri: string;
+};
+
+type OAuthConnection = {
+	id: string;
+	providerId: string;
+	accountLabel: string;
+	accountSubject: string;
+	grantedScopes: string[];
+	tokenType: string;
+	accessTokenExpiresAt: string | null;
+	providerMetadata: Record<string, unknown> | null;
+	createdAt: string;
+	updatedAt: string;
+	lastUsedAt: string | null;
+	revokedAt: string | null;
+};
+
+type EncryptedOAuthConnection = OAuthConnection & {
+	refreshTokenCiphertext: string;
+	refreshTokenIv: string;
+	refreshTokenSalt: string;
+	refreshTokenKdf: string;
+};
+
+type OAuthTokenResult = {
+	accessToken: string;
+	refreshToken?: string;
+	expiresIn?: number;
+	scopes: string[];
+	tokenType: string;
+};
+
+type PendingOAuthFlow = {
+	providerId: string;
+	state: string;
+	codeVerifier: string;
+	redirectTo: string;
+	scopes: string[];
 };
 
 type PairingCodeDetails = {
@@ -187,6 +257,7 @@ type PendingSecretOptions = {
 const primaryNavItems: Array<{ route: AppRoute; href: string; label: string; icon: React.ComponentType<{ size?: number }> }> = [
 	{ route: "app", href: "/", label: "Home", icon: Home },
 	{ route: "secrets", href: "/secrets", label: "Secrets", icon: KeyRound },
+	{ route: "connections", href: "/connections", label: "Connections", icon: Plug },
 	{ route: "approvals", href: "/approvals", label: "Grants", icon: ShieldCheck },
 	{ route: "devices", href: "/devices", label: "Machines", icon: Laptop },
 	{ route: "settings", href: "/settings", label: "Settings", icon: Settings },
@@ -355,6 +426,90 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { secrets: SecretCiphertext[] }).secrets;
 	},
+	async listOAuthProviders() {
+		const response = await fetch("/api/oauth/providers");
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { providers: OAuthProvider[] }).providers;
+	},
+	async configureOAuthProvider(providerId: string, clientId: string) {
+		const response = await fetch(`/api/oauth/providers/${encodeURIComponent(providerId)}/config`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ clientId }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { provider: OAuthProvider }).provider;
+	},
+	async exchangeOAuthCode(providerId: string, code: string, codeVerifier: string, redirectUri: string, scopes: string[]) {
+		const response = await fetch("/api/oauth/token", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ action: "authorization_code", providerId, code, codeVerifier, redirectUri, scopes }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as OAuthTokenResult;
+	},
+	async refreshOAuthToken(connection: OAuthConnection, refreshToken: string) {
+		const response = await fetch("/api/oauth/token", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				action: "refresh_token",
+				providerId: connection.providerId,
+				refreshToken,
+				scopes: connection.grantedScopes,
+				connectionId: connection.id,
+			}),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as OAuthTokenResult;
+	},
+	async inspectOAuthIdentity(providerId: string, accessToken: string) {
+		const response = await fetch("/api/oauth/identity", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ providerId, accessToken }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { identity: { subject: string; label: string } }).identity;
+	},
+	async listOAuthConnections() {
+		const response = await fetch("/api/oauth/connections");
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { connections: OAuthConnection[] }).connections;
+	},
+	async saveOAuthConnection(payload: {
+		id?: string;
+		providerId: string;
+		accountLabel: string;
+		accountSubject: string;
+		grantedScopes: string[];
+		tokenType: string;
+		accessTokenExpiresAt?: string | null;
+		refreshTokenCiphertext: string;
+		refreshTokenIv: string;
+		refreshTokenSalt: string;
+		refreshTokenKdf: string;
+		providerMetadata?: Record<string, unknown>;
+	}) {
+		const response = await fetch("/api/oauth/connections", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(payload),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { connection: OAuthConnection }).connection;
+	},
+	async resolveOAuthConnection(id: string) {
+		const response = await fetch(`/api/oauth/connections/${encodeURIComponent(id)}/resolve`);
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { connection: EncryptedOAuthConnection }).connection;
+	},
+	async revokeOAuthConnection(id: string) {
+		const response = await fetch(`/api/oauth/connections/${encodeURIComponent(id)}/revoke`, { method: "POST" });
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as { revokedAt: string };
+	},
 	async getCloudflareOAuthConfig() {
 		const response = await fetch("/api/cloudflare/oauth-config");
 		if (!response.ok) throw new Error(await response.text());
@@ -509,7 +664,7 @@ function friendlyError(error: unknown, fallback: string) {
 	} catch {
 		// Plain text error.
 	}
-	if (/D1|binding|Worker|VAPID|Cloudflare/i.test(raw)) {
+	if (/D1|binding|VAPID/i.test(raw)) {
 		return "This vault is not fully set up yet. Update or recreate the vault from the Sickrat command line, then reopen the app.";
 	}
 	return raw || fallback;
@@ -693,18 +848,32 @@ async function encryptSecretValue(value: string, key: CryptoKey) {
 }
 
 async function decryptSecretValue(secret: SecretCiphertext, key: CryptoKey) {
-	if (secret.kdf !== "AES-256-GCM:local-vault-key:v1") {
-		throw new Error(`Unsupported secret encryption format for ${secret.ref}: ${secret.kdf}`);
-	}
+	return decryptVaultValue(secret, key, secret.ref);
+}
+
+async function decryptVaultValue(value: { ciphertext: string; iv: string; kdf: string }, key: CryptoKey, label: string) {
+	if (value.kdf !== "AES-256-GCM:local-vault-key:v1") throw new Error(`Unsupported vault encryption format for ${label}: ${value.kdf}`);
 	const plaintext = await crypto.subtle.decrypt(
-		{ name: "AES-GCM", iv: base64UrlToUint8Array(secret.iv) },
+		{ name: "AES-GCM", iv: base64UrlToUint8Array(value.iv) },
 		key,
-		base64UrlToUint8Array(secret.ciphertext),
+		base64UrlToUint8Array(value.ciphertext),
 	);
 	return new TextDecoder().decode(plaintext);
 }
 
-async function encryptGrantForCli(payload: { secrets: Record<string, string>; approvedAt: string; accessExpiresAt?: string }, cliPublicKey: JsonWebKey) {
+async function encryptGrantForCli(payload: {
+	secrets?: Record<string, string>;
+	oauthTokens?: Record<string, {
+		providerId: string;
+		connectionId: string;
+		accessToken: string;
+		tokenType: string;
+		scopes: string[];
+		expiresAt?: string;
+	}>;
+	approvedAt: string;
+	accessExpiresAt?: string;
+}, cliPublicKey: JsonWebKey) {
 	const cliKey = await crypto.subtle.importKey(
 		"jwk",
 		cliPublicKey,
@@ -1063,6 +1232,7 @@ type AppRoute =
 	| "app"
 	| "vaults"
 	| "secrets"
+	| "connections"
 	| "approvals"
 	| "approval-detail"
 	| "devices"
@@ -1080,14 +1250,21 @@ function ApprovalDetailRoute() {
 	return <AppShell route="approval-detail" requestId={params.requestId} />;
 }
 
+function OAuthCallbackRoute() {
+	const params = useParams();
+	return <AppShell route="connections" callbackProviderId={params.providerId} />;
+}
+
 function AppShell({
 	route,
 	requestId,
 	isCloudflareCallback = false,
+	callbackProviderId,
 }: {
 	route: AppRoute;
 	requestId?: string;
 	isCloudflareCallback?: boolean;
+	callbackProviderId?: string;
 }) {
 	const navigate = useNavigate();
 	const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
@@ -1098,6 +1275,10 @@ function AppShell({
 	const [approvalFilter, setApprovalFilter] = useState<ApprovalRequest["status"] | "all">("pending");
 	const [devices, setDevices] = useState<Device[]>([]);
 	const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
+	const [oauthProviders, setOAuthProviders] = useState<OAuthProvider[]>([]);
+	const [oauthConnections, setOAuthConnections] = useState<OAuthConnection[]>([]);
+	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
+	const [oauthStatus, setOAuthStatus] = useState("Connections are locked with the same passkey-protected vault key as secrets.");
 	const [secretQuery, setSecretQuery] = useState("");
 	const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
 	const [secretStatus, setSecretStatus] = useState("Set up a local vault key before adding secrets.");
@@ -1127,6 +1308,7 @@ function AppShell({
 	const [busy, setBusy] = useState(false);
 	const [navigationOpen, setNavigationOpen] = useState(false);
 	const edgeSwipeRef = useRef<{ x: number; y: number } | null>(null);
+	const oauthCallbackStartedRef = useRef(false);
 
 	const installed = useMemo(isStandalone, []);
 	const vaultName = capabilities?.vault.name ?? "default";
@@ -1148,6 +1330,18 @@ function AppShell({
 		const storedRefs = new Set(secrets.map((secret) => secret.ref));
 		return approval.secretRefs.filter((ref) => !storedRefs.has(ref));
 	}, [approval, secrets]);
+	const approvalOAuthRequests = useMemo(
+		() => approval?.resourceRequests.filter((resource): resource is Extract<ApprovalResourceRequest, { type: "oauth_token" }> => resource.type === "oauth_token") ?? [],
+		[approval],
+	);
+	const matchingOAuthConnection = (request: Extract<ApprovalResourceRequest, { type: "oauth_token" }>) =>
+		oauthConnections.find(
+			(connection) =>
+				!connection.revokedAt &&
+				connection.providerId === request.providerId &&
+				request.scopes.every((scope) => connection.grantedScopes.includes(scope)),
+		);
+	const missingOAuthRequests = approvalOAuthRequests.filter((request) => !matchingOAuthConnection(request));
 
 	function getPendingSecretOptions(ref: string) {
 		return approvalSecretOptions[ref] ?? { show: false, symbols: false, copied: false };
@@ -1191,6 +1385,21 @@ function AppShell({
 		}
 	}
 
+	async function refreshOAuthData() {
+		try {
+			const [providers, connections] = await Promise.all([api.listOAuthProviders(), api.listOAuthConnections()]);
+			setOAuthProviders(providers);
+			setOAuthConnections(connections);
+			setOAuthClientIds((current) => {
+				const next = { ...current };
+				for (const provider of providers) if (provider.clientId && !next[provider.id]) next[provider.id] = provider.clientId;
+				return next;
+			});
+		} catch (error) {
+			setOAuthStatus(friendlyError(error, "Failed to load OAuth connections."));
+		}
+	}
+
 	async function refreshApprovals(status: ApprovalRequest["status"] | "all" = approvalFilter) {
 		try {
 			setApprovals([]);
@@ -1225,8 +1434,8 @@ function AppShell({
 			const waitLabel = approvalWaitLabel(notification.approval);
 			return {
 				url: notification.url,
-				title: "Secret access requested",
-				body: `${notification.approval.device} wants ${notification.approval.secretRefs.length} secrets${waitLabel ? `. ${waitLabel}.` : ""}`,
+				title: "Vault access requested",
+				body: `${notification.approval.device} wants ${notification.approval.resourceRequests.length} resources${waitLabel ? `. ${waitLabel}.` : ""}`,
 			};
 		}
 		return {
@@ -1300,6 +1509,75 @@ function AppShell({
 	useEffect(() => {
 		void refreshSecrets();
 	}, []);
+
+	useEffect(() => {
+		if (route === "connections" || route === "approval" || route === "app") void refreshOAuthData();
+	}, [route]);
+
+	useEffect(() => {
+		if (!callbackProviderId || oauthCallbackStartedRef.current || oauthProviders.length === 0) return;
+		const provider = oauthProviders.find((item) => item.id === callbackProviderId);
+		if (!provider) {
+			setOAuthStatus(`Unsupported OAuth provider: ${callbackProviderId}`);
+			return;
+		}
+		const params = new URLSearchParams(window.location.search);
+		const providerError = params.get("error");
+		if (providerError) {
+			setOAuthStatus(friendlyError(params.get("error_description") ?? providerError, `${provider.name} authorization failed.`));
+			return;
+		}
+		let pending: PendingOAuthFlow | null = null;
+		try {
+			const stored = sessionStorage.getItem("sickrat.oauth.pending");
+			pending = stored ? (JSON.parse(stored) as PendingOAuthFlow) : null;
+		} catch {
+			pending = null;
+		}
+		const code = params.get("code");
+		const state = params.get("state");
+		if (!pending || pending.providerId !== provider.id || !code || !state || state !== pending.state) {
+			setOAuthStatus("This OAuth callback does not match an active Sickrat connection request.");
+			return;
+		}
+
+		oauthCallbackStartedRef.current = true;
+		sessionStorage.removeItem("sickrat.oauth.pending");
+		setBusy(true);
+		setOAuthStatus(`Completing ${provider.name} connection...`);
+		void (async () => {
+			const token = await api.exchangeOAuthCode(provider.id, code, pending.codeVerifier, provider.redirectUri, pending.scopes);
+			if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
+			if (pending.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
+			const identity = await api.inspectOAuthIdentity(provider.id, token.accessToken);
+			let key = vaultKey;
+			if (!key) {
+				key = getPasskeyVaultRecord() ? await unlockPasskeyVaultKey() : await createPasskeyWrappedVaultKey();
+				if (!key) throw new Error("Unlock or create the vault key to store this OAuth connection.");
+				setVaultKey(key);
+			}
+			const encrypted = await encryptSecretValue(token.refreshToken, key);
+			const existing = oauthConnections.find((connection) => connection.providerId === provider.id && connection.accountSubject === identity.subject && !connection.revokedAt);
+			const connection = await api.saveOAuthConnection({
+				id: existing?.id,
+				providerId: provider.id,
+				accountLabel: identity.label,
+				accountSubject: identity.subject,
+				grantedScopes: token.scopes,
+				tokenType: token.tokenType,
+				accessTokenExpiresAt: token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : null,
+				refreshTokenCiphertext: encrypted.ciphertext,
+				refreshTokenIv: encrypted.iv,
+				refreshTokenSalt: encrypted.salt,
+				refreshTokenKdf: encrypted.kdf,
+			});
+			setOAuthConnections((current) => [connection, ...current.filter((item) => item.id !== connection.id)]);
+			setOAuthStatus(`${provider.name} connected as ${connection.accountLabel}.`);
+			navigate(pending.redirectTo, { replace: true });
+		})()
+			.catch((error: unknown) => setOAuthStatus(friendlyError(error, `${provider.name} connection failed.`)))
+			.finally(() => setBusy(false));
+	}, [callbackProviderId, navigate, oauthConnections, oauthProviders, vaultKey]);
 
 	useEffect(() => {
 		if (route === "approvals" || route === "app") void refreshApprovals(approvalFilter);
@@ -1571,6 +1849,65 @@ function AppShell({
 		}
 	}
 
+	async function configureOAuthProvider(provider: OAuthProvider) {
+		const clientId = oauthClientIds[provider.id]?.trim();
+		if (!clientId) {
+			setOAuthStatus(`Enter the ${provider.name} OAuth client ID first.`);
+			return;
+		}
+		setBusy(true);
+		setOAuthStatus(`Saving ${provider.name} OAuth client configuration...`);
+		try {
+			const configured = await api.configureOAuthProvider(provider.id, clientId);
+			setOAuthProviders((current) => current.map((item) => (item.id === configured.id ? configured : item)));
+			setOAuthStatus(`${provider.name} is ready to connect. The client ID is configuration, not a credential.`);
+		} catch (error) {
+			setOAuthStatus(friendlyError(error, `Failed to configure ${provider.name}.`));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function connectOAuthProvider(providerId: string, requestedScopes: string[], redirectTo = "/connections") {
+		const provider = oauthProviders.find((item) => item.id === providerId);
+		if (!provider?.clientId) {
+			setOAuthStatus(`${provider?.name ?? providerId} needs an OAuth client ID before it can connect.`);
+			if (redirectTo !== "/connections") navigate("/connections");
+			return;
+		}
+		const scopes = [...new Set([...requestedScopes, ...provider.identityScopes])];
+		const state = randomBase64Url(24);
+		const codeVerifier = randomBase64Url(72);
+		const codeChallenge = await sha256Base64Url(codeVerifier);
+		const pending: PendingOAuthFlow = { providerId, state, codeVerifier, redirectTo, scopes };
+		sessionStorage.setItem("sickrat.oauth.pending", JSON.stringify(pending));
+		const params = new URLSearchParams({
+			response_type: "code",
+			client_id: provider.clientId,
+			redirect_uri: provider.redirectUri,
+			scope: scopes.join(" "),
+			state,
+			code_challenge: codeChallenge,
+			code_challenge_method: "S256",
+		});
+		setOAuthStatus(`Opening ${provider.name} authorization...`);
+		window.location.href = `${provider.authorizationEndpoint}?${params.toString()}`;
+	}
+
+	async function revokeOAuthConnection(connection: OAuthConnection) {
+		setBusy(true);
+		setOAuthStatus(`Disconnecting ${connection.accountLabel}...`);
+		try {
+			const result = await api.revokeOAuthConnection(connection.id);
+			setOAuthConnections((current) => current.map((item) => (item.id === connection.id ? { ...item, revokedAt: result.revokedAt } : item)));
+			setOAuthStatus(`${connection.accountLabel} is disconnected from Sickrat.`);
+		} catch (error) {
+			setOAuthStatus(friendlyError(error, "Failed to disconnect OAuth connection."));
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	async function loginWithCloudflare(redirectTo = "/") {
 		if (!cloudflareConfig?.clientId) {
 			setCloudflareStatus("Browser sign-in is not configured for this vault.");
@@ -1646,6 +1983,76 @@ function AppShell({
 		}
 	}
 
+	async function resolveOAuthTokensForApproval(target: ApprovalRequest, key: CryptoKey) {
+		const requests = target.resourceRequests.filter(
+			(resource): resource is Extract<ApprovalResourceRequest, { type: "oauth_token" }> => resource.type === "oauth_token",
+		);
+		const oauthTokens: Record<string, {
+			providerId: string;
+			connectionId: string;
+			accessToken: string;
+			tokenType: string;
+			scopes: string[];
+			expiresAt?: string;
+		}> = {};
+		const refreshed = new Map<string, OAuthTokenResult>();
+
+		for (const request of requests) {
+			const connection = oauthConnections.find(
+				(item) => !item.revokedAt && item.providerId === request.providerId && request.scopes.every((scope) => item.grantedScopes.includes(scope)),
+			);
+			if (!connection) throw new Error(`Connect ${request.providerId} with the requested scopes before approving.`);
+			let token = refreshed.get(connection.id);
+			if (!token) {
+				setStatus(`Refreshing ${connection.accountLabel} access...`);
+				const encryptedConnection = await api.resolveOAuthConnection(connection.id);
+				const refreshToken = await decryptVaultValue(
+					{
+						ciphertext: encryptedConnection.refreshTokenCiphertext,
+						iv: encryptedConnection.refreshTokenIv,
+						kdf: encryptedConnection.refreshTokenKdf,
+					},
+					key,
+					`${connection.providerId} refresh token`,
+				);
+				token = await api.refreshOAuthToken(connection, refreshToken);
+				if (connection.grantedScopes.some((scope) => !token!.scopes.includes(scope))) {
+					throw new Error(`${connection.providerId} refreshed the connection with fewer scopes than were granted.`);
+				}
+				refreshed.set(connection.id, token);
+				if (token.refreshToken) {
+					const encrypted = await encryptSecretValue(token.refreshToken, key);
+					const updated = await api.saveOAuthConnection({
+						id: connection.id,
+						providerId: connection.providerId,
+						accountLabel: connection.accountLabel,
+						accountSubject: connection.accountSubject,
+						grantedScopes: token.scopes,
+						tokenType: token.tokenType,
+						accessTokenExpiresAt: token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : null,
+						refreshTokenCiphertext: encrypted.ciphertext,
+						refreshTokenIv: encrypted.iv,
+						refreshTokenSalt: encrypted.salt,
+						refreshTokenKdf: encrypted.kdf,
+						providerMetadata: connection.providerMetadata ?? undefined,
+					});
+					setOAuthConnections((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+				}
+			}
+			if (request.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`Refreshed token does not cover ${request.env}.`);
+			const expiresAt = token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : undefined;
+			oauthTokens[request.env] = {
+				providerId: request.providerId,
+				connectionId: connection.id,
+				accessToken: token.accessToken,
+				tokenType: token.tokenType,
+				scopes: token.scopes,
+				expiresAt,
+			};
+		}
+		return oauthTokens;
+	}
+
 	async function approveExistingApprovalRequest(target: ApprovalRequest) {
 		const storedRefs = new Set(secrets.map((secret) => secret.ref));
 		const missingRefs = target.secretRefs.filter((ref) => !storedRefs.has(ref));
@@ -1653,7 +2060,7 @@ function AppShell({
 			navigate(`/approve/${encodeURIComponent(target.id)}`);
 			throw new Error("Open the approval screen to create missing secret values before approving.");
 		}
-			if (!target.ephemeralPublicKey) throw new Error("This approval request cannot receive a sealed machine grant.");
+		if (!target.ephemeralPublicKey) throw new Error("This approval request cannot receive a sealed machine grant.");
 
 		const approvedAt = new Date();
 		const accessExpiresAt = target.accessDurationSeconds
@@ -1673,14 +2080,15 @@ function AppShell({
 		}
 
 		setStatus("Preparing the requested secrets...");
-		const encryptedSecrets = await api.resolveSecrets(target.secretRefs);
+		const encryptedSecrets = target.secretRefs.length > 0 ? await api.resolveSecrets(target.secretRefs) : [];
 		const plaintextSecrets: Record<string, string> = {};
 		for (const secret of encryptedSecrets) {
 			plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 		}
+		const oauthTokens = await resolveOAuthTokensForApproval(target, key);
 		setStatus("Sealing a short-lived grant for this machine...");
 		const grant = await encryptGrantForCli(
-			{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
+			{ secrets: plaintextSecrets, oauthTokens, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 			target.ephemeralPublicKey,
 		);
 		await api.sendGrant(target.id, grant);
@@ -1756,9 +2164,10 @@ function AppShell({
 						plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 					}
 					for (const ref of missingApprovalRefs) plaintextSecrets[ref] = approvalSecretValues[ref];
+					const oauthTokens = await resolveOAuthTokensForApproval(approval, key);
 					setStatus("Sealing a short-lived grant for this machine...");
 					const grant = await encryptGrantForCli(
-						{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
+						{ secrets: plaintextSecrets, oauthTokens, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
 					);
 					await api.sendGrant(approval.id, grant, createdSecrets);
@@ -1787,14 +2196,15 @@ function AppShell({
 					});
 				} else {
 					setStatus("Preparing the requested secrets...");
-					const encryptedSecrets = await api.resolveSecrets(approval.secretRefs);
+					const encryptedSecrets = approval.secretRefs.length > 0 ? await api.resolveSecrets(approval.secretRefs) : [];
 					const plaintextSecrets: Record<string, string> = {};
 					for (const secret of encryptedSecrets) {
 						plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 					}
+					const oauthTokens = await resolveOAuthTokensForApproval(approval, key);
 					setStatus("Sealing a short-lived grant for this machine...");
 					const grant = await encryptGrantForCli(
-						{ secrets: plaintextSecrets, approvedAt: approvedAt.toISOString(), accessExpiresAt },
+						{ secrets: plaintextSecrets, oauthTokens, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
 					);
 					await api.sendGrant(approval.id, grant);
@@ -2033,8 +2443,8 @@ function AppShell({
 								footer={`Expires ${new Date(approval.expiresAt).toLocaleString()}`}
 							/>
 						</List>
-						<BlockTitle>Requested Refs</BlockTitle>
-						<List strong inset>
+						{approval.secretRefs.length > 0 ? <BlockTitle>Requested Secrets</BlockTitle> : null}
+						{approval.secretRefs.length > 0 ? <List strong inset>
 							{approval.secretRefs.map((ref) => (
 								<ListItem
 									key={ref}
@@ -2050,7 +2460,55 @@ function AppShell({
 										}
 									/>
 							))}
-						</List>
+						</List> : null}
+						{approvalOAuthRequests.length > 0 ? (
+							<>
+								<BlockTitle>Connected Services</BlockTitle>
+								{approvalOAuthRequests.map((request) => {
+									const provider = oauthProviders.find((item) => item.id === request.providerId);
+									const connection = matchingOAuthConnection(request);
+									const additionalScopes = connection?.grantedScopes.filter((scope) => !request.scopes.includes(scope)) ?? [];
+									return (
+										<List strong inset key={`${request.providerId}:${request.env}`}>
+											<ListItem
+												title={provider?.name ?? request.providerId}
+												subtitle={connection ? connection.accountLabel : "Connection required before approval"}
+												after={request.env}
+												media={<Link2 size={22} />}
+											/>
+											{request.scopes.map((scope) => {
+												const definition = provider?.scopes.find((item) => item.id === scope);
+												return (
+													<ListItem
+														key={scope}
+														title={definition?.label ?? scope}
+														subtitle={definition?.description ?? scope}
+														after={definition?.risk ?? "requested"}
+													/>
+												);
+											})}
+											{connection ? (
+												<ListItem
+													title="Effective token scopes"
+													subtitle={connection.grantedScopes.join(" · ")}
+													after={additionalScopes.length > 0 ? `${additionalScopes.length} additional` : "Exact"}
+													footer={additionalScopes.length > 0 ? "This provider refreshes the full connected scope set." : undefined}
+												/>
+											) : null}
+											{!connection ? (
+												<ListItem
+													link
+													title={`Connect ${provider?.name ?? request.providerId}`}
+													subtitle="Authorize these scopes, then return to this approval."
+													media={<Plug size={22} />}
+													onClick={() => void connectOAuthProvider(request.providerId, request.scopes, `/approve/${encodeURIComponent(approval.id)}`)}
+												/>
+											) : null}
+										</List>
+									);
+								})}
+							</>
+						) : null}
 						{missingApprovalRefs.length > 0 ? (
 							<>
 								<BlockTitle>Create Missing Secrets</BlockTitle>
@@ -2122,7 +2580,7 @@ function AppShell({
 								<Button rounded outline disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("deny")}>
 									Decline
 								</Button>
-								<Button rounded disabled={busy || approval.status !== "pending" || approval.expired} onClick={() => decide("approve")}>
+								<Button rounded disabled={busy || approval.status !== "pending" || approval.expired || missingOAuthRequests.length > 0} onClick={() => decide("approve")}>
 									Approve
 								</Button>
 							</div>
@@ -2134,6 +2592,21 @@ function AppShell({
 						<p className="mb-0 text-black/55 dark:text-white/55">{status}</p>
 					</Block>
 				)}
+			</Page>
+		);
+		}
+
+	if (callbackProviderId) {
+		const provider = oauthProviders.find((item) => item.id === callbackProviderId);
+		return (
+			<Page>
+				<Navbar title="Sickrat" subtitle="Secure connection" />
+				<Block strong inset>
+					<div className="oauth-callback-mark"><RefreshCw size={28} /></div>
+					<h1 className="m-0 mt-4 text-3xl font-bold">Connecting {provider?.name ?? callbackProviderId}</h1>
+					<p className="mb-0 text-black/55 dark:text-white/55">Encrypting the refresh credential with your passkey-protected vault key.</p>
+				</Block>
+				<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
 			</Page>
 		);
 	}
@@ -2394,10 +2867,11 @@ function AppShell({
 						</Card>
 					) : null}
 					<BlockTitle>Overview</BlockTitle>
-					<List strong inset>
-						<ListItem link onClick={() => navigate("/vaults")} title="Vault" after={vaultName} subtitle={capabilities?.database.configured ? "Private deployment healthy" : "Vault storage needs setup"} media={<Cloud size={22} />} />
-						<ListItem link onClick={() => navigate("/secrets")} title="Secrets" after={String(secrets.length)} subtitle="Encrypted refs saved in your vault" media={<KeyRound size={22} />} />
-						<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
+						<List strong inset>
+							<ListItem link onClick={() => navigate("/vaults")} title="Vault" after={vaultName} subtitle={capabilities?.database.configured ? "Private deployment healthy" : "Vault storage needs setup"} media={<Cloud size={22} />} />
+							<ListItem link onClick={() => navigate("/secrets")} title="Secrets" after={String(secrets.length)} subtitle="Encrypted refs saved in your vault" media={<KeyRound size={22} />} />
+							<ListItem link onClick={() => navigate("/connections")} title="Connections" after={String(oauthConnections.filter((item) => !item.revokedAt).length)} subtitle="OAuth accounts available for approved grants" media={<Plug size={22} />} />
+							<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
 						<ListItem link onClick={() => navigate("/devices")} title="Active devices" after={String(activeDevices.length)} subtitle="Paired machines that can request access" media={<Laptop size={22} />} />
 					</List>
 					</>
@@ -2452,7 +2926,85 @@ function AppShell({
 					</List>
 				</>
 			);
-		} else if (route === "approvals") {
+			} else if (route === "connections") {
+				routeContent = (
+					<>
+						<Block strong inset>
+							<h1 className="m-0 text-3xl font-bold">Connections</h1>
+							<p className="mb-0 text-black/55 dark:text-white/55">Provider refresh credentials stay encrypted in this vault. Agents receive only approved, short-lived access tokens.</p>
+						</Block>
+						<BlockTitle>Connected Accounts</BlockTitle>
+						<List strong inset>
+							{oauthConnections.filter((connection) => !connection.revokedAt).length > 0 ? (
+								oauthConnections.filter((connection) => !connection.revokedAt).map((connection) => {
+									const provider = oauthProviders.find((item) => item.id === connection.providerId);
+									return (
+										<ListItem
+											key={connection.id}
+											title={connection.accountLabel}
+											subtitle={provider?.name ?? connection.providerId}
+											footer={`${connection.grantedScopes.join(" · ")}${connection.lastUsedAt ? ` · Used ${formatAgo(connection.lastUsedAt)}` : ""}`}
+											media={<Link2 size={22} />}
+											after={
+												<Button
+													clear
+													small
+													disabled={busy}
+													onClick={() => void revokeOAuthConnection(connection)}
+													aria-label={`Disconnect ${connection.accountLabel}`}
+													title={`Disconnect ${connection.accountLabel}`}
+												>
+													<Unplug size={19} />
+												</Button>
+											}
+										/>
+									);
+								})
+							) : (
+								<ListItem title="No connected accounts" subtitle="Choose a provider below to authorize one." media={<Plug size={22} />} />
+							)}
+						</List>
+						<BlockTitle>Providers</BlockTitle>
+						{oauthProviders.map((provider) => {
+							const activeConnections = oauthConnections.filter((connection) => connection.providerId === provider.id && !connection.revokedAt);
+							return (
+								<React.Fragment key={provider.id}>
+									<List strong inset>
+										<ListItem
+											title={provider.name}
+											subtitle={provider.description}
+											after={provider.configured ? `${activeConnections.length} connected` : "Setup needed"}
+											media={<Cloud size={22} />}
+										/>
+										<ListItem title="Callback URL" subtitle={provider.redirectUri} media={<ExternalLink size={22} />} />
+										<ListInput
+											label="OAuth client ID"
+											type="text"
+											autoCapitalize="none"
+											autoComplete="off"
+											value={oauthClientIds[provider.id] ?? ""}
+											onChange={(event) => setOAuthClientIds((current) => ({ ...current, [provider.id]: event.target.value }))}
+											placeholder="Paste the public client ID"
+										/>
+						<ListItem
+							link
+							title="OAuth client setup"
+							subtitle="Authorization code, refresh token, PKCE, and the callback URL above"
+							href={provider.documentationUrl}
+							media={<BookOpen size={22} />}
+						/>
+									</List>
+									<Block inset className="grid grid-cols-2 gap-3">
+										<Button rounded outline disabled={busy} onClick={() => void configureOAuthProvider(provider)}>Save Client</Button>
+										<Button rounded disabled={busy || !provider.configured} onClick={() => void connectOAuthProvider(provider.id, provider.defaultScopes)}>Connect</Button>
+									</Block>
+								</React.Fragment>
+							);
+						})}
+						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
+					</>
+				);
+			} else if (route === "approvals") {
 			routeContent = (
 				<>
 					<Block strong inset>
@@ -2474,7 +3026,7 @@ function AppShell({
 								key={item.id}
 								link
 								title={item.command}
-								subtitle={item.message ?? `${item.secretRefs.length} refs requested`}
+								subtitle={item.message ?? `${item.resourceRequests.length} resources requested`}
 								after={formatAgo(item.createdAt)}
 								footer={approvalWaitLabel(item) ?? undefined}
 								media={<ShieldCheck size={22} />}
@@ -2507,11 +3059,21 @@ function AppShell({
 								<ListItem title="Approval expires" after={approval.expired ? "Expired" : `In ${formatUntil(approval.expiresAt)}`} footer={new Date(approval.expiresAt).toLocaleString()} />
 								<ListItem title="Decided" after={approval.decidedAt ? new Date(approval.decidedAt).toLocaleString() : "Pending"} />
 							</List>
-							<BlockTitle>Requested Refs</BlockTitle>
+							<BlockTitle>Requested Resources</BlockTitle>
 							<List strong inset>
-								{approval.secretRefs.map((ref) => (
-									<ListItem key={ref} title={ref} subtitle="Requested ref" media={<KeyRound size={22} />} />
-								))}
+								{approval.resourceRequests.map((resource, index) =>
+									resource.type === "secret" ? (
+										<ListItem key={`secret:${resource.ref}:${index}`} title={resource.ref} subtitle="Encrypted secret" media={<KeyRound size={22} />} />
+									) : (
+										<ListItem
+											key={`oauth:${resource.providerId}:${resource.env}:${index}`}
+											title={oauthProviders.find((provider) => provider.id === resource.providerId)?.name ?? resource.providerId}
+											subtitle={resource.scopes.join(" · ")}
+											after={resource.env}
+											media={<Link2 size={22} />}
+										/>
+									),
+								)}
 							</List>
 							<Block inset className="grid grid-cols-2 gap-3">
 								{approval.status === "pending" ? (
@@ -2686,15 +3248,18 @@ function App() {
 					<Route path="/login" element={<AppShell route="login" />} />
 					<Route path="/vaults" element={<AppShell route="vaults" />} />
 					<Route path="/secrets" element={<AppShell route="secrets" />} />
+					<Route path="/connections" element={<AppShell route="connections" />} />
 					<Route path="/approvals" element={<AppShell route="approvals" />} />
 					<Route path="/approvals/:requestId" element={<ApprovalDetailRoute />} />
 					<Route path="/devices" element={<AppShell route="devices" />} />
 					<Route path="/settings" element={<AppShell route="settings" />} />
 					<Route path="/cf/callback" element={<AppShell route="settings" isCloudflareCallback />} />
+					<Route path="/oauth/callback/:providerId" element={<OAuthCallbackRoute />} />
 					<Route path="/approve/:requestId" element={<ApprovalRoute />} />
 					<Route path="/app" element={<Navigate to="/" replace />} />
 					<Route path="/app/vaults" element={<Navigate to="/vaults" replace />} />
 					<Route path="/app/secrets" element={<Navigate to="/secrets" replace />} />
+					<Route path="/app/connections" element={<Navigate to="/connections" replace />} />
 					<Route path="/app/approvals" element={<Navigate to="/approvals" replace />} />
 					<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />
 					<Route path="/app/devices" element={<Navigate to="/devices" replace />} />

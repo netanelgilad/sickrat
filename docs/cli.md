@@ -39,11 +39,30 @@ OAuth token requests also use the `sickrat://` scheme with the reserved `oauth` 
 
 ```text
 sickrat://oauth/github?scope=repo&scope=read:user
-sickrat://oauth/cloudflare?scope=workers-scripts.write&scope=d1.write
+sickrat://oauth/cloudflare?scope=workers-platform.write&scope=d1.write
 sickrat://oauth/slack?scope=chat:write
 ```
 
 These are request descriptors, not token material. The CLI parses them into typed OAuth resource requests, the PWA shows provider/account/scopes during approval, and the approved grant injects a short-lived access token into the target environment variable.
+
+The CLI recognizes these descriptors in direct `--env` mappings and env files. It sends a signed typed request, waits for PWA approval, decrypts the sealed access-token grant, validates provider/scopes/expiry, and injects the token into the named environment variable. Refresh tokens never leave the encrypted vault connection.
+
+Cloudflare is the first supported provider. In the PWA, open **Connections**, configure a Cloudflare public OAuth client, and connect an account. The OAuth client must use authorization code with PKCE (`S256`), token endpoint authentication `none`, the `refresh_token` grant, and the callback URL shown by the PWA.
+
+For Atlas Status Cloudflare provisioning, request the narrow Worker and D1 write scopes (and replace the command after `--` with the actual setup command):
+
+```sh
+sickrat run --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare?scope=workers-platform.write&scope=d1.write' --message "Configure Atlas Status Cloudflare resources" -- <atlas-status-setup-command>
+```
+
+Read-only verification:
+
+```sh
+sickrat run \
+  --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare?scope=account-settings.read&scope=workers-platform.read' \
+  --message "Verify the connected Cloudflare account and list Worker scripts" \
+  -- sh -c 'curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts"'
+```
 
 ## `run`
 

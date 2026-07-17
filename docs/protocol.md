@@ -43,7 +43,7 @@ This leaves room for rotation and sharing later without changing the storage for
 
 ## Approval Request
 
-Current secret-only requests use `refs`. The OAuth gateway extends this into typed resource requests while keeping `refs` for older CLIs.
+Legacy secret-only requests use `refs`. The OAuth gateway uses typed resource requests while keeping `refs` for older CLIs.
 
 ```json
 {

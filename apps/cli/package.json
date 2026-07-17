@@ -1,6 +1,6 @@
 {
 	"name": "@sickrat/cli",
-	"version": "0.1.27",
+	"version": "0.1.28",
 	"private": true,
 	"type": "module",
 	"bin": {
@@ -9,6 +9,7 @@
 	"scripts": {
 		"build": "bun build --compile --outfile dist/sickrat src/index.ts",
 		"link:local": "mkdir -p ~/.local/bin && ln -sf \"$PWD/dist/sickrat\" ~/.local/bin/sickrat",
+		"test": "node --experimental-strip-types --test test/*.test.ts",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {

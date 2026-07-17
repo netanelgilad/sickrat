@@ -90,7 +90,7 @@ npm run site:build
 npm run web:build
 ```
 
-The Worker test harness is present under `apps/web/test`, but it currently depends on the Cloudflare Vitest/Wrangler assets configuration being completed.
+The Worker test harness under `apps/web/test` exercises the OAuth provider catalog, PKCE token exchange, refresh exchange, and encrypted connection storage against Miniflare D1.
 
 Build the PWA/Worker bundle:
 

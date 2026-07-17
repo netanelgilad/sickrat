@@ -1,6 +1,6 @@
 # OAuth Gateway
 
-Sickrat should support agent-requested access to OAuth integrations with the same approval and passkey protection model used for secret refs.
+Sickrat supports agent-requested access to OAuth integrations with the same approval and passkey protection model used for secret refs. Cloudflare is the first provider implementation.
 
 The product goal is not to become a hosted connector platform. Each vault remains user-owned. Provider refresh tokens are stored as encrypted vault records in the user's D1 database, unlocked from the PWA with the vault key, and released to paired machines only as short-lived access-token grants after explicit approval.
 
@@ -92,29 +92,40 @@ The CLI detects OAuth requests from the existing `sickrat://` URI scheme. The re
 
 ```text
 sickrat://oauth/github?scope=repo&scope=read:user
-sickrat://oauth/cloudflare?scope=workers-scripts.write&scope=d1.write
+sickrat://oauth/cloudflare?scope=workers-platform.write&scope=d1.write
 sickrat://oauth/slack?scope=chat:write
 ```
 
 These URIs are request descriptors. They must never contain access tokens, refresh tokens, client secrets, or other credential material.
+
+## Current Implementation
+
+The complete Cloudflare flow is implemented:
+
+- The CLI parses canonical `sickrat://oauth/...` descriptors from `--env` and env files.
+- Typed resources are covered by the paired-device signature and persisted with the approval.
+- The PWA manages provider client configuration and encrypted account connections.
+- Authorization uses authorization code with PKCE; refresh is proxied through the user-owned Worker.
+- Refresh tokens are encrypted under the passkey-protected vault key before D1 storage.
+- Approval shows the requested scopes and the connection's effective scope set.
+- The PWA seals access tokens to the requesting CLI's ephemeral public key.
+- The CLI validates provider, scopes, and expiry before environment injection.
+- Timed local grants cache the encrypted access-token grant only until the earlier of approval expiry or provider-token expiry.
+
+Adding another standards-based provider is primarily a catalog entry in `apps/web/src/worker/oauth.ts`: endpoints, scope descriptions, identity response paths, and token endpoint authentication mode. The request, connection, refresh, approval, grant, and CLI injection paths are provider-independent.
 
 ```ts
 type ApprovalResourceRequest =
   | {
       type: "secret";
       ref: string;
-      mode?: "existing" | "missing" | "generated";
       env?: string;
     }
   | {
       type: "oauth_token";
       providerId: string;
-      connectionId?: string;
-      accountHint?: string;
       scopes: string[];
       env?: string;
-      audience?: string;
-      reason?: string;
     };
 ```
 
@@ -188,7 +199,9 @@ This means the Worker may transiently see OAuth token material. The PWA should l
 
 Provider OAuth apps are a separate product concern from vault ownership.
 
-For V1, prefer provider definitions that work with public clients and PKCE. For providers that require client secrets or fixed redirect URIs, support one of these modes:
+V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL from the PWA into that client, and stores the public client ID from the Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant.
+
+Providers that require a client secret need a later extension because that secret must be encrypted before storage and decrypted only for Worker-assisted exchange. The longer-term modes are:
 
 - **User-provided OAuth app:** the user enters client id and client secret in the PWA; client secret is encrypted in the vault and used only during connect/refresh.
 - **Public Sickrat app:** acceptable only for providers that allow public clients, PKCE, and no client secret.
@@ -254,15 +267,17 @@ Timed local grants should work like secret grants. The CLI may cache approved ac
 
 ## Worker API
 
-New endpoints:
+Implemented endpoints:
 
 ```text
 GET  /api/oauth/providers
+PUT  /api/oauth/providers/:id/config
 GET  /api/oauth/connections
-GET  /api/oauth/connections/:id
 POST /api/oauth/connections
+GET  /api/oauth/connections/:id/resolve
 POST /api/oauth/connections/:id/revoke
-POST /api/oauth/token-exchange
+POST /api/oauth/token
+POST /api/oauth/identity
 ```
 
 Existing endpoints to extend:
@@ -281,8 +296,7 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
   id TEXT PRIMARY KEY,
   provider_id TEXT NOT NULL,
   account_label TEXT NOT NULL,
-  account_subject TEXT,
-  account_handle TEXT,
+  account_subject TEXT NOT NULL,
   granted_scopes TEXT NOT NULL,
   token_type TEXT NOT NULL,
   access_token_expires_at TEXT,
@@ -293,17 +307,13 @@ CREATE TABLE IF NOT EXISTS oauth_connections (
   provider_metadata_json TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  last_used_at TEXT,
   revoked_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS oauth_provider_configs (
   provider_id TEXT PRIMARY KEY,
-  client_id TEXT,
-  client_secret_ciphertext TEXT,
-  client_secret_iv TEXT,
-  client_secret_salt TEXT,
-  client_secret_kdf TEXT,
-  redirect_uri TEXT,
+  client_id TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -313,10 +323,7 @@ Add columns to `approval_requests`:
 
 ```sql
 ALTER TABLE approval_requests ADD COLUMN resource_requests TEXT;
-ALTER TABLE approval_requests ADD COLUMN grant_type TEXT;
 ```
-
-`grant_type` can be `secret`, `oauth`, or `mixed` for indexing and display.
 
 ## Audit Events
 
@@ -347,23 +354,24 @@ Audit should record metadata, not token values:
 - Revoking a connection should prevent future grants and attempt provider revocation when supported.
 - Denied and expired requests must not be reusable.
 
-## Implementation Plan
+## Implementation Status
 
-1. Extend protocol types with typed `resourceRequests`, OAuth grant payloads, and canonical signing.
-2. Add Worker schema for OAuth connections and approval resource metadata.
-3. Add provider catalog endpoint with a small static catalog for GitHub and Cloudflare first.
-4. Extend CLI parsing so `sickrat://oauth/...` values in `--env` and env files become typed OAuth requests in the signed approval payload.
-5. Update PWA approval UI to render mixed resources and block approval until required connections exist.
-6. Build the Connections section with list, catalog, detail, connect, revoke, and scope display.
-7. Implement OAuth connect for one provider with PKCE, starting with GitHub if refresh-token behavior is acceptable for the target app type, otherwise Cloudflare because the project already has Cloudflare OAuth code.
-8. Implement token exchange and encrypted grant delivery.
-9. Add encrypted timed-grant cache support for OAuth access tokens in the CLI.
-10. Add audit metadata and tests for denied, missing connection, stale refresh token, scope escalation, revoked connection, and expired provider token cases.
+Implemented:
+
+1. Typed signed requests and encrypted OAuth grant payloads.
+2. D1 connection storage and approval resource metadata.
+3. Generic static provider catalog with Cloudflare as the first entry.
+4. Canonical CLI URI parsing and environment injection.
+5. Mixed-resource approval UX and connect-during-approval.
+6. Connections catalog, setup, connect, scope display, and disconnect.
+7. Generic PKCE authorization, refresh exchange, identity lookup, and rotating refresh-token storage.
+8. Provider-expiry-aware encrypted timed grants.
+9. Parser and Worker API tests.
+
+Remaining follow-up work includes provider revocation calls, richer audit history, account selection where providers expose multiple accounts, and additional providers.
 
 ## Open Decisions
 
-- Whether V1 allows a Worker-assisted refresh flow even though the Worker transiently sees token material.
-- Which provider should be the first real implementation target.
 - Whether OAuth app client secrets are encrypted vault records, Worker secrets, or both depending on provider.
 - How much provider catalog metadata should ship statically versus be user-editable in the PWA.
 - Whether a central redirect broker is acceptable later for providers with rigid redirect URI rules.

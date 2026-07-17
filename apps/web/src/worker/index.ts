@@ -1,3 +1,12 @@
+import {
+	exchangeOAuthAuthorizationCode,
+	getOAuthProvider,
+	inspectOAuthIdentity,
+	listOAuthProviders,
+	publicOAuthProvider,
+	refreshOAuthAccessToken,
+} from "./oauth";
+
 type PushSubscriptionRecord = {
 	id: string;
 	endpoint: string;
@@ -15,6 +24,7 @@ type ApprovalRequestRecord = {
 	command: string;
 	message: string | null;
 	secret_refs: string;
+	resource_requests: string | null;
 	access_duration_seconds: number | null;
 	approval_wait_seconds: number | null;
 	status: "pending" | "approved" | "denied";
@@ -63,6 +73,51 @@ type PairingCodeRecord = {
 	public_key: string;
 	expires_at: string;
 	approved_at: string | null;
+};
+
+type ApprovalResourceRequest =
+	| { type: "secret"; ref: string; env?: string }
+	| { type: "oauth_token"; providerId: string; scopes: string[]; env?: string };
+
+type OAuthProviderConfigRecord = {
+	provider_id: string;
+	client_id: string;
+	created_at: string;
+	updated_at: string;
+};
+
+type OAuthConnectionRecord = {
+	id: string;
+	provider_id: string;
+	account_label: string;
+	account_subject: string;
+	granted_scopes: string;
+	token_type: string;
+	access_token_expires_at: string | null;
+	refresh_token_ciphertext: string;
+	refresh_token_iv: string;
+	refresh_token_salt: string;
+	refresh_token_kdf: string;
+	provider_metadata_json: string | null;
+	created_at: string;
+	updated_at: string;
+	last_used_at: string | null;
+	revoked_at: string | null;
+};
+
+type OAuthConnectionInput = {
+	id?: string;
+	providerId?: string;
+	accountLabel?: string;
+	accountSubject?: string;
+	grantedScopes?: string[];
+	tokenType?: string;
+	accessTokenExpiresAt?: string | null;
+	refreshTokenCiphertext?: string;
+	refreshTokenIv?: string;
+	refreshTokenSalt?: string;
+	refreshTokenKdf?: string;
+	providerMetadata?: Record<string, unknown>;
 };
 
 type EnvWithBindings = Env & {
@@ -342,8 +397,33 @@ async function ensureSchema(env: EnvWithBindings) {
 	await env.DB.prepare(
 		"CREATE TABLE IF NOT EXISTS pairing_codes (code TEXT PRIMARY KEY, device_id TEXT NOT NULL, label TEXT NOT NULL, public_key TEXT NOT NULL, expires_at TEXT NOT NULL, approved_at TEXT)",
 	).run();
+	await env.DB.prepare(
+		"CREATE TABLE IF NOT EXISTS oauth_provider_configs (provider_id TEXT PRIMARY KEY, client_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+	).run();
+	await env.DB.prepare(
+		`CREATE TABLE IF NOT EXISTS oauth_connections (
+			id TEXT PRIMARY KEY,
+			provider_id TEXT NOT NULL,
+			account_label TEXT NOT NULL,
+			account_subject TEXT NOT NULL,
+			granted_scopes TEXT NOT NULL,
+			token_type TEXT NOT NULL,
+			access_token_expires_at TEXT,
+			refresh_token_ciphertext TEXT NOT NULL,
+			refresh_token_iv TEXT NOT NULL,
+			refresh_token_salt TEXT NOT NULL,
+			refresh_token_kdf TEXT NOT NULL,
+			provider_metadata_json TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			last_used_at TEXT,
+			revoked_at TEXT
+		)`,
+	).run();
+	await env.DB.prepare("CREATE INDEX IF NOT EXISTS oauth_connections_provider_idx ON oauth_connections(provider_id, revoked_at)").run();
 	await ensureColumn(env.DB, "approval_requests", "device_id", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "message", "TEXT");
+	await ensureColumn(env.DB, "approval_requests", "resource_requests", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "ephemeral_public_key", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "grant_ciphertext", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "grant_ready_at", "TEXT");
@@ -504,6 +584,10 @@ async function sendEmptyWebPush(subscription: PushSubscriptionRecord, env: EnvWi
 
 function mapApproval(row: ApprovalRequestRecord) {
 	const expiresAt = approvalExpiresAt(row);
+	const secretRefs = JSON.parse(row.secret_refs) as string[];
+	const resourceRequests = row.resource_requests
+		? (JSON.parse(row.resource_requests) as ApprovalResourceRequest[])
+		: secretRefs.map((ref) => ({ type: "secret" as const, ref }));
 	return {
 		id: row.id,
 		subscriptionId: row.subscription_id,
@@ -511,7 +595,8 @@ function mapApproval(row: ApprovalRequestRecord) {
 		device: row.device,
 		command: row.command,
 		message: row.message,
-		secretRefs: JSON.parse(row.secret_refs) as string[],
+		secretRefs,
+		resourceRequests,
 		accessDurationSeconds: row.access_duration_seconds,
 		approvalWaitSeconds: row.approval_wait_seconds,
 		status: row.status,
@@ -567,6 +652,7 @@ function canonicalApprovalPayload(input: {
 	command: string;
 	message?: string;
 	secretRefs: string[];
+	resourceRequests?: ApprovalResourceRequest[];
 	accessDurationSeconds?: number;
 	approvalWaitSeconds?: number;
 	ephemeralPublicKey: JsonWebKey;
@@ -578,6 +664,7 @@ function canonicalApprovalPayload(input: {
 		command: input.command,
 		message: input.message,
 		secretRefs: input.secretRefs,
+		resourceRequests: input.resourceRequests,
 		accessDurationSeconds: input.accessDurationSeconds,
 		approvalWaitSeconds: input.approvalWaitSeconds,
 		ephemeralPublicKey: input.ephemeralPublicKey,
@@ -591,6 +678,7 @@ async function verifyDeviceSignature(device: DeviceRecord, body: {
 	command?: string;
 	message?: string;
 	secretRefs?: string[];
+	resourceRequests?: ApprovalResourceRequest[];
 	accessDurationSeconds?: number;
 	approvalWaitSeconds?: number;
 	ephemeralPublicKey?: JsonWebKey;
@@ -630,6 +718,7 @@ async function verifyDeviceSignature(device: DeviceRecord, body: {
 				command: body.command,
 				message: body.message,
 				secretRefs: body.secretRefs,
+				resourceRequests: body.resourceRequests,
 				accessDurationSeconds: body.accessDurationSeconds,
 				approvalWaitSeconds: body.approvalWaitSeconds,
 				ephemeralPublicKey: body.ephemeralPublicKey,
@@ -648,13 +737,87 @@ function randomPairingCode() {
 }
 
 const approvalSelect = `
-	SELECT id, subscription_id, device, command, secret_refs, access_duration_seconds, approval_wait_seconds, status, created_at, decided_at,
+	SELECT id, subscription_id, device, command, secret_refs, resource_requests, access_duration_seconds, approval_wait_seconds, status, created_at, decided_at,
 		device_id, message, ephemeral_public_key, grant_ciphertext, grant_ready_at, access_expires_at
 	FROM approval_requests
 `;
 
 function isValidSecretRef(ref: unknown) {
 	return typeof ref === "string" && ref.trim() === ref && ref.length > 0 && ref.length <= 512;
+}
+
+function isValidResourceRequest(request: unknown): request is ApprovalResourceRequest {
+	if (!request || typeof request !== "object") return false;
+	const candidate = request as Record<string, unknown>;
+	const validEnv = candidate.env === undefined || (typeof candidate.env === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate.env));
+	if (!validEnv) return false;
+	if (candidate.type === "secret") return isValidSecretRef(candidate.ref);
+	return (
+		candidate.type === "oauth_token" &&
+		typeof candidate.providerId === "string" &&
+		/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(candidate.providerId) &&
+		typeof candidate.env === "string" &&
+		Array.isArray(candidate.scopes) &&
+		candidate.scopes.length > 0 &&
+		candidate.scopes.length <= 20 &&
+		new Set(candidate.scopes).size === candidate.scopes.length &&
+		candidate.scopes.every((scope) => typeof scope === "string" && scope.trim() === scope && scope.length > 0 && scope.length <= 256)
+	);
+}
+
+function isValidCiphertext(value: unknown) {
+	return typeof value === "string" && value.length > 0 && value.length <= 64 * 1024;
+}
+
+function mapOAuthConnection(row: OAuthConnectionRecord, includeCiphertext = false) {
+	return {
+		id: row.id,
+		providerId: row.provider_id,
+		accountLabel: row.account_label,
+		accountSubject: row.account_subject,
+		grantedScopes: JSON.parse(row.granted_scopes) as string[],
+		tokenType: row.token_type,
+		accessTokenExpiresAt: row.access_token_expires_at,
+		providerMetadata: row.provider_metadata_json ? (JSON.parse(row.provider_metadata_json) as Record<string, unknown>) : null,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		lastUsedAt: row.last_used_at,
+		revokedAt: row.revoked_at,
+		...(includeCiphertext
+			? {
+					refreshTokenCiphertext: row.refresh_token_ciphertext,
+					refreshTokenIv: row.refresh_token_iv,
+					refreshTokenSalt: row.refresh_token_salt,
+					refreshTokenKdf: row.refresh_token_kdf,
+				}
+			: {}),
+	};
+}
+
+function isValidOAuthConnectionInput(input: OAuthConnectionInput) {
+	return (
+		typeof input.providerId === "string" &&
+		Boolean(getOAuthProvider(input.providerId)) &&
+		typeof input.accountLabel === "string" &&
+		input.accountLabel.trim() === input.accountLabel &&
+		input.accountLabel.length > 0 &&
+		input.accountLabel.length <= 256 &&
+		typeof input.accountSubject === "string" &&
+		input.accountSubject.length > 0 &&
+		input.accountSubject.length <= 256 &&
+		Array.isArray(input.grantedScopes) &&
+		input.grantedScopes.length > 0 &&
+		input.grantedScopes.length <= 20 &&
+		new Set(input.grantedScopes).size === input.grantedScopes.length &&
+		input.grantedScopes.every((scope) => typeof scope === "string" && scope.trim() === scope && scope.length > 0 && scope.length <= 256) &&
+		typeof input.tokenType === "string" &&
+		input.tokenType.length > 0 &&
+		input.tokenType.length <= 64 &&
+		isValidCiphertext(input.refreshTokenCiphertext) &&
+		isValidCiphertext(input.refreshTokenIv) &&
+		isValidCiphertext(input.refreshTokenSalt) &&
+		isValidCiphertext(input.refreshTokenKdf)
+	);
 }
 
 function isValidApprovalMessage(message: unknown) {
@@ -732,6 +895,196 @@ async function createDemoApproval(subscriptionId: string, env: EnvWithBindings) 
 
 async function handleApi(request: Request, env: EnvWithBindings) {
 	const url = new URL(request.url);
+
+	if (url.pathname === "/api/oauth/providers" && request.method === "GET") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const configs = await env.DB.prepare("SELECT provider_id, client_id, created_at, updated_at FROM oauth_provider_configs").all<OAuthProviderConfigRecord>();
+		const clientIds = new Map(configs.results.map((config) => [config.provider_id, config.client_id]));
+		return json({ providers: listOAuthProviders().map((provider) => publicOAuthProvider(provider, clientIds.get(provider.id) ?? null, url.origin)) });
+	}
+
+	const oauthProviderConfigMatch = url.pathname.match(/^\/api\/oauth\/providers\/([^/]+)\/config$/);
+	if (oauthProviderConfigMatch && request.method === "PUT") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const providerId = decodeURIComponent(oauthProviderConfigMatch[1]);
+		const provider = getOAuthProvider(providerId);
+		if (!provider) return json({ error: `Unsupported OAuth provider: ${providerId}` }, { status: 404 });
+		const body = (await request.json()) as { clientId?: string };
+		if (typeof body.clientId !== "string" || !body.clientId.trim() || body.clientId.trim() !== body.clientId || body.clientId.length > 512) {
+			return json({ error: "A client ID without leading or trailing spaces is required." }, { status: 400 });
+		}
+		const now = new Date().toISOString();
+		await env.DB.prepare(
+			`INSERT INTO oauth_provider_configs (provider_id, client_id, created_at, updated_at)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(provider_id) DO UPDATE SET client_id = excluded.client_id, updated_at = excluded.updated_at`,
+		)
+			.bind(providerId, body.clientId, now, now)
+			.run();
+		return json({ provider: publicOAuthProvider(provider, body.clientId, url.origin) });
+	}
+
+	if (url.pathname === "/api/oauth/token" && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const body = (await request.json()) as {
+			action?: "authorization_code" | "refresh_token";
+			providerId?: string;
+			code?: string;
+			codeVerifier?: string;
+			redirectUri?: string;
+			refreshToken?: string;
+			scopes?: string[];
+			connectionId?: string;
+		};
+		const provider = typeof body.providerId === "string" ? getOAuthProvider(body.providerId) : null;
+		if (!provider) return json({ error: "A supported OAuth provider is required." }, { status: 400 });
+		const config = await env.DB.prepare("SELECT provider_id, client_id, created_at, updated_at FROM oauth_provider_configs WHERE provider_id = ?")
+			.bind(provider.id)
+			.first<OAuthProviderConfigRecord>();
+		if (!config) return json({ error: `${provider.name} OAuth client setup is incomplete.`, code: "provider-not-configured" }, { status: 409 });
+		if (!Array.isArray(body.scopes) || body.scopes.length === 0 || body.scopes.length > 20 || body.scopes.some((scope) => typeof scope !== "string" || !scope || scope.trim() !== scope || scope.length > 256)) {
+			return json({ error: "One to twenty canonical OAuth scopes are required." }, { status: 400 });
+		}
+		try {
+			if (body.action === "authorization_code") {
+				const expectedRedirectUri = `${url.origin}/oauth/callback/${provider.id}`;
+				if (!body.code || !body.codeVerifier || body.redirectUri !== expectedRedirectUri) {
+					return json({ error: "OAuth code, PKCE verifier, and the vault callback URI are required." }, { status: 400 });
+				}
+				const token = await exchangeOAuthAuthorizationCode({
+					provider,
+					clientId: config.client_id,
+					code: body.code,
+					codeVerifier: body.codeVerifier,
+					redirectUri: expectedRedirectUri,
+					requestedScopes: body.scopes,
+				});
+				return json(token);
+			}
+			if (body.action === "refresh_token") {
+				if (!body.refreshToken) return json({ error: "A refresh token is required." }, { status: 400 });
+				const token = await refreshOAuthAccessToken({
+					provider,
+					clientId: config.client_id,
+					refreshToken: body.refreshToken,
+					grantedScopes: body.scopes,
+				});
+				if (body.connectionId) {
+					await env.DB.prepare("UPDATE oauth_connections SET last_used_at = ? WHERE id = ? AND provider_id = ? AND revoked_at IS NULL")
+						.bind(new Date().toISOString(), body.connectionId, provider.id)
+						.run();
+				}
+				return json(token);
+			}
+			return json({ error: "OAuth token action must be authorization_code or refresh_token." }, { status: 400 });
+		} catch (error) {
+			return json({ error: error instanceof Error ? error.message : "OAuth token exchange failed." }, { status: 502 });
+		}
+	}
+
+	if (url.pathname === "/api/oauth/identity" && request.method === "POST") {
+		const body = (await request.json()) as { providerId?: string; accessToken?: string };
+		const provider = typeof body.providerId === "string" ? getOAuthProvider(body.providerId) : null;
+		if (!provider || !body.accessToken) return json({ error: "Provider and access token are required." }, { status: 400 });
+		try {
+			return json({ identity: await inspectOAuthIdentity(provider, body.accessToken) });
+		} catch (error) {
+			return json({ error: error instanceof Error ? error.message : "OAuth identity lookup failed." }, { status: 502 });
+		}
+	}
+
+	if (url.pathname === "/api/oauth/connections" && request.method === "GET") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const result = await env.DB.prepare(
+			`SELECT id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+				refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
+				created_at, updated_at, last_used_at, revoked_at
+			 FROM oauth_connections ORDER BY updated_at DESC LIMIT 100`,
+		).all<OAuthConnectionRecord>();
+		return json({ connections: result.results.map((connection) => mapOAuthConnection(connection)) });
+	}
+
+	if (url.pathname === "/api/oauth/connections" && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const body = (await request.json()) as OAuthConnectionInput;
+		if (!isValidOAuthConnectionInput(body)) return json({ error: "Invalid encrypted OAuth connection." }, { status: 400 });
+		const now = new Date().toISOString();
+		const existing = body.id
+			? await env.DB.prepare("SELECT id, created_at FROM oauth_connections WHERE id = ?").bind(body.id).first<{ id: string; created_at: string }>()
+			: await env.DB.prepare("SELECT id, created_at FROM oauth_connections WHERE provider_id = ? AND account_subject = ? AND revoked_at IS NULL ORDER BY updated_at DESC LIMIT 1")
+					.bind(body.providerId, body.accountSubject)
+					.first<{ id: string; created_at: string }>();
+		const id = existing?.id ?? crypto.randomUUID();
+		const createdAt = existing?.created_at ?? now;
+		await env.DB.prepare(
+			`INSERT INTO oauth_connections
+				(id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+				 refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
+				 created_at, updated_at, last_used_at, revoked_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+			 ON CONFLICT(id) DO UPDATE SET
+				provider_id = excluded.provider_id,
+				account_label = excluded.account_label,
+				account_subject = excluded.account_subject,
+				granted_scopes = excluded.granted_scopes,
+				token_type = excluded.token_type,
+				access_token_expires_at = excluded.access_token_expires_at,
+				refresh_token_ciphertext = excluded.refresh_token_ciphertext,
+				refresh_token_iv = excluded.refresh_token_iv,
+				refresh_token_salt = excluded.refresh_token_salt,
+				refresh_token_kdf = excluded.refresh_token_kdf,
+				provider_metadata_json = excluded.provider_metadata_json,
+				updated_at = excluded.updated_at,
+				revoked_at = NULL`,
+		)
+			.bind(
+				id,
+				body.providerId,
+				body.accountLabel,
+				body.accountSubject,
+				JSON.stringify(body.grantedScopes),
+				body.tokenType,
+				body.accessTokenExpiresAt ?? null,
+				body.refreshTokenCiphertext,
+				body.refreshTokenIv,
+				body.refreshTokenSalt,
+				body.refreshTokenKdf,
+				body.providerMetadata ? JSON.stringify(body.providerMetadata) : null,
+				createdAt,
+				now,
+			)
+			.run();
+		const row = await env.DB.prepare(
+			`SELECT id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+				refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
+				created_at, updated_at, last_used_at, revoked_at FROM oauth_connections WHERE id = ?`,
+		)
+			.bind(id)
+			.first<OAuthConnectionRecord>();
+		return json({ connection: row ? mapOAuthConnection(row) : null });
+	}
+
+	const oauthConnectionMatch = url.pathname.match(/^\/api\/oauth\/connections\/([^/]+)(?:\/(resolve|revoke))?$/);
+	if (oauthConnectionMatch && request.method === "GET" && oauthConnectionMatch[2] === "resolve") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = decodeURIComponent(oauthConnectionMatch[1]);
+		const row = await env.DB.prepare(
+			`SELECT id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+				refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
+				created_at, updated_at, last_used_at, revoked_at FROM oauth_connections WHERE id = ? AND revoked_at IS NULL`,
+		)
+			.bind(id)
+			.first<OAuthConnectionRecord>();
+		if (!row) return json({ error: "OAuth connection not found." }, { status: 404 });
+		return json({ connection: mapOAuthConnection(row, true) });
+	}
+	if (oauthConnectionMatch && request.method === "POST" && oauthConnectionMatch[2] === "revoke") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = decodeURIComponent(oauthConnectionMatch[1]);
+		const now = new Date().toISOString();
+		await env.DB.prepare("UPDATE oauth_connections SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, now, id).run();
+		return json({ ok: true, id, revokedAt: now });
+	}
 
 	if (url.pathname === "/api/cloudflare/oauth-config" && request.method === "GET") {
 		return json({
@@ -997,6 +1350,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			command?: string;
 			message?: string;
 			secretRefs?: string[];
+			resourceRequests?: ApprovalResourceRequest[];
 			accessDurationSeconds?: number;
 			approvalWaitSeconds?: number;
 			ephemeralPublicKey?: JsonWebKey;
@@ -1010,8 +1364,24 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			.first<DeviceRecord>();
 		if (!device || device.revoked_at) return json({ error: "Device is not paired." }, { status: 403 });
 		if (!(await verifyDeviceSignature(device, body))) return json({ error: "Invalid device signature." }, { status: 403 });
-		if (!body.secretRefs?.length || body.secretRefs.some((ref) => !isValidSecretRef(ref))) {
-			return json({ error: "At least one non-empty secret ref is required." }, { status: 400 });
+		if (body.resourceRequests !== undefined && (!Array.isArray(body.resourceRequests) || body.resourceRequests.some((resource) => !isValidResourceRequest(resource)))) {
+			return json({ error: "Invalid typed resource request.", code: "invalid-resource-request" }, { status: 400 });
+		}
+		if (!Array.isArray(body.secretRefs) || body.secretRefs.some((ref) => !isValidSecretRef(ref))) {
+			return json({ error: "secretRefs must be an array of canonical refs." }, { status: 400 });
+		}
+		const resourceRequests = body.resourceRequests ?? body.secretRefs.map((ref) => ({ type: "secret" as const, ref }));
+		if (resourceRequests.length === 0 || resourceRequests.length > 20) {
+			return json({ error: "Approval requests must contain between one and twenty resources." }, { status: 400 });
+		}
+		const typedSecretRefs = [...new Set(resourceRequests.filter((resource) => resource.type === "secret").map((resource) => resource.ref))].sort();
+		const legacySecretRefs = [...new Set(body.secretRefs)].sort();
+		if (typedSecretRefs.join("\n") !== legacySecretRefs.join("\n")) {
+			return json({ error: "Typed secret requests must match secretRefs." }, { status: 400 });
+		}
+		const unsupportedProvider = resourceRequests.find((resource) => resource.type === "oauth_token" && !getOAuthProvider(resource.providerId));
+		if (unsupportedProvider?.type === "oauth_token") {
+			return json({ error: `Unsupported OAuth provider: ${unsupportedProvider.providerId}`, code: "unsupported-provider" }, { status: 400 });
 		}
 		if (!isValidApprovalMessage(body.message)) {
 			return json({ error: "Message must be 600 characters or fewer without leading or trailing spaces." }, { status: 400 });
@@ -1031,8 +1401,8 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		const createdAt = new Date().toISOString();
 		await env.DB.prepare(
 			`INSERT INTO approval_requests
-				(id, subscription_id, device, command, message, secret_refs, access_duration_seconds, approval_wait_seconds, status, created_at, decided_at, device_id, ephemeral_public_key, grant_ciphertext, grant_ready_at, access_expires_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, NULL, NULL, NULL)`,
+				(id, subscription_id, device, command, message, secret_refs, resource_requests, access_duration_seconds, approval_wait_seconds, status, created_at, decided_at, device_id, ephemeral_public_key, grant_ciphertext, grant_ready_at, access_expires_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?, NULL, NULL, NULL)`,
 		)
 			.bind(
 				id,
@@ -1041,6 +1411,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 				body.command,
 				body.message ?? null,
 				JSON.stringify(body.secretRefs),
+				JSON.stringify(resourceRequests),
 				body.accessDurationSeconds ?? null,
 				body.approvalWaitSeconds ?? null,
 				createdAt,

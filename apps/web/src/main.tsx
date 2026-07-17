@@ -23,6 +23,7 @@ import {
 	Bell,
 	BookOpen,
 	Cloud,
+	Check,
 	Copy,
 	Database,
 	ExternalLink,
@@ -181,6 +182,15 @@ type OAuthAuthorization = {
 	providerId: string;
 	url: string;
 };
+
+function readPendingOAuthFlow() {
+	try {
+		const stored = sessionStorage.getItem("sickrat.oauth.pending");
+		return stored ? (JSON.parse(stored) as PendingOAuthFlow) : null;
+	} catch {
+		return null;
+	}
+}
 
 type OAuthHandoffResult = {
 	id: string;
@@ -354,6 +364,19 @@ function useTouchBoundaryGuard() {
 	}, []);
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 20_000) {
+	const controller = new AbortController();
+	const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		return await fetch(input, { ...init, signal: controller.signal });
+	} catch (error) {
+		if (controller.signal.aborted) throw new Error("The connection request timed out. Try connecting again.");
+		throw error;
+	} finally {
+		window.clearTimeout(timeout);
+	}
+}
+
 const api = {
 	async getCapabilities() {
 		const response = await fetch("/api/capabilities");
@@ -475,7 +498,7 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 	},
 	async exchangeOAuthCode(providerId: string, code: string, codeVerifier: string, redirectUri: string, scopes: string[]) {
-		const response = await fetch("/api/oauth/token", {
+		const response = await fetchWithTimeout("/api/oauth/token", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ action: "authorization_code", providerId, code, codeVerifier, redirectUri, scopes }),
@@ -499,7 +522,7 @@ const api = {
 		return (await response.json()) as OAuthTokenResult;
 	},
 	async inspectOAuthIdentity(providerId: string, accessToken: string) {
-		const response = await fetch("/api/oauth/identity", {
+		const response = await fetchWithTimeout("/api/oauth/identity", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ providerId, accessToken }),
@@ -1325,10 +1348,12 @@ function OAuthCallbackRoute() {
 function OAuthAuthorizationActions({
 	authorization,
 	providerName,
+	copied,
 	onCopy,
 }: {
 	authorization: OAuthAuthorization;
 	providerName: string;
+	copied: boolean;
 	onCopy: () => void;
 }) {
 	return (
@@ -1337,7 +1362,8 @@ function OAuthAuthorizationActions({
 				<ExternalLink size={18} className="mr-2" /> Open {providerName}
 			</Button>
 			<Button rounded outline onClick={onCopy}>
-				<Copy size={18} className="mr-2" /> Copy Link
+				{copied ? <Check size={18} className="mr-2" /> : <Copy size={18} className="mr-2" />}
+				{copied ? "Copied" : "Copy Link"}
 			</Button>
 		</Block>
 	);
@@ -1368,6 +1394,8 @@ function AppShell({
 	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
 	const [copiedOAuthCallbackProviderId, setCopiedOAuthCallbackProviderId] = useState<string | null>(null);
 	const [oauthAuthorization, setOAuthAuthorization] = useState<OAuthAuthorization | null>(null);
+	const [copiedOAuthAuthorizationProviderId, setCopiedOAuthAuthorizationProviderId] = useState<string | null>(null);
+	const [pendingOAuthFlow, setPendingOAuthFlow] = useState<PendingOAuthFlow | null>(readPendingOAuthFlow);
 	const [oauthStatus, setOAuthStatus] = useState("Connections are locked with the same passkey-protected vault key as secrets.");
 	const [secretQuery, setSecretQuery] = useState("");
 	const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
@@ -1394,6 +1422,7 @@ function AppShell({
 		cloudflareToken ? "Vault setup session found in this browser." : "Browser setup is not connected.",
 	);
 	const [notificationToast, setNotificationToast] = useState<NotificationToast | null>(null);
+	const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 	const [latestRelease, setLatestRelease] = useState<LatestReleaseMetadata | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [navigationOpen, setNavigationOpen] = useState(false);
@@ -1606,16 +1635,11 @@ function AppShell({
 
 	useEffect(() => {
 		if (oauthCallbackStartedRef.current || oauthProviders.length === 0) return;
-		let pending: PendingOAuthFlow | null = null;
-		try {
-			const stored = sessionStorage.getItem("sickrat.oauth.pending");
-			pending = stored ? (JSON.parse(stored) as PendingOAuthFlow) : null;
-		} catch {
-			pending = null;
-		}
+		const pending = pendingOAuthFlow;
 		if (!pending) return;
 		if (!pending.handoffId || !pending.handoffPrivateKey) {
 			sessionStorage.removeItem("sickrat.oauth.pending");
+			setPendingOAuthFlow(null);
 			setOAuthStatus("The previous authorization used an older callback flow. Start the connection again.");
 			return;
 		}
@@ -1636,21 +1660,28 @@ function AppShell({
 				}
 				oauthCallbackStartedRef.current = true;
 				setBusy(true);
-				setOAuthStatus(`Completing ${provider.name} connection...`);
+				setOAuthStatus(`Reading ${provider.name} authorization...`);
 				const payload = await decryptOAuthHandoff(pending, result);
-				await api.consumeOAuthHandoff(pending.handoffId);
-				sessionStorage.removeItem("sickrat.oauth.pending");
-				setOAuthAuthorization(null);
 				if (payload.error) throw new Error(payload.errorDescription ?? payload.error);
 				if (!payload.code) throw new Error(`${provider.name} did not return an authorization code.`);
 				await completeOAuthProviderConnection(provider, pending, payload.code);
+				await api.consumeOAuthHandoff(pending.handoffId).catch(() => undefined);
+				sessionStorage.removeItem("sickrat.oauth.pending");
+				setPendingOAuthFlow(null);
+				setOAuthAuthorization(null);
 			} catch (error) {
 				if (stopped) return;
 				const message = friendlyError(error, `${provider.name} connection failed.`);
-				if (/handoff not found|handoff expired/i.test(message)) sessionStorage.removeItem("sickrat.oauth.pending");
+				if (oauthCallbackStartedRef.current || /handoff not found|handoff expired/i.test(message)) {
+					await api.consumeOAuthHandoff(pending.handoffId).catch(() => undefined);
+					sessionStorage.removeItem("sickrat.oauth.pending");
+					setPendingOAuthFlow(null);
+					setOAuthAuthorization(null);
+					oauthCallbackStartedRef.current = false;
+				}
 				setOAuthStatus(message);
 			} finally {
-				if (oauthCallbackStartedRef.current) setBusy(false);
+				setBusy(false);
 			}
 		};
 		void poll();
@@ -1658,7 +1689,7 @@ function AppShell({
 			stopped = true;
 			if (timer) window.clearTimeout(timer);
 		};
-	}, [oauthAuthorization, oauthProviders]);
+	}, [pendingOAuthFlow, oauthProviders]);
 
 	useEffect(() => {
 		if (route === "approvals" || route === "app") void refreshApprovals(approvalFilter);
@@ -1953,9 +1984,11 @@ function AppShell({
 		try {
 			await navigator.clipboard.writeText(provider.redirectUri);
 			setCopiedOAuthCallbackProviderId(provider.id);
+			setFeedbackToast("Callback URL copied");
 			setOAuthStatus(`${provider.name} callback URL copied.`);
 			window.setTimeout(() => {
 				setCopiedOAuthCallbackProviderId((current) => (current === provider.id ? null : current));
+				setFeedbackToast((current) => (current === "Callback URL copied" ? null : current));
 			}, 2_000);
 		} catch (error) {
 			setCopiedOAuthCallbackProviderId(null);
@@ -1964,16 +1997,20 @@ function AppShell({
 	}
 
 	async function completeOAuthProviderConnection(provider: OAuthProvider, pending: PendingOAuthFlow, code: string) {
+		setOAuthStatus(`Exchanging ${provider.name} authorization...`);
 		const token = await api.exchangeOAuthCode(provider.id, code, pending.codeVerifier, provider.redirectUri, pending.scopes);
 		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
 		if (pending.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
+		setOAuthStatus(`Verifying the connected ${provider.name} account...`);
 		const identity = await api.inspectOAuthIdentity(provider.id, token.accessToken);
 		let key = vaultKey;
 		if (!key) {
+			setOAuthStatus(`Unlocking the vault to protect the ${provider.name} connection...`);
 			key = getPasskeyVaultRecord() ? await unlockPasskeyVaultKey() : await createPasskeyWrappedVaultKey();
 			if (!key) throw new Error("Unlock or create the vault key to store this OAuth connection.");
 			setVaultKey(key);
 		}
+		setOAuthStatus(`Encrypting and saving the ${provider.name} connection...`);
 		const encrypted = await encryptSecretValue(token.refreshToken, key);
 		const existing = oauthConnections.find((connection) => connection.providerId === provider.id && connection.accountSubject === identity.subject && !connection.revokedAt);
 		const connection = await api.saveOAuthConnection({
@@ -2015,6 +2052,7 @@ function AppShell({
 			const pending: PendingOAuthFlow = { providerId, state, codeVerifier, redirectTo, scopes, handoffId, handoffPrivateKey };
 			await api.createOAuthHandoff(handoffId, provider.id, await sha256Base64Url(state), handoffPublicKey);
 			sessionStorage.setItem("sickrat.oauth.pending", JSON.stringify(pending));
+			setPendingOAuthFlow(pending);
 			const params = new URLSearchParams({
 				response_type: "code",
 				client_id: provider.clientId,
@@ -2025,6 +2063,7 @@ function AppShell({
 				code_challenge_method: "S256",
 			});
 			setOAuthAuthorization({ providerId: provider.id, url: `${provider.authorizationEndpoint}?${params.toString()}` });
+			setCopiedOAuthAuthorizationProviderId(null);
 			oauthCallbackStartedRef.current = false;
 			setOAuthStatus(`Authorization is ready. Open ${provider.name} in your browser, then return here.`);
 		} catch (error) {
@@ -2038,8 +2077,15 @@ function AppShell({
 		if (!oauthAuthorization) return;
 		try {
 			await navigator.clipboard.writeText(oauthAuthorization.url);
+			setCopiedOAuthAuthorizationProviderId(oauthAuthorization.providerId);
+			setFeedbackToast("Authorization link copied");
 			setOAuthStatus("Authorization link copied. Open it in Safari or Chrome, then return to Sickrat.");
+			window.setTimeout(() => {
+				setCopiedOAuthAuthorizationProviderId((current) => (current === oauthAuthorization.providerId ? null : current));
+				setFeedbackToast((current) => (current === "Authorization link copied" ? null : current));
+			}, 2_000);
 		} catch (error) {
+			setCopiedOAuthAuthorizationProviderId(null);
 			setOAuthStatus(friendlyError(error, "Could not copy the authorization link."));
 		}
 	}
@@ -2663,6 +2709,7 @@ function AppShell({
 							<OAuthAuthorizationActions
 								authorization={oauthAuthorization}
 								providerName={oauthProviders.find((provider) => provider.id === oauthAuthorization.providerId)?.name ?? oauthAuthorization.providerId}
+								copied={copiedOAuthAuthorizationProviderId === oauthAuthorization.providerId}
 								onCopy={() => void copyOAuthAuthorizationUrl()}
 							/>
 						) : null}
@@ -3169,6 +3216,7 @@ function AppShell({
 							<OAuthAuthorizationActions
 								authorization={oauthAuthorization}
 								providerName={oauthProviders.find((provider) => provider.id === oauthAuthorization.providerId)?.name ?? oauthAuthorization.providerId}
+								copied={copiedOAuthAuthorizationProviderId === oauthAuthorization.providerId}
 								onCopy={() => void copyOAuthAuthorizationUrl()}
 							/>
 						) : null}
@@ -3398,6 +3446,9 @@ function AppShell({
 						}
 					>
 						{notificationToast ? `${notificationToast.title}: ${notificationToast.body}` : ""}
+					</Toast>
+					<Toast opened={Boolean(feedbackToast)} position="center">
+						{feedbackToast ?? ""}
 					</Toast>
 				</div>
 			</Page>

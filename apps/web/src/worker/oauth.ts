@@ -107,6 +107,19 @@ async function readTokenResponse(response: Response, fallbackScopes: string[]) {
 	} satisfies OAuthTokenResult;
 }
 
+async function fetchOAuthProvider(input: RequestInfo | URL, init?: RequestInit) {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 15_000);
+	try {
+		return await fetch(input, { ...init, signal: controller.signal });
+	} catch (error) {
+		if (controller.signal.aborted) throw new Error("The OAuth provider timed out. Try connecting again.");
+		throw error;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 export async function exchangeOAuthAuthorizationCode(input: {
 	provider: OAuthProviderDefinition;
 	clientId: string;
@@ -124,7 +137,7 @@ export async function exchangeOAuthAuthorizationCode(input: {
 		code_verifier: input.codeVerifier,
 	});
 	if (input.provider.tokenEndpointAuthMethod === "client_secret_post" && input.clientSecret) body.set("client_secret", input.clientSecret);
-	const response = await fetch(input.provider.tokenEndpoint, {
+	const response = await fetchOAuthProvider(input.provider.tokenEndpoint, {
 		method: "POST",
 		headers: { "content-type": "application/x-www-form-urlencoded" },
 		body,
@@ -145,7 +158,7 @@ export async function refreshOAuthAccessToken(input: {
 		client_id: input.clientId,
 	});
 	if (input.provider.tokenEndpointAuthMethod === "client_secret_post" && input.clientSecret) body.set("client_secret", input.clientSecret);
-	const response = await fetch(input.provider.tokenEndpoint, {
+	const response = await fetchOAuthProvider(input.provider.tokenEndpoint, {
 		method: "POST",
 		headers: { "content-type": "application/x-www-form-urlencoded" },
 		body,
@@ -163,7 +176,7 @@ function readPath(value: unknown, path: string) {
 }
 
 export async function inspectOAuthIdentity(provider: OAuthProviderDefinition, accessToken: string) {
-	const response = await fetch(provider.identity.endpoint, {
+	const response = await fetchOAuthProvider(provider.identity.endpoint, {
 		headers: { authorization: `Bearer ${accessToken}`, accept: "application/json" },
 	});
 	const body = (await response.json().catch(() => null)) as unknown;

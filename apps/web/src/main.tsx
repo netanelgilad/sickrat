@@ -173,6 +173,23 @@ type PendingOAuthFlow = {
 	codeVerifier: string;
 	redirectTo: string;
 	scopes: string[];
+	handoffId: string;
+	handoffPrivateKey: JsonWebKey;
+};
+
+type OAuthAuthorization = {
+	providerId: string;
+	url: string;
+};
+
+type OAuthHandoffResult = {
+	id: string;
+	providerId: string;
+	status: "pending" | "completed";
+	ciphertext: string | null;
+	iv: string | null;
+	ephemeralPublicKey: JsonWebKey | null;
+	expiresAt: string;
 };
 
 type PairingCodeDetails = {
@@ -439,6 +456,24 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { provider: OAuthProvider }).provider;
 	},
+	async createOAuthHandoff(id: string, providerId: string, stateHash: string, publicKey: JsonWebKey) {
+		const response = await fetch("/api/oauth/handoffs", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ id, providerId, stateHash, publicKey }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as { id: string; providerId: string; expiresAt: string };
+	},
+	async getOAuthHandoff(id: string) {
+		const response = await fetch(`/api/oauth/handoffs/${encodeURIComponent(id)}`, { cache: "no-store" });
+		if (!response.ok) throw new Error(await response.text());
+		return (await response.json()) as OAuthHandoffResult;
+	},
+	async consumeOAuthHandoff(id: string) {
+		const response = await fetch(`/api/oauth/handoffs/${encodeURIComponent(id)}`, { method: "DELETE" });
+		if (!response.ok) throw new Error(await response.text());
+	},
 	async exchangeOAuthCode(providerId: string, code: string, codeVerifier: string, redirectUri: string, scopes: string[]) {
 		const response = await fetch("/api/oauth/token", {
 			method: "POST",
@@ -655,6 +690,37 @@ async function sha256Base64Url(value: string) {
 	return bytesToBase64Url(new Uint8Array(digest));
 }
 
+async function decryptOAuthHandoff(pending: PendingOAuthFlow, result: OAuthHandoffResult) {
+	if (!result.ciphertext || !result.iv || !result.ephemeralPublicKey) throw new Error("The OAuth callback handoff is incomplete.");
+	const privateKey = await crypto.subtle.importKey("jwk", pending.handoffPrivateKey, { name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);
+	const ephemeralPublicKey = await crypto.subtle.importKey("jwk", result.ephemeralPublicKey, { name: "ECDH", namedCurve: "P-256" }, false, []);
+	const sharedSecret = await crypto.subtle.deriveBits({ name: "ECDH", public: ephemeralPublicKey }, privateKey, 256);
+	const hkdfKey = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveKey"]);
+	const key = await crypto.subtle.deriveKey(
+		{ name: "HKDF", hash: "SHA-256", salt: oauthHandoffWrapSalt, info: oauthHandoffWrapInfo },
+		hkdfKey,
+		{ name: "AES-GCM", length: 256 },
+		false,
+		["decrypt"],
+	);
+	const plaintext = await crypto.subtle.decrypt(
+		{ name: "AES-GCM", iv: base64UrlToUint8Array(result.iv) },
+		key,
+		base64UrlToUint8Array(result.ciphertext),
+	);
+	const payload = JSON.parse(new TextDecoder().decode(plaintext)) as {
+		providerId?: string;
+		state?: string;
+		code?: string | null;
+		error?: string | null;
+		errorDescription?: string | null;
+	};
+	if (payload.providerId !== pending.providerId || payload.state !== pending.state) {
+		throw new Error("The OAuth callback does not match the connection request in this app.");
+	}
+	return payload;
+}
+
 function friendlyError(error: unknown, fallback: string) {
 	const raw = error instanceof Error ? error.message : typeof error === "string" ? error : fallback;
 	try {
@@ -675,6 +741,8 @@ const passkeyWrapInfo = new TextEncoder().encode("sickrat:vault-key-wrap:v1");
 const passkeyWrapSalt = new TextEncoder().encode("sickrat:webauthn-prf:v1");
 const grantWrapInfo = new TextEncoder().encode("sickrat:cli-grant:v1");
 const grantWrapSalt = new TextEncoder().encode("sickrat:grant-ecdh:v1");
+const oauthHandoffWrapInfo = new TextEncoder().encode("sickrat:oauth-handoff:v1");
+const oauthHandoffWrapSalt = new TextEncoder().encode("sickrat:oauth-handoff-salt:v1");
 
 function migrateStorageKey(storage: Storage, oldKey: string, newKey: string, removeOld = false) {
 	const existing = storage.getItem(newKey);
@@ -1254,6 +1322,27 @@ function OAuthCallbackRoute() {
 	return <AppShell route="connections" callbackProviderId={params.providerId} />;
 }
 
+function OAuthAuthorizationActions({
+	authorization,
+	providerName,
+	onCopy,
+}: {
+	authorization: OAuthAuthorization;
+	providerName: string;
+	onCopy: () => void;
+}) {
+	return (
+		<Block inset className="grid grid-cols-2 gap-3">
+			<Button rounded onClick={() => window.open(authorization.url, "_blank", "noopener,noreferrer")}>
+				<ExternalLink size={18} className="mr-2" /> Open {providerName}
+			</Button>
+			<Button rounded outline onClick={onCopy}>
+				<Copy size={18} className="mr-2" /> Copy Link
+			</Button>
+		</Block>
+	);
+}
+
 function AppShell({
 	route,
 	requestId,
@@ -1278,6 +1367,7 @@ function AppShell({
 	const [oauthConnections, setOAuthConnections] = useState<OAuthConnection[]>([]);
 	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
 	const [copiedOAuthCallbackProviderId, setCopiedOAuthCallbackProviderId] = useState<string | null>(null);
+	const [oauthAuthorization, setOAuthAuthorization] = useState<OAuthAuthorization | null>(null);
 	const [oauthStatus, setOAuthStatus] = useState("Connections are locked with the same passkey-protected vault key as secrets.");
 	const [secretQuery, setSecretQuery] = useState("");
 	const [vaultKey, setVaultKey] = useState<CryptoKey | null>(null);
@@ -1515,18 +1605,7 @@ function AppShell({
 	}, [route]);
 
 	useEffect(() => {
-		if (!callbackProviderId || oauthCallbackStartedRef.current || oauthProviders.length === 0) return;
-		const provider = oauthProviders.find((item) => item.id === callbackProviderId);
-		if (!provider) {
-			setOAuthStatus(`Unsupported OAuth provider: ${callbackProviderId}`);
-			return;
-		}
-		const params = new URLSearchParams(window.location.search);
-		const providerError = params.get("error");
-		if (providerError) {
-			setOAuthStatus(friendlyError(params.get("error_description") ?? providerError, `${provider.name} authorization failed.`));
-			return;
-		}
+		if (oauthCallbackStartedRef.current || oauthProviders.length === 0) return;
 		let pending: PendingOAuthFlow | null = null;
 		try {
 			const stored = sessionStorage.getItem("sickrat.oauth.pending");
@@ -1534,50 +1613,52 @@ function AppShell({
 		} catch {
 			pending = null;
 		}
-		const code = params.get("code");
-		const state = params.get("state");
-		if (!pending || pending.providerId !== provider.id || !code || !state || state !== pending.state) {
-			setOAuthStatus("This OAuth callback does not match an active Sickrat connection request.");
+		if (!pending) return;
+		if (!pending.handoffId || !pending.handoffPrivateKey) {
+			sessionStorage.removeItem("sickrat.oauth.pending");
+			setOAuthStatus("The previous authorization used an older callback flow. Start the connection again.");
 			return;
 		}
-
-		oauthCallbackStartedRef.current = true;
-		sessionStorage.removeItem("sickrat.oauth.pending");
-		setBusy(true);
-		setOAuthStatus(`Completing ${provider.name} connection...`);
-		void (async () => {
-			const token = await api.exchangeOAuthCode(provider.id, code, pending.codeVerifier, provider.redirectUri, pending.scopes);
-			if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
-			if (pending.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
-			const identity = await api.inspectOAuthIdentity(provider.id, token.accessToken);
-			let key = vaultKey;
-			if (!key) {
-				key = getPasskeyVaultRecord() ? await unlockPasskeyVaultKey() : await createPasskeyWrappedVaultKey();
-				if (!key) throw new Error("Unlock or create the vault key to store this OAuth connection.");
-				setVaultKey(key);
+		const provider = oauthProviders.find((item) => item.id === pending.providerId);
+		if (!provider) {
+			setOAuthStatus(`Unsupported OAuth provider: ${pending.providerId}`);
+			return;
+		}
+		let stopped = false;
+		let timer: number | undefined;
+		const poll = async () => {
+			try {
+				const result = await api.getOAuthHandoff(pending.handoffId);
+				if (stopped) return;
+				if (result.status === "pending") {
+					timer = window.setTimeout(() => void poll(), 1_500);
+					return;
+				}
+				oauthCallbackStartedRef.current = true;
+				setBusy(true);
+				setOAuthStatus(`Completing ${provider.name} connection...`);
+				const payload = await decryptOAuthHandoff(pending, result);
+				await api.consumeOAuthHandoff(pending.handoffId);
+				sessionStorage.removeItem("sickrat.oauth.pending");
+				setOAuthAuthorization(null);
+				if (payload.error) throw new Error(payload.errorDescription ?? payload.error);
+				if (!payload.code) throw new Error(`${provider.name} did not return an authorization code.`);
+				await completeOAuthProviderConnection(provider, pending, payload.code);
+			} catch (error) {
+				if (stopped) return;
+				const message = friendlyError(error, `${provider.name} connection failed.`);
+				if (/handoff not found|handoff expired/i.test(message)) sessionStorage.removeItem("sickrat.oauth.pending");
+				setOAuthStatus(message);
+			} finally {
+				if (oauthCallbackStartedRef.current) setBusy(false);
 			}
-			const encrypted = await encryptSecretValue(token.refreshToken, key);
-			const existing = oauthConnections.find((connection) => connection.providerId === provider.id && connection.accountSubject === identity.subject && !connection.revokedAt);
-			const connection = await api.saveOAuthConnection({
-				id: existing?.id,
-				providerId: provider.id,
-				accountLabel: identity.label,
-				accountSubject: identity.subject,
-				grantedScopes: token.scopes,
-				tokenType: token.tokenType,
-				accessTokenExpiresAt: token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : null,
-				refreshTokenCiphertext: encrypted.ciphertext,
-				refreshTokenIv: encrypted.iv,
-				refreshTokenSalt: encrypted.salt,
-				refreshTokenKdf: encrypted.kdf,
-			});
-			setOAuthConnections((current) => [connection, ...current.filter((item) => item.id !== connection.id)]);
-			setOAuthStatus(`${provider.name} connected as ${connection.accountLabel}.`);
-			navigate(pending.redirectTo, { replace: true });
-		})()
-			.catch((error: unknown) => setOAuthStatus(friendlyError(error, `${provider.name} connection failed.`)))
-			.finally(() => setBusy(false));
-	}, [callbackProviderId, navigate, oauthConnections, oauthProviders, vaultKey]);
+		};
+		void poll();
+		return () => {
+			stopped = true;
+			if (timer) window.clearTimeout(timer);
+		};
+	}, [oauthAuthorization, oauthProviders]);
 
 	useEffect(() => {
 		if (route === "approvals" || route === "app") void refreshApprovals(approvalFilter);
@@ -1882,6 +1963,37 @@ function AppShell({
 		}
 	}
 
+	async function completeOAuthProviderConnection(provider: OAuthProvider, pending: PendingOAuthFlow, code: string) {
+		const token = await api.exchangeOAuthCode(provider.id, code, pending.codeVerifier, provider.redirectUri, pending.scopes);
+		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
+		if (pending.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
+		const identity = await api.inspectOAuthIdentity(provider.id, token.accessToken);
+		let key = vaultKey;
+		if (!key) {
+			key = getPasskeyVaultRecord() ? await unlockPasskeyVaultKey() : await createPasskeyWrappedVaultKey();
+			if (!key) throw new Error("Unlock or create the vault key to store this OAuth connection.");
+			setVaultKey(key);
+		}
+		const encrypted = await encryptSecretValue(token.refreshToken, key);
+		const existing = oauthConnections.find((connection) => connection.providerId === provider.id && connection.accountSubject === identity.subject && !connection.revokedAt);
+		const connection = await api.saveOAuthConnection({
+			id: existing?.id,
+			providerId: provider.id,
+			accountLabel: identity.label,
+			accountSubject: identity.subject,
+			grantedScopes: token.scopes,
+			tokenType: token.tokenType,
+			accessTokenExpiresAt: token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : null,
+			refreshTokenCiphertext: encrypted.ciphertext,
+			refreshTokenIv: encrypted.iv,
+			refreshTokenSalt: encrypted.salt,
+			refreshTokenKdf: encrypted.kdf,
+		});
+		setOAuthConnections((current) => [connection, ...current.filter((item) => item.id !== connection.id)]);
+		setOAuthStatus(`${provider.name} connected as ${connection.accountLabel}.`);
+		navigate(pending.redirectTo, { replace: true });
+	}
+
 	async function connectOAuthProvider(providerId: string, requestedScopes: string[], redirectTo = "/connections") {
 		const provider = oauthProviders.find((item) => item.id === providerId);
 		if (!provider?.clientId) {
@@ -1889,23 +2001,47 @@ function AppShell({
 			if (redirectTo !== "/connections") navigate("/connections");
 			return;
 		}
-		const scopes = [...new Set([...requestedScopes, ...provider.identityScopes])];
-		const state = randomBase64Url(24);
-		const codeVerifier = randomBase64Url(72);
-		const codeChallenge = await sha256Base64Url(codeVerifier);
-		const pending: PendingOAuthFlow = { providerId, state, codeVerifier, redirectTo, scopes };
-		sessionStorage.setItem("sickrat.oauth.pending", JSON.stringify(pending));
-		const params = new URLSearchParams({
-			response_type: "code",
-			client_id: provider.clientId,
-			redirect_uri: provider.redirectUri,
-			scope: scopes.join(" "),
-			state,
-			code_challenge: codeChallenge,
-			code_challenge_method: "S256",
-		});
-		setOAuthStatus(`Opening ${provider.name} authorization...`);
-		window.location.href = `${provider.authorizationEndpoint}?${params.toString()}`;
+		setBusy(true);
+		setOAuthStatus(`Preparing secure ${provider.name} authorization...`);
+		try {
+			const scopes = [...new Set([...requestedScopes, ...provider.identityScopes])];
+			const handoffId = randomBase64Url(18);
+			const handoffKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+			const handoffPrivateKey = await crypto.subtle.exportKey("jwk", handoffKeys.privateKey);
+			const handoffPublicKey = await crypto.subtle.exportKey("jwk", handoffKeys.publicKey);
+			const state = `v1.${handoffId}.${randomBase64Url(18)}`;
+			const codeVerifier = randomBase64Url(72);
+			const codeChallenge = await sha256Base64Url(codeVerifier);
+			const pending: PendingOAuthFlow = { providerId, state, codeVerifier, redirectTo, scopes, handoffId, handoffPrivateKey };
+			await api.createOAuthHandoff(handoffId, provider.id, await sha256Base64Url(state), handoffPublicKey);
+			sessionStorage.setItem("sickrat.oauth.pending", JSON.stringify(pending));
+			const params = new URLSearchParams({
+				response_type: "code",
+				client_id: provider.clientId,
+				redirect_uri: provider.redirectUri,
+				scope: scopes.join(" "),
+				state,
+				code_challenge: codeChallenge,
+				code_challenge_method: "S256",
+			});
+			setOAuthAuthorization({ providerId: provider.id, url: `${provider.authorizationEndpoint}?${params.toString()}` });
+			oauthCallbackStartedRef.current = false;
+			setOAuthStatus(`Authorization is ready. Open ${provider.name} in your browser, then return here.`);
+		} catch (error) {
+			setOAuthStatus(friendlyError(error, `Could not prepare ${provider.name} authorization.`));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function copyOAuthAuthorizationUrl() {
+		if (!oauthAuthorization) return;
+		try {
+			await navigator.clipboard.writeText(oauthAuthorization.url);
+			setOAuthStatus("Authorization link copied. Open it in Safari or Chrome, then return to Sickrat.");
+		} catch (error) {
+			setOAuthStatus(friendlyError(error, "Could not copy the authorization link."));
+		}
 	}
 
 	async function revokeOAuthConnection(connection: OAuthConnection) {
@@ -2523,6 +2659,13 @@ function AppShell({
 								})}
 							</>
 						) : null}
+						{oauthAuthorization ? (
+							<OAuthAuthorizationActions
+								authorization={oauthAuthorization}
+								providerName={oauthProviders.find((provider) => provider.id === oauthAuthorization.providerId)?.name ?? oauthAuthorization.providerId}
+								onCopy={() => void copyOAuthAuthorizationUrl()}
+							/>
+						) : null}
 						{missingApprovalRefs.length > 0 ? (
 							<>
 								<BlockTitle>Create Missing Secrets</BlockTitle>
@@ -3022,6 +3165,13 @@ function AppShell({
 								</React.Fragment>
 							);
 						})}
+						{oauthAuthorization ? (
+							<OAuthAuthorizationActions
+								authorization={oauthAuthorization}
+								providerName={oauthProviders.find((provider) => provider.id === oauthAuthorization.providerId)?.name ?? oauthAuthorization.providerId}
+								onCopy={() => void copyOAuthAuthorizationUrl()}
+							/>
+						) : null}
 						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
 					</>
 				);

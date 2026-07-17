@@ -174,10 +174,11 @@ If no matching connection exists, approval becomes a connect-and-approve flow:
 
 1. PWA shows that the requested provider or scopes are not connected.
 2. User taps Connect.
-3. PWA starts OAuth authorization with PKCE and the requested scopes.
-4. Provider redirects back to the vault callback route.
-5. PWA stores the refresh token encrypted as a new connection.
-6. PWA continues the original approval and seals a short-lived access token for the CLI.
+3. PWA creates PKCE material and a short-lived encrypted callback handoff, then offers an authorization link that can open in the system browser.
+4. Provider redirects the browser back to the vault callback route.
+5. The user-owned Worker encrypts the one-time callback result for the waiting PWA without exchanging the code or receiving the PKCE verifier.
+6. When the user returns to the installed PWA, it retrieves and decrypts the callback, exchanges the code, and stores the refresh token encrypted as a new connection.
+7. PWA continues the original approval and seals a short-lived access token for the CLI.
 
 This mirrors missing-secret creation: the user can create the missing credential during the approval, and the original request continues.
 
@@ -194,6 +195,8 @@ V1 should support a user-owned Worker token-exchange proxy:
 - PWA seals the access token to the CLI request public key.
 
 This means the Worker may transiently see OAuth token material. The PWA should label these connections as "Worker-assisted refresh" in internal metadata, and the threat model should be updated accordingly. Where a provider supports browser-safe PKCE refresh with CORS and no client secret, the PWA can refresh directly and preserve the stronger "Worker never sees plaintext" property.
+
+The browser callback relay is separate from token exchange. Its D1 record expires after five minutes and contains only the callback result sealed to an ephemeral P-256 public key. The matching private key and PKCE verifier remain in the installed PWA. The Worker never stores either private value, a refresh token, or an access token in the handoff record. The handoff is marked consumed after retrieval.
 
 ## OAuth App Configuration
 

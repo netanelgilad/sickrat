@@ -120,6 +120,20 @@ type OAuthConnectionInput = {
 	providerMetadata?: Record<string, unknown>;
 };
 
+type OAuthHandoffRecord = {
+	id: string;
+	provider_id: string;
+	state_hash: string;
+	public_key: string;
+	ciphertext: string | null;
+	iv: string | null;
+	ephemeral_public_key: string | null;
+	created_at: string;
+	expires_at: string;
+	completed_at: string | null;
+	consumed_at: string | null;
+};
+
 type EnvWithBindings = Env & {
 	ASSETS: Fetcher;
 	APPROVAL_HUB?: DurableObjectNamespace;
@@ -174,6 +188,9 @@ const jsonHeaders = {
 };
 
 const defaultApprovalWaitSeconds = 2 * 60;
+const oauthHandoffTtlMs = 5 * 60 * 1000;
+const oauthHandoffWrapSalt = new TextEncoder().encode("sickrat:oauth-handoff-salt:v1");
+const oauthHandoffWrapInfo = new TextEncoder().encode("sickrat:oauth-handoff:v1");
 
 const vapidJwtCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -420,7 +437,23 @@ async function ensureSchema(env: EnvWithBindings) {
 			revoked_at TEXT
 		)`,
 	).run();
+	await env.DB.prepare(
+		`CREATE TABLE IF NOT EXISTS oauth_handoffs (
+			id TEXT PRIMARY KEY,
+			provider_id TEXT NOT NULL,
+			state_hash TEXT NOT NULL,
+			public_key TEXT NOT NULL,
+			ciphertext TEXT,
+			iv TEXT,
+			ephemeral_public_key TEXT,
+			created_at TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			completed_at TEXT,
+			consumed_at TEXT
+		)`,
+	).run();
 	await env.DB.prepare("CREATE INDEX IF NOT EXISTS oauth_connections_provider_idx ON oauth_connections(provider_id, revoked_at)").run();
+	await env.DB.prepare("CREATE INDEX IF NOT EXISTS oauth_handoffs_expiry_idx ON oauth_handoffs(expires_at)").run();
 	await ensureColumn(env.DB, "approval_requests", "device_id", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "message", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "resource_requests", "TEXT");
@@ -455,6 +488,111 @@ function bytesToBase64Url(bytes: Uint8Array) {
 	let binary = "";
 	for (const byte of bytes) binary += String.fromCharCode(byte);
 	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function sha256Base64Url(value: string) {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+	return bytesToBase64Url(new Uint8Array(digest));
+}
+
+async function sealOAuthHandoff(publicKey: JsonWebKey, payload: string) {
+	const recipientKey = await crypto.subtle.importKey("jwk", publicKey, { name: "ECDH", namedCurve: "P-256" }, false, []);
+	const ephemeralKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+	const sharedSecret = await crypto.subtle.deriveBits({ name: "ECDH", public: recipientKey }, ephemeralKeys.privateKey, 256);
+	const hkdfKey = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveKey"]);
+	const key = await crypto.subtle.deriveKey(
+		{ name: "HKDF", hash: "SHA-256", salt: oauthHandoffWrapSalt, info: oauthHandoffWrapInfo },
+		hkdfKey,
+		{ name: "AES-GCM", length: 256 },
+		false,
+		["encrypt"],
+	);
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(payload));
+	return {
+		ciphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
+		iv: bytesToBase64Url(iv),
+		ephemeralPublicKey: await crypto.subtle.exportKey("jwk", ephemeralKeys.publicKey),
+	};
+}
+
+function oauthCallbackPage(options: { ok: boolean; providerName?: string; message: string }, status = 200) {
+	const title = options.ok ? `${options.providerName ?? "OAuth"} authorization received` : "Authorization could not be received";
+	const accent = options.ok ? "#33d69f" : "#ff6b6b";
+	const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>${title}</title>
+<style>
+html{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;box-sizing:border-box}.panel{width:min(100%,520px);background:#1c1c1e;border-radius:8px;padding:28px;box-sizing:border-box}.mark{width:48px;height:48px;border-radius:8px;display:grid;place-items:center;background:${accent}22;color:${accent};font-size:28px;font-weight:700}h1{font-size:30px;line-height:1.15;margin:22px 0 12px;letter-spacing:0}p{color:#aaa;font-size:17px;line-height:1.45;margin:0}.hint{margin-top:24px;color:#fff;font-weight:600}</style>
+</head>
+<body><main class="panel"><div class="mark">${options.ok ? "✓" : "!"}</div><h1>${title}</h1><p>${options.message}</p>${options.ok ? '<p class="hint">Return to the installed Sickrat app to finish securely.</p>' : ""}</main></body>
+</html>`;
+	return new Response(html, {
+		status,
+		headers: {
+			"content-type": "text/html; charset=utf-8",
+			"cache-control": "no-store",
+			"content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+			"referrer-policy": "no-referrer",
+		},
+	});
+}
+
+async function handleOAuthCallback(request: Request, env: EnvWithBindings) {
+	if (request.method !== "GET") return oauthCallbackPage({ ok: false, message: "This callback only accepts provider redirects." }, 405);
+	if (!(await ensureSchema(env)) || !env.DB) return oauthCallbackPage({ ok: false, message: "The vault database is not configured." }, 500);
+	const url = new URL(request.url);
+	const match = url.pathname.match(/^\/oauth\/callback\/([^/]+)$/);
+	const providerId = match ? decodeURIComponent(match[1]) : "";
+	const provider = getOAuthProvider(providerId);
+	if (!provider) return oauthCallbackPage({ ok: false, message: "This OAuth provider is not supported by the vault." }, 404);
+	const state = url.searchParams.get("state") ?? "";
+	const [version, handoffId, nonce, ...extra] = state.split(".");
+	if (version !== "v1" || extra.length > 0 || !/^[A-Za-z0-9_-]{16,64}$/.test(handoffId ?? "") || !/^[A-Za-z0-9_-]{16,64}$/.test(nonce ?? "")) {
+		return oauthCallbackPage({ ok: false, providerName: provider.name, message: "The authorization state is invalid or incomplete." }, 400);
+	}
+	const row = await env.DB.prepare(
+		"SELECT id, provider_id, state_hash, public_key, ciphertext, iv, ephemeral_public_key, created_at, expires_at, completed_at, consumed_at FROM oauth_handoffs WHERE id = ? AND provider_id = ?",
+	)
+		.bind(handoffId, provider.id)
+		.first<OAuthHandoffRecord>();
+	if (!row || row.consumed_at || Date.parse(row.expires_at) <= Date.now() || row.state_hash !== (await sha256Base64Url(state))) {
+		return oauthCallbackPage({ ok: false, providerName: provider.name, message: "This authorization request has expired or does not match the installed app." }, 400);
+	}
+	const code = url.searchParams.get("code");
+	const error = url.searchParams.get("error");
+	if (!code && !error) return oauthCallbackPage({ ok: false, providerName: provider.name, message: "The provider returned neither an authorization code nor an error." }, 400);
+	const payload = JSON.stringify({
+		providerId: provider.id,
+		state,
+		code,
+		error,
+		errorDescription: url.searchParams.get("error_description"),
+	});
+	let sealed: Awaited<ReturnType<typeof sealOAuthHandoff>>;
+	try {
+		sealed = await sealOAuthHandoff(JSON.parse(row.public_key) as JsonWebKey, payload);
+	} catch {
+		return oauthCallbackPage({ ok: false, providerName: provider.name, message: "The callback could not be sealed to the installed app." }, 400);
+	}
+	const completedAt = new Date().toISOString();
+	await env.DB.prepare(
+		"UPDATE oauth_handoffs SET ciphertext = ?, iv = ?, ephemeral_public_key = ?, completed_at = ? WHERE id = ? AND completed_at IS NULL AND consumed_at IS NULL",
+	)
+		.bind(sealed.ciphertext, sealed.iv, JSON.stringify(sealed.ephemeralPublicKey), completedAt, row.id)
+		.run();
+	return oauthCallbackPage(
+		{
+			ok: true,
+			providerName: provider.name,
+			message: error ? "The provider returned an authorization error to your vault." : "The one-time result is encrypted and waiting for the installed app.",
+		},
+		error ? 400 : 200,
+	);
 }
 
 function trimLeadingZeroes(bytes: Uint8Array) {
@@ -922,6 +1060,66 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			.bind(providerId, body.clientId, now, now)
 			.run();
 		return json({ provider: publicOAuthProvider(provider, body.clientId, url.origin) });
+	}
+
+	if (url.pathname === "/api/oauth/handoffs" && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const body = (await request.json()) as { id?: string; providerId?: string; stateHash?: string; publicKey?: JsonWebKey };
+		const provider = typeof body.providerId === "string" ? getOAuthProvider(body.providerId) : null;
+		if (
+			!provider ||
+			!body.id ||
+			!/^[A-Za-z0-9_-]{16,64}$/.test(body.id) ||
+			!body.stateHash ||
+			!/^[A-Za-z0-9_-]{43}$/.test(body.stateHash) ||
+			body.publicKey?.kty !== "EC" ||
+			body.publicKey.crv !== "P-256" ||
+			!body.publicKey.x ||
+			!body.publicKey.y ||
+			body.publicKey.d
+		) {
+			return json({ error: "A supported provider and valid OAuth handoff are required." }, { status: 400 });
+		}
+		const now = new Date();
+		const expiresAt = new Date(now.getTime() + oauthHandoffTtlMs).toISOString();
+		await env.DB.prepare("DELETE FROM oauth_handoffs WHERE expires_at <= ? OR consumed_at IS NOT NULL").bind(now.toISOString()).run();
+		await env.DB.prepare(
+			`INSERT INTO oauth_handoffs (id, provider_id, state_hash, public_key, ciphertext, iv, ephemeral_public_key, created_at, expires_at, completed_at, consumed_at)
+			 VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL, NULL)`,
+		)
+			.bind(body.id, provider.id, body.stateHash, JSON.stringify(body.publicKey), now.toISOString(), expiresAt)
+			.run();
+		return json({ id: body.id, providerId: provider.id, expiresAt }, { status: 201 });
+	}
+
+	const oauthHandoffMatch = url.pathname.match(/^\/api\/oauth\/handoffs\/([^/]+)$/);
+	if (oauthHandoffMatch && request.method === "GET") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = decodeURIComponent(oauthHandoffMatch[1]);
+		const row = await env.DB.prepare(
+			"SELECT id, provider_id, state_hash, public_key, ciphertext, iv, ephemeral_public_key, created_at, expires_at, completed_at, consumed_at FROM oauth_handoffs WHERE id = ?",
+		)
+			.bind(id)
+			.first<OAuthHandoffRecord>();
+		if (!row || row.consumed_at) return json({ error: "OAuth handoff not found." }, { status: 404 });
+		if (Date.parse(row.expires_at) <= Date.now()) return json({ error: "OAuth handoff expired." }, { status: 410 });
+		return json({
+			id: row.id,
+			providerId: row.provider_id,
+			status: row.completed_at ? "completed" : "pending",
+			ciphertext: row.completed_at ? row.ciphertext : null,
+			iv: row.completed_at ? row.iv : null,
+			ephemeralPublicKey: row.completed_at && row.ephemeral_public_key ? JSON.parse(row.ephemeral_public_key) : null,
+			expiresAt: row.expires_at,
+		});
+	}
+	if (oauthHandoffMatch && request.method === "DELETE") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = decodeURIComponent(oauthHandoffMatch[1]);
+		await env.DB.prepare("UPDATE oauth_handoffs SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL")
+			.bind(new Date().toISOString(), id)
+			.run();
+		return json({ ok: true, id });
 	}
 
 	if (url.pathname === "/api/oauth/token" && request.method === "POST") {
@@ -1759,6 +1957,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 export default {
 	async fetch(request, env): Promise<Response> {
 		const url = new URL(request.url);
+		if (url.pathname.startsWith("/oauth/callback/")) return handleOAuthCallback(request, env as EnvWithBindings);
 		if (url.pathname.startsWith("/api/")) return handleApi(request, env as EnvWithBindings);
 		return (env as EnvWithBindings).ASSETS.fetch(request);
 	},

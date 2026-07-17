@@ -16,6 +16,15 @@ function bytesToBase64Url(value: ArrayBuffer) {
 	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+async function sha256Base64Url(value: string) {
+	return bytesToBase64Url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+}
+
+function base64UrlToBytes(value: string) {
+	const base64 = value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (value.length % 4)) % 4);
+	return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+}
+
 describe("OAuth gateway Worker API", () => {
 	beforeEach(async () => {
 		fetchMock.activate();
@@ -50,6 +59,54 @@ describe("OAuth gateway Worker API", () => {
 		expect(saved.status).toBe(200);
 		const body = (await saved.json()) as { provider: { clientId: string; configured: boolean } };
 		expect(body.provider).toEqual(expect.objectContaining({ clientId: "gateway-client-id", configured: true }));
+	});
+
+	it("relays a browser callback to the PWA as a one-time encrypted handoff", async () => {
+		const handoffId = "handoff_abcdefghijklmnop";
+		const handoffKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+		const handoffPublicKey = await crypto.subtle.exportKey("jwk", handoffKeys.publicKey);
+		const state = `v1.${handoffId}.nonce_abcdefghijklmnop`;
+		const created = await request("/api/oauth/handoffs", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ id: handoffId, providerId: "cloudflare", stateHash: await sha256Base64Url(state), publicKey: handoffPublicKey }),
+		});
+		expect(created.status).toBe(201);
+
+		const callback = await request(`/oauth/callback/cloudflare?code=one-time-code&state=${encodeURIComponent(state)}`);
+		expect(callback.status).toBe(200);
+		const callbackHtml = await callback.text();
+		expect(callbackHtml).toContain("Return to the installed Sickrat app");
+		expect(callbackHtml).not.toContain("one-time-code");
+
+		const polled = await request(`/api/oauth/handoffs/${handoffId}`);
+		const result = (await polled.json()) as { status: string; ciphertext: string; iv: string; ephemeralPublicKey: JsonWebKey };
+		expect(result.status).toBe("completed");
+		expect(JSON.stringify(result)).not.toContain("one-time-code");
+		const ephemeralPublicKey = await crypto.subtle.importKey("jwk", result.ephemeralPublicKey, { name: "ECDH", namedCurve: "P-256" }, false, []);
+		const sharedSecret = await crypto.subtle.deriveBits({ name: "ECDH", public: ephemeralPublicKey }, handoffKeys.privateKey, 256);
+		const hkdfKey = await crypto.subtle.importKey("raw", sharedSecret, "HKDF", false, ["deriveKey"]);
+		const key = await crypto.subtle.deriveKey(
+			{
+				name: "HKDF",
+				hash: "SHA-256",
+				salt: new TextEncoder().encode("sickrat:oauth-handoff-salt:v1"),
+				info: new TextEncoder().encode("sickrat:oauth-handoff:v1"),
+			},
+			hkdfKey,
+			{ name: "AES-GCM", length: 256 },
+			false,
+			["decrypt"],
+		);
+		const plaintext = await crypto.subtle.decrypt(
+			{ name: "AES-GCM", iv: base64UrlToBytes(result.iv) },
+			key,
+			base64UrlToBytes(result.ciphertext),
+		);
+		expect(JSON.parse(new TextDecoder().decode(plaintext))).toEqual(expect.objectContaining({ providerId: "cloudflare", state, code: "one-time-code" }));
+
+		expect((await request(`/api/oauth/handoffs/${handoffId}`, { method: "DELETE" })).status).toBe(200);
+		expect((await request(`/api/oauth/handoffs/${handoffId}`)).status).toBe(404);
 	});
 
 	it("exchanges a PKCE authorization code through the generic provider adapter", async () => {

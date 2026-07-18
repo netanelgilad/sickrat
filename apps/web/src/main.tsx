@@ -168,6 +168,12 @@ type OAuthTokenResult = {
 	tokenType: string;
 };
 
+type OAuthCompletionProgress = {
+	token?: OAuthTokenResult;
+	identity?: { subject: string; label: string };
+	connectionId?: string;
+};
+
 type PendingOAuthFlow = {
 	providerId: string;
 	state: string;
@@ -549,7 +555,7 @@ const api = {
 		refreshTokenKdf: string;
 		providerMetadata?: Record<string, unknown>;
 	}) {
-		const response = await fetch("/api/oauth/connections", {
+		const response = await fetchWithTimeout("/api/oauth/connections", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(payload),
@@ -756,6 +762,10 @@ function friendlyError(error: unknown, fallback: string) {
 		return "This vault is not fully set up yet. Update or recreate the vault from the Sickrat command line, then reopen the app.";
 	}
 	return raw || fallback;
+}
+
+function isTransientOAuthNetworkError(message: string) {
+	return /load failed|failed to fetch|network request failed|connection request timed out|oauth provider timed out/i.test(message);
 }
 
 const legacyVaultKeyStorageKey = "sickrat.vault.key";
@@ -1650,6 +1660,8 @@ function AppShell({
 		}
 		let stopped = false;
 		let timer: number | undefined;
+		let completionRetryCount = 0;
+		const completionProgress: OAuthCompletionProgress = {};
 		const poll = async () => {
 			try {
 				const result = await api.getOAuthHandoff(pending.handoffId);
@@ -1664,7 +1676,7 @@ function AppShell({
 				const payload = await decryptOAuthHandoff(pending, result);
 				if (payload.error) throw new Error(payload.errorDescription ?? payload.error);
 				if (!payload.code) throw new Error(`${provider.name} did not return an authorization code.`);
-				await completeOAuthProviderConnection(provider, pending, payload.code);
+				await completeOAuthProviderConnection(provider, pending, payload.code, completionProgress);
 				await api.consumeOAuthHandoff(pending.handoffId).catch(() => undefined);
 				sessionStorage.removeItem("sickrat.oauth.pending");
 				setPendingOAuthFlow(null);
@@ -1672,6 +1684,14 @@ function AppShell({
 			} catch (error) {
 				if (stopped) return;
 				const message = friendlyError(error, `${provider.name} connection failed.`);
+				const retryableStage = /token exchange failed|account verification failed|saving the .+ connection failed/i.test(message);
+				if (oauthCallbackStartedRef.current && retryableStage && isTransientOAuthNetworkError(message) && completionRetryCount < 3) {
+					completionRetryCount += 1;
+					oauthCallbackStartedRef.current = false;
+					setOAuthStatus(`Network interrupted while connecting ${provider.name}. Retrying automatically...`);
+					timer = window.setTimeout(() => void poll(), completionRetryCount * 1_500);
+					return;
+				}
 				if (oauthCallbackStartedRef.current || /handoff not found|handoff expired/i.test(message)) {
 					await api.consumeOAuthHandoff(pending.handoffId).catch(() => undefined);
 					sessionStorage.removeItem("sickrat.oauth.pending");
@@ -1996,36 +2016,65 @@ function AppShell({
 		}
 	}
 
-	async function completeOAuthProviderConnection(provider: OAuthProvider, pending: PendingOAuthFlow, code: string) {
-		setOAuthStatus(`Exchanging ${provider.name} authorization...`);
-		const token = await api.exchangeOAuthCode(provider.id, code, pending.codeVerifier, provider.redirectUri, pending.scopes);
+	async function completeOAuthProviderConnection(
+		provider: OAuthProvider,
+		pending: PendingOAuthFlow,
+		code: string,
+		progress: OAuthCompletionProgress,
+	) {
+		if (!progress.token) {
+			setOAuthStatus(`Exchanging ${provider.name} authorization...`);
+			try {
+				progress.token = await api.exchangeOAuthCode(provider.id, code, pending.codeVerifier, provider.redirectUri, pending.scopes);
+			} catch (error) {
+				throw new Error(`${provider.name} token exchange failed: ${friendlyError(error, "Unknown token exchange error.")}`);
+			}
+		}
+		const token = progress.token;
 		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
 		if (pending.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
-		setOAuthStatus(`Verifying the connected ${provider.name} account...`);
-		const identity = await api.inspectOAuthIdentity(provider.id, token.accessToken);
+		if (!progress.identity) {
+			setOAuthStatus(`Verifying the connected ${provider.name} account...`);
+			try {
+				progress.identity = await api.inspectOAuthIdentity(provider.id, token.accessToken);
+			} catch (error) {
+				throw new Error(`${provider.name} account verification failed: ${friendlyError(error, "Unknown identity error.")}`);
+			}
+		}
+		const identity = progress.identity;
 		let key = vaultKey;
 		if (!key) {
 			setOAuthStatus(`Unlocking the vault to protect the ${provider.name} connection...`);
-			key = getPasskeyVaultRecord() ? await unlockPasskeyVaultKey() : await createPasskeyWrappedVaultKey();
+			try {
+				key = getPasskeyVaultRecord() ? await unlockPasskeyVaultKey() : await createPasskeyWrappedVaultKey();
+			} catch (error) {
+				throw new Error(`Vault unlock failed: ${friendlyError(error, "Passkey operation failed.")}`);
+			}
 			if (!key) throw new Error("Unlock or create the vault key to store this OAuth connection.");
 			setVaultKey(key);
 		}
 		setOAuthStatus(`Encrypting and saving the ${provider.name} connection...`);
 		const encrypted = await encryptSecretValue(token.refreshToken, key);
 		const existing = oauthConnections.find((connection) => connection.providerId === provider.id && connection.accountSubject === identity.subject && !connection.revokedAt);
-		const connection = await api.saveOAuthConnection({
-			id: existing?.id,
-			providerId: provider.id,
-			accountLabel: identity.label,
-			accountSubject: identity.subject,
-			grantedScopes: token.scopes,
-			tokenType: token.tokenType,
-			accessTokenExpiresAt: token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : null,
-			refreshTokenCiphertext: encrypted.ciphertext,
-			refreshTokenIv: encrypted.iv,
-			refreshTokenSalt: encrypted.salt,
-			refreshTokenKdf: encrypted.kdf,
-		});
+		progress.connectionId ??= existing?.id ?? crypto.randomUUID();
+		let connection: OAuthConnection;
+		try {
+			connection = await api.saveOAuthConnection({
+				id: progress.connectionId,
+				providerId: provider.id,
+				accountLabel: identity.label,
+				accountSubject: identity.subject,
+				grantedScopes: token.scopes,
+				tokenType: token.tokenType,
+				accessTokenExpiresAt: token.expiresIn ? new Date(Date.now() + token.expiresIn * 1000).toISOString() : null,
+				refreshTokenCiphertext: encrypted.ciphertext,
+				refreshTokenIv: encrypted.iv,
+				refreshTokenSalt: encrypted.salt,
+				refreshTokenKdf: encrypted.kdf,
+			});
+		} catch (error) {
+			throw new Error(`Saving the ${provider.name} connection failed: ${friendlyError(error, "Unknown vault storage error.")}`);
+		}
 		setOAuthConnections((current) => [connection, ...current.filter((item) => item.id !== connection.id)]);
 		setOAuthStatus(`${provider.name} connected as ${connection.accountLabel}.`);
 		navigate(pending.redirectTo, { replace: true });

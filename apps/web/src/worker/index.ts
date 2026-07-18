@@ -470,7 +470,7 @@ async function ensureSchema(env: EnvWithBindings) {
 	await env.DB.prepare(
 		`UPDATE oauth_connections
 		 SET connection_name = CASE
-			WHEN id = (SELECT first_connection.id FROM oauth_connections AS first_connection WHERE first_connection.provider_id = oauth_connections.provider_id ORDER BY first_connection.created_at, first_connection.id LIMIT 1)
+			WHEN revoked_at IS NULL AND id = (SELECT first_connection.id FROM oauth_connections AS first_connection WHERE first_connection.provider_id = oauth_connections.provider_id AND first_connection.revoked_at IS NULL ORDER BY first_connection.created_at, first_connection.id LIMIT 1)
 				THEN 'default'
 			ELSE 'connection-' || substr(replace(id, '-', ''), 1, 8)
 		 END

@@ -46,6 +46,7 @@ describe("OAuth gateway Worker API", () => {
 				configured: false,
 				redirectUri: "https://vault.example/oauth/callback/cloudflare",
 				identityScopes: ["user-details.read"],
+				connectionScopes: ["offline_access"],
 			}),
 		);
 	});

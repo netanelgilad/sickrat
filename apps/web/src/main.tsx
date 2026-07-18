@@ -130,6 +130,7 @@ type OAuthProvider = {
 	authorizationEndpoint: string;
 	documentationUrl: string;
 	identityScopes: string[];
+	connectionScopes: string[];
 	scopes: OAuthScopeDefinition[];
 	supportsPkce: boolean;
 	supportsRefreshToken: boolean;
@@ -2032,7 +2033,8 @@ function AppShell({
 		}
 		const token = progress.token;
 		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
-		if (pending.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
+		const requiredGrantedScopes = pending.scopes.filter((scope) => !provider.connectionScopes.includes(scope));
+		if (requiredGrantedScopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
 		if (!progress.identity) {
 			setOAuthStatus(`Verifying the connected ${provider.name} account...`);
 			try {
@@ -2090,7 +2092,7 @@ function AppShell({
 		setBusy(true);
 		setOAuthStatus(`Preparing secure ${provider.name} authorization...`);
 		try {
-			const scopes = [...new Set([...requestedScopes, ...provider.identityScopes])];
+			const scopes = [...new Set([...requestedScopes, ...provider.identityScopes, ...provider.connectionScopes])];
 			const handoffId = randomBase64Url(18);
 			const handoffKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
 			const handoffPrivateKey = await crypto.subtle.exportKey("jwk", handoffKeys.privateKey);

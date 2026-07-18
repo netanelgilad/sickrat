@@ -157,7 +157,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.34";
+const cliVersion = "0.1.35";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -622,7 +622,7 @@ function cacheResourceKeys(refs: string[], resourceRequests?: ApprovalRequestCre
 	const keys = new Set(refs.map((ref) => `secret:${ref}`));
 	for (const request of resourceRequests ?? []) {
 		if (request.type === "secret") keys.add(`secret:${request.ref}`);
-		else keys.add(`oauth:${request.providerId}:${request.env ?? ""}:${request.scopes.slice().sort().join(",")}`);
+		else keys.add(`oauth:${request.providerId}:${request.connectionName ?? ""}:${request.env ?? ""}:${request.scopes.slice().sort().join(",")}`);
 	}
 	return [...keys].sort();
 }
@@ -635,6 +635,7 @@ function cachedGrantCovers(grant: GrantPayload, refs: string[], resourceRequests
 		if (!request.env) return false;
 		const token = grant.oauthTokens?.[request.env];
 		if (!token || token.providerId !== request.providerId) return false;
+		if (request.connectionName && token.connectionName !== request.connectionName) return false;
 		if (request.scopes.some((scope) => !token.scopes.includes(scope))) return false;
 		if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) return false;
 	}
@@ -1891,7 +1892,7 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 	}
 	const oauthLabels = (input.resourceRequests ?? [])
 		.filter((request) => request.type === "oauth_token")
-		.map((request) => `${request.providerId} (${request.scopes.join(", ")})`);
+		.map((request) => `${request.providerId}${request.connectionName ? `/${request.connectionName}` : ""} (${request.scopes.join(", ")})`);
 	console.error(`Requested resources: ${[...refs, ...oauthLabels].join(", ")}`);
 	console.error(`If the notification does not appear, open ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)} on your phone.`);
 
@@ -1918,6 +1919,7 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 				const token = grant.oauthTokens?.[request.env];
 				if (!token) throw new Error(`Approved grant did not include OAuth token ${request.env}.`);
 				if (token.providerId !== request.providerId) throw new Error(`OAuth grant provider mismatch for ${request.env}.`);
+				if (request.connectionName && token.connectionName !== request.connectionName) throw new Error(`OAuth grant connection mismatch for ${request.env}.`);
 				if (request.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`OAuth grant scopes do not cover ${request.env}.`);
 				if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) throw new Error(`OAuth grant for ${request.env} is already expired.`);
 			}

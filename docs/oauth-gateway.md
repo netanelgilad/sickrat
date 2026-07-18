@@ -65,6 +65,7 @@ A connection is an authenticated provider account stored in the vault.
 type OAuthConnection = {
   id: string;
   providerId: string;
+  connectionName: string;
   accountLabel: string;
   accountSubject?: string;
   accountHandle?: string;
@@ -91,12 +92,14 @@ Approval requests should grow from `secretRefs` into typed requested resources w
 The CLI detects OAuth requests from the existing `sickrat://` URI scheme. The reserved `oauth` namespace identifies the provider and requested scopes:
 
 ```text
-sickrat://oauth/github?scope=repo&scope=read:user
-sickrat://oauth/cloudflare?scope=workers-platform.write&scope=d1.write
-sickrat://oauth/slack?scope=chat:write
+sickrat://oauth/github/work?scope=repo&scope=read:user
+sickrat://oauth/cloudflare/personal?scope=workers-platform.write&scope=d1.write
+sickrat://oauth/slack/community?scope=chat:write
 ```
 
 These URIs are request descriptors. They must never contain access tokens, refresh tokens, client secrets, or other credential material.
+
+The connection name is optional for backward compatibility and convenience. A provider-only request resolves only when exactly one active connection covers all requested scopes. If multiple connections match, approval stops and the agent must retry with a named connection.
 
 ## Current Implementation
 

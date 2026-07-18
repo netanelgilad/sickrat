@@ -77,7 +77,7 @@ type PairingCodeRecord = {
 
 type ApprovalResourceRequest =
 	| { type: "secret"; ref: string; env?: string }
-	| { type: "oauth_token"; providerId: string; scopes: string[]; env?: string };
+	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env?: string };
 
 type OAuthProviderConfigRecord = {
 	provider_id: string;
@@ -89,6 +89,7 @@ type OAuthProviderConfigRecord = {
 type OAuthConnectionRecord = {
 	id: string;
 	provider_id: string;
+	connection_name: string;
 	account_label: string;
 	account_subject: string;
 	granted_scopes: string;
@@ -108,6 +109,7 @@ type OAuthConnectionRecord = {
 type OAuthConnectionInput = {
 	id?: string;
 	providerId?: string;
+	connectionName?: string;
 	accountLabel?: string;
 	accountSubject?: string;
 	grantedScopes?: string[];
@@ -421,6 +423,7 @@ async function ensureSchema(env: EnvWithBindings) {
 		`CREATE TABLE IF NOT EXISTS oauth_connections (
 			id TEXT PRIMARY KEY,
 			provider_id TEXT NOT NULL,
+			connection_name TEXT,
 			account_label TEXT NOT NULL,
 			account_subject TEXT NOT NULL,
 			granted_scopes TEXT NOT NULL,
@@ -463,6 +466,17 @@ async function ensureSchema(env: EnvWithBindings) {
 	await ensureColumn(env.DB, "approval_requests", "access_duration_seconds", "INTEGER");
 	await ensureColumn(env.DB, "approval_requests", "access_expires_at", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "approval_wait_seconds", "INTEGER");
+	await ensureColumn(env.DB, "oauth_connections", "connection_name", "TEXT");
+	await env.DB.prepare(
+		`UPDATE oauth_connections
+		 SET connection_name = CASE
+			WHEN id = (SELECT first_connection.id FROM oauth_connections AS first_connection WHERE first_connection.provider_id = oauth_connections.provider_id ORDER BY first_connection.created_at, first_connection.id LIMIT 1)
+				THEN 'default'
+			ELSE 'connection-' || substr(replace(id, '-', ''), 1, 8)
+		 END
+		 WHERE connection_name IS NULL OR connection_name = ''`,
+	).run();
+	await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS oauth_connections_active_name_idx ON oauth_connections(provider_id, connection_name) WHERE revoked_at IS NULL").run();
 	return true;
 }
 
@@ -894,6 +908,7 @@ function isValidResourceRequest(request: unknown): request is ApprovalResourceRe
 		candidate.type === "oauth_token" &&
 		typeof candidate.providerId === "string" &&
 		/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(candidate.providerId) &&
+		(candidate.connectionName === undefined || (typeof candidate.connectionName === "string" && /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(candidate.connectionName))) &&
 		typeof candidate.env === "string" &&
 		Array.isArray(candidate.scopes) &&
 		candidate.scopes.length > 0 &&
@@ -911,6 +926,7 @@ function mapOAuthConnection(row: OAuthConnectionRecord, includeCiphertext = fals
 	return {
 		id: row.id,
 		providerId: row.provider_id,
+		connectionName: row.connection_name,
 		accountLabel: row.account_label,
 		accountSubject: row.account_subject,
 		grantedScopes: JSON.parse(row.granted_scopes) as string[],
@@ -936,6 +952,8 @@ function isValidOAuthConnectionInput(input: OAuthConnectionInput) {
 	return (
 		typeof input.providerId === "string" &&
 		Boolean(getOAuthProvider(input.providerId)) &&
+		typeof input.connectionName === "string" &&
+		/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(input.connectionName) &&
 		typeof input.accountLabel === "string" &&
 		input.accountLabel.trim() === input.accountLabel &&
 		input.accountLabel.length > 0 &&
@@ -1194,7 +1212,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 	if (url.pathname === "/api/oauth/connections" && request.method === "GET") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const result = await env.DB.prepare(
-			`SELECT id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+			`SELECT id, provider_id, connection_name, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
 				refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
 				created_at, updated_at, last_used_at, revoked_at
 			 FROM oauth_connections ORDER BY updated_at DESC LIMIT 100`,
@@ -1207,6 +1225,12 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		const body = (await request.json()) as OAuthConnectionInput;
 		if (!isValidOAuthConnectionInput(body)) return json({ error: "Invalid encrypted OAuth connection." }, { status: 400 });
 		const now = new Date().toISOString();
+		const conflictingName = await env.DB.prepare(
+			"SELECT id FROM oauth_connections WHERE provider_id = ? AND connection_name = ? AND revoked_at IS NULL AND id != ? LIMIT 1",
+		)
+			.bind(body.providerId, body.connectionName, body.id ?? "")
+			.first<{ id: string }>();
+		if (conflictingName) return json({ error: `Connection name '${body.connectionName}' is already in use for ${body.providerId}.` }, { status: 409 });
 		const existing = body.id
 			? await env.DB.prepare("SELECT id, created_at FROM oauth_connections WHERE id = ?").bind(body.id).first<{ id: string; created_at: string }>()
 			: await env.DB.prepare("SELECT id, created_at FROM oauth_connections WHERE provider_id = ? AND account_subject = ? AND revoked_at IS NULL ORDER BY updated_at DESC LIMIT 1")
@@ -1216,12 +1240,13 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		const createdAt = existing?.created_at ?? now;
 		await env.DB.prepare(
 			`INSERT INTO oauth_connections
-				(id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+				(id, provider_id, connection_name, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
 				 refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
 				 created_at, updated_at, last_used_at, revoked_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
 			 ON CONFLICT(id) DO UPDATE SET
 				provider_id = excluded.provider_id,
+				connection_name = excluded.connection_name,
 				account_label = excluded.account_label,
 				account_subject = excluded.account_subject,
 				granted_scopes = excluded.granted_scopes,
@@ -1238,6 +1263,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			.bind(
 				id,
 				body.providerId,
+				body.connectionName,
 				body.accountLabel,
 				body.accountSubject,
 				JSON.stringify(body.grantedScopes),
@@ -1253,7 +1279,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			)
 			.run();
 		const row = await env.DB.prepare(
-			`SELECT id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+			`SELECT id, provider_id, connection_name, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
 				refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
 				created_at, updated_at, last_used_at, revoked_at FROM oauth_connections WHERE id = ?`,
 		)
@@ -1262,12 +1288,12 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		return json({ connection: row ? mapOAuthConnection(row) : null });
 	}
 
-	const oauthConnectionMatch = url.pathname.match(/^\/api\/oauth\/connections\/([^/]+)(?:\/(resolve|revoke))?$/);
+	const oauthConnectionMatch = url.pathname.match(/^\/api\/oauth\/connections\/([^/]+)(?:\/(resolve|revoke|name))?$/);
 	if (oauthConnectionMatch && request.method === "GET" && oauthConnectionMatch[2] === "resolve") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const id = decodeURIComponent(oauthConnectionMatch[1]);
 		const row = await env.DB.prepare(
-			`SELECT id, provider_id, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+			`SELECT id, provider_id, connection_name, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
 				refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
 				created_at, updated_at, last_used_at, revoked_at FROM oauth_connections WHERE id = ? AND revoked_at IS NULL`,
 		)
@@ -1282,6 +1308,33 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		const now = new Date().toISOString();
 		await env.DB.prepare("UPDATE oauth_connections SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL").bind(now, now, id).run();
 		return json({ ok: true, id, revokedAt: now });
+	}
+	if (oauthConnectionMatch && request.method === "POST" && oauthConnectionMatch[2] === "name") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = decodeURIComponent(oauthConnectionMatch[1]);
+		const body = (await request.json()) as { connectionName?: string };
+		if (typeof body.connectionName !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(body.connectionName)) {
+			return json({ error: "Connection names must use lowercase letters, numbers, and hyphens." }, { status: 400 });
+		}
+		const existing = await env.DB.prepare("SELECT provider_id FROM oauth_connections WHERE id = ? AND revoked_at IS NULL").bind(id).first<{ provider_id: string }>();
+		if (!existing) return json({ error: "OAuth connection not found." }, { status: 404 });
+		const conflict = await env.DB.prepare(
+			"SELECT id FROM oauth_connections WHERE provider_id = ? AND connection_name = ? AND revoked_at IS NULL AND id != ? LIMIT 1",
+		)
+			.bind(existing.provider_id, body.connectionName, id)
+			.first<{ id: string }>();
+		if (conflict) return json({ error: `Connection name '${body.connectionName}' is already in use for ${existing.provider_id}.` }, { status: 409 });
+		await env.DB.prepare("UPDATE oauth_connections SET connection_name = ?, updated_at = ? WHERE id = ?")
+			.bind(body.connectionName, new Date().toISOString(), id)
+			.run();
+		const row = await env.DB.prepare(
+			`SELECT id, provider_id, connection_name, account_label, account_subject, granted_scopes, token_type, access_token_expires_at,
+				refresh_token_ciphertext, refresh_token_iv, refresh_token_salt, refresh_token_kdf, provider_metadata_json,
+				created_at, updated_at, last_used_at, revoked_at FROM oauth_connections WHERE id = ?`,
+		)
+			.bind(id)
+			.first<OAuthConnectionRecord>();
+		return json({ connection: row ? mapOAuthConnection(row) : null });
 	}
 
 	if (url.pathname === "/api/cloudflare/oauth-config" && request.method === "GET") {

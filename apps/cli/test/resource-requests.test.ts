@@ -10,13 +10,22 @@ describe("Sickrat resource URI parsing", () => {
 	});
 
 	it("recognizes Cloudflare OAuth requests and repeated scopes", () => {
-		const resource = parseSickratUri("sickrat://oauth/cloudflare?scope=workers-platform.write&scope=d1.write");
-		assert.deepEqual(resource, { type: "oauth_token", providerId: "cloudflare", scopes: ["workers-platform.write", "d1.write"] });
+		const resource = parseSickratUri("sickrat://oauth/cloudflare/personal?scope=workers-platform.write&scope=d1.write");
+		assert.deepEqual(resource, { type: "oauth_token", providerId: "cloudflare", connectionName: "personal", scopes: ["workers-platform.write", "d1.write"] });
 		assert.deepEqual(resourceRequestForEnv(resource!, "CLOUDFLARE_API_TOKEN"), {
 			type: "oauth_token",
 			providerId: "cloudflare",
+			connectionName: "personal",
 			scopes: ["workers-platform.write", "d1.write"],
 			env: "CLOUDFLARE_API_TOKEN",
+		});
+	});
+
+	it("keeps provider-only OAuth references as an unambiguous shorthand", () => {
+		assert.deepEqual(parseSickratUri("sickrat://oauth/cloudflare?scope=workers-platform.read"), {
+			type: "oauth_token",
+			providerId: "cloudflare",
+			scopes: ["workers-platform.read"],
 		});
 	});
 
@@ -25,6 +34,8 @@ describe("Sickrat resource URI parsing", () => {
 		assert.throws(() => parseSickratUri("sickrat://oauth/cloudflare?scope=d1.write&account=abc"), /Unsupported Sickrat OAuth parameter/);
 		assert.throws(() => parseSickratUri("sickrat://user@oauth/cloudflare?scope=d1.write"), /Invalid Sickrat reference URI/);
 		assert.throws(() => parseSickratUri("sickrat://oauth/Cloudflare?scope=d1.write"), /Invalid Sickrat OAuth provider URI/);
+		assert.throws(() => parseSickratUri("sickrat://oauth/cloudflare/Personal?scope=d1.write"), /Invalid Sickrat OAuth connection URI/);
+		assert.throws(() => parseSickratUri("sickrat://oauth/cloudflare/personal/extra?scope=d1.write"), /Invalid Sickrat OAuth provider URI/);
 		assert.throws(() => parseSickratUri("sickrat://oauth/cloudflare?scope=%20d1.write"), /At least one OAuth scope is required/);
 		assert.throws(() => parseSickratUri("sickrat://default/openai/api-key?scope=nope"), /do not support query parameters/);
 	});

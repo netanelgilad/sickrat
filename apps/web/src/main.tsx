@@ -34,6 +34,7 @@ import {
 	LockKeyhole,
 	Menu,
 	Plug,
+	Plus,
 	RefreshCw,
 	Search,
 	Settings,
@@ -99,7 +100,7 @@ type ApprovalRequest = {
 
 type ApprovalResourceRequest =
 	| { type: "secret"; ref: string; env?: string }
-	| { type: "oauth_token"; providerId: string; scopes: string[]; env: string };
+	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env: string };
 
 type SecretMetadata = {
 	id: string;
@@ -142,6 +143,7 @@ type OAuthProvider = {
 type OAuthConnection = {
 	id: string;
 	providerId: string;
+	connectionName: string;
 	accountLabel: string;
 	accountSubject: string;
 	grantedScopes: string[];
@@ -177,6 +179,7 @@ type OAuthCompletionProgress = {
 
 type PendingOAuthFlow = {
 	providerId: string;
+	connectionName: string;
 	state: string;
 	codeVerifier: string;
 	redirectTo: string;
@@ -545,6 +548,7 @@ const api = {
 	async saveOAuthConnection(payload: {
 		id?: string;
 		providerId: string;
+		connectionName: string;
 		accountLabel: string;
 		accountSubject: string;
 		grantedScopes: string[];
@@ -573,6 +577,15 @@ const api = {
 		const response = await fetch(`/api/oauth/connections/${encodeURIComponent(id)}/revoke`, { method: "POST" });
 		if (!response.ok) throw new Error(await response.text());
 		return (await response.json()) as { revokedAt: string };
+	},
+	async renameOAuthConnection(id: string, connectionName: string) {
+		const response = await fetch(`/api/oauth/connections/${encodeURIComponent(id)}/name`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ connectionName }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { connection: OAuthConnection }).connection;
 	},
 	async getCloudflareOAuthConfig() {
 		const response = await fetch("/api/cloudflare/oauth-config");
@@ -1334,6 +1347,9 @@ type AppRoute =
 	| "vaults"
 	| "secrets"
 	| "connections"
+	| "connection-add"
+	| "connection-detail"
+	| "provider-setup"
 	| "approvals"
 	| "approval-detail"
 	| "devices"
@@ -1354,6 +1370,16 @@ function ApprovalDetailRoute() {
 function OAuthCallbackRoute() {
 	const params = useParams();
 	return <AppShell route="connections" callbackProviderId={params.providerId} />;
+}
+
+function ConnectionDetailRoute() {
+	const params = useParams();
+	return <AppShell route="connection-detail" connectionId={params.connectionId} />;
+}
+
+function ProviderSetupRoute() {
+	const params = useParams();
+	return <AppShell route="provider-setup" providerSetupId={params.providerId} />;
 }
 
 function OAuthAuthorizationActions({
@@ -1385,11 +1411,15 @@ function AppShell({
 	requestId,
 	isCloudflareCallback = false,
 	callbackProviderId,
+	connectionId,
+	providerSetupId,
 }: {
 	route: AppRoute;
 	requestId?: string;
 	isCloudflareCallback?: boolean;
 	callbackProviderId?: string;
+	connectionId?: string;
+	providerSetupId?: string;
 }) {
 	const navigate = useNavigate();
 	const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
@@ -1403,6 +1433,8 @@ function AppShell({
 	const [oauthProviders, setOAuthProviders] = useState<OAuthProvider[]>([]);
 	const [oauthConnections, setOAuthConnections] = useState<OAuthConnection[]>([]);
 	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
+	const [oauthConnectionName, setOAuthConnectionName] = useState("");
+	const [editedOAuthConnectionName, setEditedOAuthConnectionName] = useState("");
 	const [copiedOAuthCallbackProviderId, setCopiedOAuthCallbackProviderId] = useState<string | null>(null);
 	const [oauthAuthorization, setOAuthAuthorization] = useState<OAuthAuthorization | null>(null);
 	const [copiedOAuthAuthorizationProviderId, setCopiedOAuthAuthorizationProviderId] = useState<string | null>(null);
@@ -1464,13 +1496,18 @@ function AppShell({
 		() => approval?.resourceRequests.filter((resource): resource is Extract<ApprovalResourceRequest, { type: "oauth_token" }> => resource.type === "oauth_token") ?? [],
 		[approval],
 	);
-	const matchingOAuthConnection = (request: Extract<ApprovalResourceRequest, { type: "oauth_token" }>) =>
-		oauthConnections.find(
+	const matchingOAuthConnections = (request: Extract<ApprovalResourceRequest, { type: "oauth_token" }>) =>
+		oauthConnections.filter(
 			(connection) =>
 				!connection.revokedAt &&
 				connection.providerId === request.providerId &&
+				(!request.connectionName || connection.connectionName === request.connectionName) &&
 				request.scopes.every((scope) => connection.grantedScopes.includes(scope)),
 		);
+	const matchingOAuthConnection = (request: Extract<ApprovalResourceRequest, { type: "oauth_token" }>) => {
+		const matches = matchingOAuthConnections(request);
+		return request.connectionName ? matches[0] : matches.length === 1 ? matches[0] : undefined;
+	};
 	const missingOAuthRequests = approvalOAuthRequests.filter((request) => !matchingOAuthConnection(request));
 
 	function getPendingSecretOptions(ref: string) {
@@ -1641,8 +1678,13 @@ function AppShell({
 	}, []);
 
 	useEffect(() => {
-		if (route === "connections" || route === "approval" || route === "app") void refreshOAuthData();
+		if (["connections", "connection-add", "connection-detail", "provider-setup", "approval", "app"].includes(route)) void refreshOAuthData();
 	}, [route]);
+
+	useEffect(() => {
+		const selected = oauthConnections.find((connection) => connection.id === connectionId);
+		if (selected) setEditedOAuthConnectionName(selected.connectionName);
+	}, [connectionId, oauthConnections]);
 
 	useEffect(() => {
 		if (oauthCallbackStartedRef.current || oauthProviders.length === 0) return;
@@ -2057,13 +2099,16 @@ function AppShell({
 		}
 		setOAuthStatus(`Encrypting and saving the ${provider.name} connection...`);
 		const encrypted = await encryptSecretValue(token.refreshToken, key);
-		const existing = oauthConnections.find((connection) => connection.providerId === provider.id && connection.accountSubject === identity.subject && !connection.revokedAt);
+		const existing = oauthConnections.find(
+			(connection) => connection.providerId === provider.id && connection.connectionName === pending.connectionName && !connection.revokedAt,
+		);
 		progress.connectionId ??= existing?.id ?? crypto.randomUUID();
 		let connection: OAuthConnection;
 		try {
 			connection = await api.saveOAuthConnection({
 				id: progress.connectionId,
 				providerId: provider.id,
+				connectionName: pending.connectionName,
 				accountLabel: identity.label,
 				accountSubject: identity.subject,
 				grantedScopes: token.scopes,
@@ -2082,8 +2127,19 @@ function AppShell({
 		navigate(pending.redirectTo, { replace: true });
 	}
 
-	async function connectOAuthProvider(providerId: string, requestedScopes: string[], redirectTo = "/connections") {
+	async function connectOAuthProvider(providerId: string, connectionName: string, requestedScopes: string[], redirectTo = "/connections") {
 		const provider = oauthProviders.find((item) => item.id === providerId);
+		if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(connectionName)) {
+			setOAuthStatus("Connection names must use lowercase letters, numbers, and hyphens.");
+			return;
+		}
+		const duplicate = oauthConnections.find(
+			(connection) => !connection.revokedAt && connection.providerId === providerId && connection.connectionName === connectionName,
+		);
+		if (duplicate && redirectTo === "/connections") {
+			setOAuthStatus(`A ${provider?.name ?? providerId} connection named ${connectionName} already exists.`);
+			return;
+		}
 		if (!provider?.clientId) {
 			setOAuthStatus(`${provider?.name ?? providerId} needs an OAuth client ID before it can connect.`);
 			if (redirectTo !== "/connections") navigate("/connections");
@@ -2100,7 +2156,7 @@ function AppShell({
 			const state = `v1.${handoffId}.${randomBase64Url(18)}`;
 			const codeVerifier = randomBase64Url(72);
 			const codeChallenge = await sha256Base64Url(codeVerifier);
-			const pending: PendingOAuthFlow = { providerId, state, codeVerifier, redirectTo, scopes, handoffId, handoffPrivateKey };
+			const pending: PendingOAuthFlow = { providerId, connectionName, state, codeVerifier, redirectTo, scopes, handoffId, handoffPrivateKey };
 			await api.createOAuthHandoff(handoffId, provider.id, await sha256Base64Url(state), handoffPublicKey);
 			sessionStorage.setItem("sickrat.oauth.pending", JSON.stringify(pending));
 			setPendingOAuthFlow(pending);
@@ -2148,10 +2204,40 @@ function AppShell({
 			const result = await api.revokeOAuthConnection(connection.id);
 			setOAuthConnections((current) => current.map((item) => (item.id === connection.id ? { ...item, revokedAt: result.revokedAt } : item)));
 			setOAuthStatus(`${connection.accountLabel} is disconnected from Sickrat.`);
+			navigate("/connections", { replace: true });
 		} catch (error) {
 			setOAuthStatus(friendlyError(error, "Failed to disconnect OAuth connection."));
 		} finally {
 			setBusy(false);
+		}
+	}
+
+	async function renameOAuthConnection(connection: OAuthConnection) {
+		const connectionName = editedOAuthConnectionName.trim();
+		if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(connectionName)) {
+			setOAuthStatus("Connection names must use lowercase letters, numbers, and hyphens.");
+			return;
+		}
+		setBusy(true);
+		try {
+			const updated = await api.renameOAuthConnection(connection.id, connectionName);
+			setOAuthConnections((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+			setOAuthStatus(`Connection renamed to ${connectionName}.`);
+		} catch (error) {
+			setOAuthStatus(friendlyError(error, "Failed to rename connection."));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function copyOAuthReference(connection: OAuthConnection) {
+		const value = `sickrat://oauth/${connection.providerId}/${connection.connectionName}`;
+		try {
+			await navigator.clipboard.writeText(value);
+			setFeedbackToast("Connection reference copied");
+			window.setTimeout(() => setFeedbackToast((current) => (current === "Connection reference copied" ? null : current)), 2_000);
+		} catch (error) {
+			setOAuthStatus(friendlyError(error, "Could not copy the connection reference."));
 		}
 	}
 
@@ -2237,6 +2323,7 @@ function AppShell({
 		const oauthTokens: Record<string, {
 			providerId: string;
 			connectionId: string;
+			connectionName: string;
 			accessToken: string;
 			tokenType: string;
 			scopes: string[];
@@ -2245,10 +2332,12 @@ function AppShell({
 		const refreshed = new Map<string, OAuthTokenResult>();
 
 		for (const request of requests) {
-			const connection = oauthConnections.find(
-				(item) => !item.revokedAt && item.providerId === request.providerId && request.scopes.every((scope) => item.grantedScopes.includes(scope)),
-			);
-			if (!connection) throw new Error(`Connect ${request.providerId} with the requested scopes before approving.`);
+			const connection = matchingOAuthConnection(request);
+			if (!connection) {
+				const matches = matchingOAuthConnections(request);
+				if (!request.connectionName && matches.length > 1) throw new Error(`Multiple ${request.providerId} connections match. Request a named connection.`);
+				throw new Error(`Connect ${request.providerId}${request.connectionName ? `/${request.connectionName}` : ""} with the requested scopes before approving.`);
+			}
 			let token = refreshed.get(connection.id);
 			if (!token) {
 				setStatus(`Refreshing ${connection.accountLabel} access...`);
@@ -2272,6 +2361,7 @@ function AppShell({
 					const updated = await api.saveOAuthConnection({
 						id: connection.id,
 						providerId: connection.providerId,
+						connectionName: connection.connectionName,
 						accountLabel: connection.accountLabel,
 						accountSubject: connection.accountSubject,
 						grantedScopes: token.scopes,
@@ -2291,6 +2381,7 @@ function AppShell({
 			oauthTokens[request.env] = {
 				providerId: request.providerId,
 				connectionId: connection.id,
+				connectionName: connection.connectionName,
 				accessToken: token.accessToken,
 				tokenType: token.tokenType,
 				scopes: token.scopes,
@@ -2713,13 +2804,15 @@ function AppShell({
 								<BlockTitle>Connected Services</BlockTitle>
 								{approvalOAuthRequests.map((request) => {
 									const provider = oauthProviders.find((item) => item.id === request.providerId);
+									const matches = matchingOAuthConnections(request);
 									const connection = matchingOAuthConnection(request);
+									const ambiguous = !request.connectionName && matches.length > 1;
 									const additionalScopes = connection?.grantedScopes.filter((scope) => !request.scopes.includes(scope)) ?? [];
 									return (
 										<List strong inset key={`${request.providerId}:${request.env}`}>
 											<ListItem
 												title={provider?.name ?? request.providerId}
-												subtitle={connection ? connection.accountLabel : "Connection required before approval"}
+												subtitle={connection ? `${connection.connectionName} · ${connection.accountLabel}` : ambiguous ? "Multiple accounts match; the agent must name one" : "Connection required before approval"}
 												after={request.env}
 												media={<Link2 size={22} />}
 											/>
@@ -2742,13 +2835,13 @@ function AppShell({
 													footer={additionalScopes.length > 0 ? "This provider refreshes the full connected scope set." : undefined}
 												/>
 											) : null}
-											{!connection ? (
+										{!connection && !ambiguous ? (
 												<ListItem
 													link
 													title={`Connect ${provider?.name ?? request.providerId}`}
 													subtitle="Authorize these scopes, then return to this approval."
 													media={<Plug size={22} />}
-													onClick={() => void connectOAuthProvider(request.providerId, request.scopes, `/approve/${encodeURIComponent(approval.id)}`)}
+												onClick={() => void connectOAuthProvider(request.providerId, request.connectionName ?? "default", request.scopes, `/approve/${encodeURIComponent(approval.id)}`)}
 												/>
 											) : null}
 										</List>
@@ -3048,6 +3141,12 @@ function AppShell({
 		const currentPageTitle =
 			route === "app"
 				? "Dashboard"
+				: route === "connection-add"
+					? "Add Connection"
+					: route === "connection-detail"
+						? "Connection"
+						: route === "provider-setup"
+							? "Connect Provider"
 				: route === "approval-detail"
 					? "Request detail"
 					: route === "devices"
@@ -3181,13 +3280,9 @@ function AppShell({
 					</List>
 				</>
 			);
-			} else if (route === "connections") {
+		} else if (route === "connections") {
 				routeContent = (
 					<>
-						<Block strong inset>
-							<h1 className="m-0 text-3xl font-bold">Connections</h1>
-							<p className="mb-0 text-black/55 dark:text-white/55">Provider refresh credentials stay encrypted in this vault. Agents receive only approved, short-lived access tokens.</p>
-						</Block>
 						<BlockTitle>Connected Accounts</BlockTitle>
 						<List strong inset>
 							{oauthConnections.filter((connection) => !connection.revokedAt).length > 0 ? (
@@ -3196,84 +3291,114 @@ function AppShell({
 									return (
 										<ListItem
 											key={connection.id}
-											title={connection.accountLabel}
-											subtitle={provider?.name ?? connection.providerId}
-											footer={`${connection.grantedScopes.join(" · ")}${connection.lastUsedAt ? ` · Used ${formatAgo(connection.lastUsedAt)}` : ""}`}
+											link
+											title={connection.connectionName}
+											subtitle={`${provider?.name ?? connection.providerId} · ${connection.accountLabel}`}
+											footer={connection.lastUsedAt ? `Used ${formatAgo(connection.lastUsedAt)}` : "Not used by an agent yet"}
 											media={<Link2 size={22} />}
-											after={
-												<Button
-													clear
-													small
-													disabled={busy}
-													onClick={() => void revokeOAuthConnection(connection)}
-													aria-label={`Disconnect ${connection.accountLabel}`}
-													title={`Disconnect ${connection.accountLabel}`}
-												>
-													<Unplug size={19} />
-												</Button>
-											}
+											onClick={() => navigate(`/connections/${encodeURIComponent(connection.id)}`)}
 										/>
 									);
 								})
 							) : (
-								<ListItem title="No connected accounts" subtitle="Choose a provider below to authorize one." media={<Plug size={22} />} />
+								<ListItem title="No connected accounts" subtitle="Add a connection to authorize an account." media={<Plug size={22} />} />
 							)}
 						</List>
-						<BlockTitle>Providers</BlockTitle>
-						{oauthProviders.map((provider) => {
-							const activeConnections = oauthConnections.filter((connection) => connection.providerId === provider.id && !connection.revokedAt);
-							return (
-								<React.Fragment key={provider.id}>
-									<List strong inset>
-										<ListItem
-											title={provider.name}
-											subtitle={provider.description}
-											after={provider.configured ? `${activeConnections.length} connected` : "Setup needed"}
-											media={<Cloud size={22} />}
-										/>
-										<ListItem
-											link
-											title="Callback URL"
-											subtitle={provider.redirectUri}
-											after={copiedOAuthCallbackProviderId === provider.id ? "Copied" : undefined}
-											media={<Copy size={22} />}
-											onClick={() => void copyOAuthCallbackUrl(provider)}
-										/>
-										<ListInput
-											label="OAuth client ID"
-											type="text"
-											autoCapitalize="none"
-											autoComplete="off"
-											value={oauthClientIds[provider.id] ?? ""}
-											onChange={(event) => setOAuthClientIds((current) => ({ ...current, [provider.id]: event.target.value }))}
-											placeholder="Paste the public client ID"
-										/>
-						<ListItem
-							link
-							title="OAuth client setup"
-							subtitle="Authorization code, refresh token, PKCE, and the callback URL above"
-							href={provider.documentationUrl}
-							media={<BookOpen size={22} />}
-						/>
-									</List>
-									<Block inset className="grid grid-cols-2 gap-3">
-										<Button rounded outline disabled={busy} onClick={() => void configureOAuthProvider(provider)}>Save Client</Button>
-										<Button rounded disabled={busy || !provider.configured} onClick={() => void connectOAuthProvider(provider.id, provider.identityScopes)}>Connect</Button>
-									</Block>
-								</React.Fragment>
-							);
-						})}
-						{oauthAuthorization ? (
-							<OAuthAuthorizationActions
-								authorization={oauthAuthorization}
-								providerName={oauthProviders.find((provider) => provider.id === oauthAuthorization.providerId)?.name ?? oauthAuthorization.providerId}
-								copied={copiedOAuthAuthorizationProviderId === oauthAuthorization.providerId}
-								onCopy={() => void copyOAuthAuthorizationUrl()}
-							/>
-						) : null}
+						<Block inset>
+							<Button rounded onClick={() => navigate("/connections/new")}><Plus size={18} className="mr-2" /> Add Connection</Button>
+						</Block>
 						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
 					</>
 				);
+			} else if (route === "connection-add") {
+				routeContent = (
+					<>
+						<BlockTitle>Choose Provider</BlockTitle>
+						<List strong inset>
+							{oauthProviders.map((provider) => (
+								<ListItem
+									key={provider.id}
+									link
+									title={provider.name}
+									subtitle={provider.description}
+									after={provider.configured ? "Ready" : "Setup needed"}
+									media={<Cloud size={22} />}
+									onClick={() => navigate(`/connections/providers/${encodeURIComponent(provider.id)}`)}
+								/>
+							))}
+						</List>
+					</>
+				);
+			} else if (route === "provider-setup") {
+				const provider = oauthProviders.find((item) => item.id === providerSetupId);
+				routeContent = provider ? (
+					<>
+						<BlockTitle>{provider.name} OAuth Client</BlockTitle>
+						<List strong inset>
+							<ListItem
+								link
+								title="Callback URL"
+								subtitle={provider.redirectUri}
+								after={copiedOAuthCallbackProviderId === provider.id ? "Copied" : undefined}
+								media={<Copy size={22} />}
+								onClick={() => void copyOAuthCallbackUrl(provider)}
+							/>
+							<ListInput
+								label="OAuth client ID"
+								type="text"
+								autoCapitalize="none"
+								autoComplete="off"
+								value={oauthClientIds[provider.id] ?? ""}
+								onChange={(event) => setOAuthClientIds((current) => ({ ...current, [provider.id]: event.target.value }))}
+								placeholder="Paste the public client ID"
+							/>
+							<ListItem link title="OAuth client setup" subtitle="Authorization code, refresh token, PKCE, and the callback URL above" href={provider.documentationUrl} media={<BookOpen size={22} />} />
+						</List>
+						<Block inset><Button rounded outline disabled={busy} onClick={() => void configureOAuthProvider(provider)}>Save Client</Button></Block>
+						<BlockTitle>Connection</BlockTitle>
+						<List strong inset>
+							<ListInput
+								label="Connection name"
+								type="text"
+								autoCapitalize="none"
+								autoComplete="off"
+								value={oauthConnectionName}
+								onChange={(event) => setOAuthConnectionName(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))}
+								placeholder="personal"
+							/>
+						</List>
+						<Block inset><Button rounded disabled={busy || !provider.configured || !oauthConnectionName} onClick={() => void connectOAuthProvider(provider.id, oauthConnectionName, provider.identityScopes)}>Connect Account</Button></Block>
+						{oauthAuthorization ? <OAuthAuthorizationActions authorization={oauthAuthorization} providerName={provider.name} copied={copiedOAuthAuthorizationProviderId === provider.id} onCopy={() => void copyOAuthAuthorizationUrl()} /> : null}
+						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
+					</>
+				) : <Block inset>Provider not found.</Block>;
+			} else if (route === "connection-detail") {
+				const connection = oauthConnections.find((item) => item.id === connectionId && !item.revokedAt);
+				const provider = oauthProviders.find((item) => item.id === connection?.providerId);
+				const visibleScopes = connection?.grantedScopes.filter((scope) => !provider?.connectionScopes.includes(scope)) ?? [];
+				routeContent = connection ? (
+					<>
+						<BlockTitle>Connection</BlockTitle>
+						<List strong inset>
+							<ListInput label="Name" type="text" autoCapitalize="none" autoComplete="off" value={editedOAuthConnectionName} onChange={(event) => setEditedOAuthConnectionName(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-"))} />
+							<ListItem title="Provider" after={provider?.name ?? connection.providerId} media={<Cloud size={22} />} />
+							<ListItem title="Account" subtitle={connection.accountLabel} footer={connection.accountSubject} media={<Link2 size={22} />} />
+							<ListItem link title="Agent reference" subtitle={`sickrat://oauth/${connection.providerId}/${connection.connectionName}`} media={<Copy size={22} />} onClick={() => void copyOAuthReference(connection)} />
+							<ListItem title="Last used" after={connection.lastUsedAt ? formatAgo(connection.lastUsedAt) : "Never"} />
+						</List>
+						<Block inset><Button rounded outline disabled={busy || editedOAuthConnectionName === connection.connectionName} onClick={() => void renameOAuthConnection(connection)}>Save Name</Button></Block>
+						<BlockTitle>Authorized API Scopes</BlockTitle>
+						<List strong inset>
+							{visibleScopes.map((scope) => <ListItem key={scope} title={provider?.scopes.find((item) => item.id === scope)?.label ?? scope} subtitle={scope} />)}
+						</List>
+						<Block inset className="grid grid-cols-2 gap-3">
+							<Button rounded outline disabled={busy} onClick={() => void connectOAuthProvider(connection.providerId, connection.connectionName, visibleScopes, `/connections/${encodeURIComponent(connection.id)}`)}><RefreshCw size={18} className="mr-2" /> Reauthorize</Button>
+							<Button rounded disabled={busy} onClick={() => void revokeOAuthConnection(connection)}><Unplug size={18} className="mr-2" /> Disconnect</Button>
+						</Block>
+						{oauthAuthorization ? <OAuthAuthorizationActions authorization={oauthAuthorization} providerName={provider?.name ?? connection.providerId} copied={copiedOAuthAuthorizationProviderId === connection.providerId} onCopy={() => void copyOAuthAuthorizationUrl()} /> : null}
+						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
+					</>
+				) : <Block inset>Connection not found.</Block>;
 			} else if (route === "approvals") {
 			routeContent = (
 				<>
@@ -3424,16 +3549,22 @@ function AppShell({
 						title={currentPageTitle}
 						subtitle={`${vaultName} vault`}
 						className="top-0 sticky"
-						left={
+						left={["connection-add", "connection-detail", "provider-setup"].includes(route) ? (
+							<NavbarBackLink onClick={() => navigate(route === "provider-setup" ? "/connections/new" : "/connections")} />
+						) : (
 							<Button clear small rounded onClick={() => setNavigationOpen(true)} aria-label="Open navigation">
 								<Menu size={24} />
 							</Button>
-						}
-						right={
+						)}
+						right={route === "connections" ? (
+							<Button clear small rounded onClick={() => navigate("/connections/new")} aria-label="Add connection">
+								<Plus size={22} />
+							</Button>
+						) : !["connection-add", "connection-detail", "provider-setup"].includes(route) ? (
 							<Button clear small rounded onClick={() => navigate("/settings")} aria-label="Settings">
 								<Settings size={22} />
 							</Button>
-						}
+						) : undefined}
 					/>
 					<main className="app-scroll-content">
 						{updateAvailable ? (
@@ -3460,7 +3591,9 @@ function AppShell({
 									const active =
 										item.route === "app"
 											? route === "app"
-											: route === item.route || (item.route === "approvals" && route === "approval-detail");
+											: route === item.route ||
+												(item.route === "approvals" && route === "approval-detail") ||
+												(item.route === "connections" && ["connection-add", "connection-detail", "provider-setup"].includes(route));
 									return (
 										<ListItem
 											key={item.route}
@@ -3522,6 +3655,9 @@ function App() {
 					<Route path="/vaults" element={<AppShell route="vaults" />} />
 					<Route path="/secrets" element={<AppShell route="secrets" />} />
 					<Route path="/connections" element={<AppShell route="connections" />} />
+					<Route path="/connections/new" element={<AppShell route="connection-add" />} />
+					<Route path="/connections/providers/:providerId" element={<ProviderSetupRoute />} />
+					<Route path="/connections/:connectionId" element={<ConnectionDetailRoute />} />
 					<Route path="/approvals" element={<AppShell route="approvals" />} />
 					<Route path="/approvals/:requestId" element={<ApprovalDetailRoute />} />
 					<Route path="/devices" element={<AppShell route="devices" />} />

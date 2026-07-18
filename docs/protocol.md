@@ -71,9 +71,10 @@ Typed requests can mix static secrets and OAuth access tokens:
   "resource_requests": [
     { "type": "secret", "ref": "openai/api-key" },
     {
-      "type": "oauth_token",
-      "provider_id": "github",
-      "scopes": ["repo", "read:user"],
+	  "type": "oauth_token",
+	  "provider_id": "github",
+	  "connection_name": "work",
+	  "scopes": ["repo", "read:user"],
       "env": "GITHUB_TOKEN"
     }
   ],

@@ -17,11 +17,12 @@ export type PairingCodeStatusResponse = {
 
 export type ApprovalResourceRequest =
 	| { type: "secret"; ref: string; env?: string }
-	| { type: "oauth_token"; providerId: string; scopes: string[]; env?: string };
+	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env?: string };
 
 export type OAuthTokenGrant = {
 	providerId: string;
 	connectionId: string;
+	connectionName?: string;
 	accessToken: string;
 	tokenType: string;
 	scopes: string[];

@@ -174,6 +174,7 @@ describe("OAuth gateway Worker API", () => {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				providerId: "cloudflare",
+				connectionName: "refresh-test",
 				accountLabel: "refresh@example.com",
 				accountSubject: "refresh-user",
 				grantedScopes: ["user-details.read", "workers-platform.read"],
@@ -264,6 +265,7 @@ describe("OAuth gateway Worker API", () => {
 				{
 					type: "oauth_token" as const,
 					providerId: "cloudflare",
+					connectionName: "work",
 					scopes: ["account-settings.read", "workers-platform.read"],
 					env: "CLOUDFLARE_API_TOKEN",
 				},
@@ -297,6 +299,7 @@ describe("OAuth gateway Worker API", () => {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
 				providerId: "cloudflare",
+				connectionName: "personal",
 				accountLabel: "owner@example.com",
 				accountSubject: "user-123",
 				grantedScopes: ["user-details.read", "workers-platform.read"],
@@ -312,7 +315,34 @@ describe("OAuth gateway Worker API", () => {
 
 		const listed = await request("/api/oauth/connections");
 		const listedBody = (await listed.json()) as { connections: Array<Record<string, unknown>> };
+		expect(listedBody.connections[0]?.connectionName).toBe("personal");
 		expect(listedBody.connections[0]).not.toHaveProperty("refreshTokenCiphertext");
+
+		const duplicate = await request("/api/oauth/connections", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				providerId: "cloudflare",
+				connectionName: "personal",
+				accountLabel: "other@example.com",
+				accountSubject: "user-456",
+				grantedScopes: ["user-details.read"],
+				tokenType: "bearer",
+				refreshTokenCiphertext: "encrypted-other",
+				refreshTokenIv: "encrypted-iv",
+				refreshTokenSalt: "vault-fingerprint",
+				refreshTokenKdf: "AES-256-GCM:local-vault-key:v1",
+			}),
+		});
+		expect(duplicate.status).toBe(409);
+
+		const renamed = await request(`/api/oauth/connections/${connection.id}/name`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ connectionName: "work" }),
+		});
+		expect(renamed.status).toBe(200);
+		expect(((await renamed.json()) as { connection: { connectionName: string } }).connection.connectionName).toBe("work");
 
 		const resolved = await request(`/api/oauth/connections/${connection.id}/resolve`);
 		const resolvedBody = (await resolved.json()) as { connection: { refreshTokenCiphertext: string } };

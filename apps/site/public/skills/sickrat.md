@@ -146,18 +146,20 @@ Only update local config to the new ref after the provider confirms the password
 
 ## Requesting OAuth Access
 
-Cloudflare is the first supported OAuth provider. Request an access token through the existing `sickrat run` environment flow with a `sickrat://oauth/<provider>` descriptor and one or more explicit `scope` parameters:
+Cloudflare is the first supported OAuth provider. Request an access token through the existing `sickrat run` environment flow with a `sickrat://oauth/<provider>/<connection-name>` descriptor and one or more explicit `scope` parameters:
 
 ```sh
 sickrat run \
-  --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare?scope=account-settings.read&scope=workers-platform.read' \
+  --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare/work?scope=account-settings.read&scope=workers-platform.read' \
   --message "List the user's deployed Cloudflare Workers" \
   -- sh -c 'curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts"'
 ```
 
-Use CLI version `0.1.28` or newer for OAuth requests. Keep non-sensitive values such as `CF_ACCOUNT_ID` in the normal process environment or env file.
+Use CLI version `0.1.35` or newer for named OAuth connections. Keep non-sensitive values such as `CF_ACCOUNT_ID` in the normal process environment or env file.
 
 The user manages provider accounts from **Connections** in the installed PWA. It is valid to request Cloudflare access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
+
+Use the connection name shown in the PWA when more than one account is connected for a provider. The provider-only form, such as `sickrat://oauth/cloudflare?...`, is shorthand that works only when exactly one eligible connection matches the requested scopes.
 
 Request the narrowest scopes required by the command. Every scope must appear as a repeated `scope` query parameter. Do not invent provider ids or request providers that are not shown in the PWA catalog.
 

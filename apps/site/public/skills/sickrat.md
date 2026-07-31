@@ -71,6 +71,35 @@ If `sickrat vault create` just ran successfully, use the printed vault URL. Do n
 
 If push is enabled, the user should receive a pairing notification on their installed PWA. If not, tell them to open the vault PWA, go to Machines, enter the six-digit pairing code, and approve the device.
 
+## Browser Sessions
+
+Authenticated browser-session bundles use the dedicated transaction command,
+not `sickrat run --env`:
+
+```sh
+sickrat browser-session run example/primary \
+  --message "Run the requested work with the approved signed-in session" \
+  -- node use-session.mjs
+```
+
+For first capture or reauthentication, use `browser-session create` or
+`browser-session replace` with a userland producer. Sickrat does not launch a
+browser. The child uses `@sickrat/browser-session` to read the approved bundle
+and commit a rotated bundle or abort with a safe reason:
+
+```js
+import { openGrantedBrowserSession } from "@sickrat/browser-session";
+
+const transaction = openGrantedBrowserSession();
+const { bundle } = await transaction.read();
+const updatedBundle = await doProviderWork(bundle);
+await transaction.commit(updatedBundle);
+```
+
+Keep Patchright, Playwright, provider endpoints, login/OTP/CAPTCHA handling,
+authentication checks, and browser cleanup in userland. Never request a
+browser-session data key as a separate secret or write the bundle to disk.
+
 ## Running Commands With Secrets
 
 Use `sickrat run` as the default agent-facing interface. It requests phone approval, injects approved values into the child process environment, and does not print secret values:

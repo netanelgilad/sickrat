@@ -11,3 +11,4 @@ target/
 .astro/
 .expo/
 coverage/
+experiments/**/artifacts/

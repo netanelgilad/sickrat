@@ -38,11 +38,45 @@ export function parseSickratUri(value: string): ParsedEnvResource | null {
 		}
 		return { type: "oauth_token", providerId, ...(connectionName ? { connectionName } : {}), scopes: [...new Set(scopes)] };
 	}
+	if (url.hostname === "browser-session") {
+		throw new Error("Browser-session references must be used with sickrat browser-session, not environment injection.");
+	}
 	if (url.search) throw new Error(`Secret reference URIs do not support query parameters: ${value}`);
 
 	const ref = `${url.hostname}${url.pathname}`.replace(/^\/+|\/+$/g, "");
 	if (!ref) throw new Error(`Invalid Sickrat reference URI: ${value}`);
 	return { type: "secret", ref: decodeURIComponent(ref) };
+}
+
+export function parseBrowserSessionReference(value: string) {
+	const uri = value.startsWith("sickrat://") ? value : `sickrat://browser-session/${value}`;
+	let url: URL;
+	try {
+		url = new URL(uri);
+	} catch {
+		throw new Error(`Invalid Sickrat browser-session URI: ${value}`);
+	}
+	rejectNonCanonicalUrl(url, value);
+	if (url.hostname !== "browser-session" || url.search) {
+		throw new Error(`Invalid Sickrat browser-session URI: ${value}`);
+	}
+	const encodedSegments = url.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+	if (encodedSegments.length < 2 || encodedSegments.length > 16) {
+		throw new Error(`Browser-session references require at least two path segments: ${value}`);
+	}
+	const segments = encodedSegments.map((segment) => {
+		const decoded = decodeURIComponent(segment);
+		if (!/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/.test(decoded)) {
+			throw new Error(`Invalid Sickrat browser-session URI: ${value}`);
+		}
+		return decoded;
+	});
+	const resourceRef = `browser-session/${segments.join("/")}`;
+	if (resourceRef.length > 512) throw new Error(`Invalid Sickrat browser-session URI: ${value}`);
+	return {
+		resourceRef,
+		uri: `sickrat://${resourceRef}`,
+	};
 }
 
 export function resourceRequestForEnv(resource: ParsedEnvResource, env: string): ApprovalResourceRequest {

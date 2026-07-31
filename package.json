@@ -5,7 +5,8 @@
     "apps/site",
     "apps/web",
     "apps/cli",
-    "packages/protocol"
+    "packages/protocol",
+    "packages/browser-session"
   ],
   "scripts": {
     "cli": "bun run apps/cli/src/index.ts",

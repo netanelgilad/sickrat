@@ -8,8 +8,18 @@ import { fileURLToPath } from "node:url";
 import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { canonicalApprovalPayload, type ApprovalRequestCreate, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
-import { parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
+import type { Readable, Writable } from "node:stream";
+import {
+	assertBrowserSessionBundle,
+	isBrowserSessionResult,
+	readLengthPrefixedJson,
+	writeLengthPrefixedJson,
+	type BrowserSessionAccess,
+	type BrowserSessionBundle,
+	type BrowserSessionInput,
+} from "@sickrat/browser-session";
+import { canonicalApprovalPayload, type ApprovalRequestCreate, type BrowserSessionGrant, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
+import { parseBrowserSessionReference, parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
 import QRCode from "qrcode";
 
 type Config = {
@@ -36,6 +46,7 @@ type Config = {
 		scriptName: string;
 		d1Name: string;
 		d1Id: string;
+		r2Name?: string;
 		workerUrl: string;
 		createdAt: string;
 		vapidPublicKey?: string;
@@ -69,6 +80,11 @@ type CloudflareD1Database = {
 	uuid: string;
 	name: string;
 	created_at?: string;
+};
+
+type CloudflareR2Bucket = {
+	name: string;
+	creation_date?: string;
 };
 
 type CloudflareWorkersSubdomain = {
@@ -114,6 +130,10 @@ type VaultManifest = {
 			databaseName: string;
 			databaseId: string;
 		};
+		r2: {
+			bucketName: string;
+			binding: "BROWSER_SESSION_ARTIFACTS";
+		};
 		worker: {
 			scriptName: string;
 			workersDevUrl: string;
@@ -157,7 +177,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.36";
+const cliVersion = "0.1.37";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -342,6 +362,9 @@ Usage:
   sickrat update [--yes]
   sickrat pair <worker-url> [--label <name>]
   sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] [--approval-timeout <duration>] -- <command...>
+  sickrat browser-session create <ref> [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <producer...>
+  sickrat browser-session run <ref> [--read-only] [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <consumer...>
+  sickrat browser-session replace <ref> [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <producer...>
   sickrat reveal <ref> [--message <why>] [--approval-timeout <duration>]
 
 Examples:
@@ -353,6 +376,8 @@ Examples:
   sickrat run --env SERVICE_TOKEN=service/api-token -- npm test
   sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm test
   sickrat run --env SERVICE_TOKEN=service/api-token --approval-timeout 15m -- npm test
+  sickrat browser-session create chatgpt/primary -- node capture-session.mjs
+  sickrat browser-session run chatgpt/primary -- node use-session.mjs
   sickrat reveal service/api-token --message "Manual debug reveal"
 `;
 	printAndExit(output, exitCode);
@@ -423,6 +448,16 @@ Examples:
   sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm run sync:service
   sickrat run --env SERVICE_TOKEN=service/api-token --approval-timeout 15m -- npm run sync:service
   sickrat run --env-file .env.sickrat -- npm run sync:service
+`,
+		"browser-session": `sickrat browser-session
+
+Usage:
+  sickrat browser-session create <ref> [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <producer...>
+  sickrat browser-session run <ref> [--read-only] [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <consumer...>
+  sickrat browser-session replace <ref> [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <producer...>
+
+The approved bundle and any updated bundle travel only through inherited file descriptors 3 and 4.
+The child can use @sickrat/browser-session and remains responsible for all browser or HTTP behavior.
 `,
 		reveal: `sickrat reveal
 
@@ -622,7 +657,8 @@ function cacheResourceKeys(refs: string[], resourceRequests?: ApprovalRequestCre
 	const keys = new Set(refs.map((ref) => `secret:${ref}`));
 	for (const request of resourceRequests ?? []) {
 		if (request.type === "secret") keys.add(`secret:${request.ref}`);
-		else keys.add(`oauth:${request.providerId}:${request.connectionName ?? ""}:${request.env ?? ""}:${request.scopes.slice().sort().join(",")}`);
+		else if (request.type === "oauth_token") keys.add(`oauth:${request.providerId}:${request.connectionName ?? ""}:${request.env ?? ""}:${request.scopes.slice().sort().join(",")}`);
+		else keys.add(`browser-session:${request.resourceRef}:${request.access}`);
 	}
 	return [...keys].sort();
 }
@@ -631,6 +667,7 @@ function cachedGrantCovers(grant: GrantPayload, refs: string[], resourceRequests
 	const secrets = grant.secrets ?? {};
 	if (refs.some((ref) => secrets[ref] === undefined)) return false;
 	for (const request of resourceRequests ?? []) {
+		if (request.type === "browser_session") return false;
 		if (request.type !== "oauth_token") continue;
 		if (!request.env) return false;
 		const token = grant.oauthTokens?.[request.env];
@@ -786,6 +823,7 @@ async function cloudflareLogin(args: string[]) {
 		"account-settings.read",
 		"user-details.read",
 		"d1.write",
+		"r2.write",
 		"workers-scripts.read",
 		"workers-scripts.write",
 	];
@@ -948,9 +986,11 @@ function normalizeVaultName(name: string | undefined) {
 
 function getVaultResourceNames(vaultName: string | undefined) {
 	const vault = normalizeVaultName(vaultName);
+	const r2Name = `sickrat-${vault.slug}-browser-sessions`.slice(0, 63).replace(/-+$/g, "");
 	return {
 		...vault,
 		d1Name: `sickrat-${vault.slug}-vault`,
+		r2Name,
 		scriptName: `sickrat-${vault.slug}`,
 	};
 }
@@ -969,13 +1009,17 @@ function createVaultManifest(input: {
 		slug: input.vault.slug,
 		sickratVersion: input.version,
 		artifactVersion: input.version,
-		schemaVersion: 1,
+		schemaVersion: 2,
 		workerScriptName: input.vault.scriptName,
 		workerUrl: input.vault.workerUrl,
 		resources: {
 			d1: {
 				databaseName: input.vault.d1Name,
 				databaseId: input.vault.d1Id,
+			},
+			r2: {
+				bucketName: input.vault.r2Name ?? getVaultResourceNames(input.vault.name).r2Name,
+				binding: "BROWSER_SESSION_ARTIFACTS",
 			},
 			worker: {
 				scriptName: input.vault.scriptName,
@@ -985,7 +1029,7 @@ function createVaultManifest(input: {
 			vars: ["SICKRAT_VERSION", "SICKRAT_VAULT_NAME", "SICKRAT_DEPLOYED_BY", "VAPID_PUBLIC_KEY"],
 			secrets: ["VAPID_PRIVATE_KEY"],
 		},
-		migrationsApplied: input.migrationsApplied ?? ["0001_manifest"],
+		migrationsApplied: input.migrationsApplied ?? ["0001_manifest", "0002_browser_sessions"],
 		lastUpdate: input.fromVersion
 			? {
 					startedAt: input.lastUpdateStartedAt ?? finishedAt,
@@ -1016,6 +1060,58 @@ async function ensureManifestTables(vault: ConfiguredVault, accessToken: string)
 		vault.d1Id,
 		"CREATE TABLE IF NOT EXISTS sickrat_update_locks (id TEXT PRIMARY KEY, owner TEXT NOT NULL, started_at TEXT NOT NULL, expires_at TEXT NOT NULL, from_version TEXT NOT NULL, to_version TEXT NOT NULL, last_completed_step TEXT)",
 	);
+}
+
+async function ensureBrowserSessionTables(accountId: string, accessToken: string, d1Id: string) {
+	await execD1(
+		accountId,
+		accessToken,
+		d1Id,
+		`CREATE TABLE IF NOT EXISTS browser_sessions (
+			id TEXT PRIMARY KEY,
+			resource_ref TEXT NOT NULL UNIQUE,
+			artifact_object_key TEXT NOT NULL UNIQUE,
+			artifact_etag TEXT,
+			artifact_bytes INTEGER,
+			wrapped_data_key TEXT NOT NULL,
+			wrapped_data_key_iv TEXT NOT NULL,
+			wrapped_data_key_kdf TEXT NOT NULL,
+			encryption_algorithm TEXT NOT NULL,
+			state TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			last_validated_at TEXT,
+			expected_expires_at TEXT
+		)`,
+	);
+	await execD1(
+		accountId,
+		accessToken,
+		d1Id,
+		`CREATE TABLE IF NOT EXISTS browser_session_leases (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			request_id TEXT NOT NULL UNIQUE,
+			device_id TEXT NOT NULL,
+			base_etag TEXT,
+			access TEXT NOT NULL,
+			capability_hash TEXT NOT NULL UNIQUE,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			downloaded_at TEXT,
+			consumed_at TEXT,
+			safe_reason_code TEXT,
+			writer_slot TEXT,
+			FOREIGN KEY(session_id) REFERENCES browser_sessions(id)
+		)`,
+	);
+	await execD1(accountId, accessToken, d1Id, "CREATE INDEX IF NOT EXISTS browser_sessions_state_idx ON browser_sessions(state, updated_at)");
+	await execD1(accountId, accessToken, d1Id, "CREATE INDEX IF NOT EXISTS browser_session_leases_active_idx ON browser_session_leases(session_id, expires_at, consumed_at)");
+	const leaseColumns = await queryD1<{ name: string }>(accountId, accessToken, d1Id, "PRAGMA table_info(browser_session_leases)");
+	if (!leaseColumns.some((column) => column.name === "writer_slot")) {
+		await execD1(accountId, accessToken, d1Id, "ALTER TABLE browser_session_leases ADD COLUMN writer_slot TEXT");
+	}
+	await execD1(accountId, accessToken, d1Id, "CREATE UNIQUE INDEX IF NOT EXISTS browser_session_single_writer_idx ON browser_session_leases(writer_slot) WHERE writer_slot IS NOT NULL");
 }
 
 async function readRemoteManifest(vault: ConfiguredVault, accessToken: string) {
@@ -1141,6 +1237,24 @@ async function ensureD1Database(accountId: string, accessToken: string, database
 		body: JSON.stringify({ name: databaseName }),
 	});
 	return { database, created: true };
+}
+
+async function ensureR2Bucket(accountId: string, accessToken: string, bucketName: string) {
+	const listed = await readCloudflareApi<{ buckets?: CloudflareR2Bucket[] }>(
+		`/accounts/${accountId}/r2/buckets?per_page=1000`,
+		accessToken,
+	);
+	const existing = listed.buckets?.find((bucket) => bucket.name === bucketName);
+	if (existing) return { bucket: existing, created: false };
+	const bucket = await readCloudflareApi<CloudflareR2Bucket>(
+		`/accounts/${accountId}/r2/buckets`,
+		accessToken,
+		{
+			method: "POST",
+			body: JSON.stringify({ name: bucketName }),
+		},
+	);
+	return { bucket, created: true };
 }
 
 function base64UrlToBase64(value: string) {
@@ -1317,6 +1431,7 @@ async function uploadVaultWorker(input: {
 	accountId: string;
 	scriptName: string;
 	d1Id: string;
+	r2Name: string;
 	vaultName: string;
 	sickratVersion: string;
 	vapidPublicKey: string;
@@ -1341,6 +1456,7 @@ async function uploadVaultWorker(input: {
 		bindings: [
 			{ name: "ASSETS", type: "assets" },
 			{ name: "DB", type: "d1", id: input.d1Id },
+			{ name: "BROWSER_SESSION_ARTIFACTS", type: "r2_bucket", bucket_name: input.r2Name },
 			{ name: "APPROVAL_HUB", type: "durable_object_namespace", class_name: "ApprovalHub" },
 			{ name: "VAPID_PUBLIC_KEY", type: "plain_text", text: input.vapidPublicKey },
 			{ name: "VAPID_PRIVATE_KEY", type: "secret_text", text: input.vapidPrivateKey },
@@ -1388,6 +1504,7 @@ async function deployVaultWorker(input: {
 	accountId: string;
 	scriptName: string;
 	d1Id: string;
+	r2Name: string;
 	vaultName: string;
 	version?: string;
 	artifact?: WebArtifact;
@@ -1419,6 +1536,7 @@ async function deployVaultWorker(input: {
 			accountId: input.accountId,
 			scriptName: input.scriptName,
 			d1Id: input.d1Id,
+			r2Name: input.r2Name,
 			vaultName: input.vaultName,
 			sickratVersion: version,
 			vapidPublicKey: vapid.publicKey,
@@ -1446,12 +1564,16 @@ async function createVault(args: string[]) {
 	console.error(`Creating Sickrat vault "${vault.name}" in ${account.name} (${account.id})...`);
 	const d1 = await ensureD1Database(account.id, cloudflare.accessToken, vault.d1Name);
 	console.log(`D1\t${d1.created ? "created" : "exists"}\t${d1.database.name}\t${d1.database.uuid}`);
+	await ensureBrowserSessionTables(account.id, cloudflare.accessToken, d1.database.uuid);
+	const r2 = await ensureR2Bucket(account.id, cloudflare.accessToken, vault.r2Name);
+	console.log(`R2\t${r2.created ? "created" : "exists"}\t${r2.bucket.name}`);
 
 	const vapid = await deployVaultWorker({
 		accessToken: cloudflare.accessToken,
 		accountId: account.id,
 		scriptName: vault.scriptName,
 		d1Id: d1.database.uuid,
+		r2Name: r2.bucket.name,
 		vaultName: vault.name,
 		version: cliVersion,
 	});
@@ -1468,6 +1590,7 @@ async function createVault(args: string[]) {
 		scriptName: vault.scriptName,
 		d1Name: vault.d1Name,
 		d1Id: d1.database.uuid,
+		r2Name: r2.bucket.name,
 		workerUrl,
 		createdAt: new Date().toISOString(),
 		vapidPublicKey: vapid.publicKey,
@@ -1512,6 +1635,7 @@ async function discoverConfiguredVaults(accessToken: string) {
 				scriptName: script.id,
 				d1Name,
 				d1Id: database.uuid,
+				r2Name: getVaultResourceNames(slug).r2Name,
 				workerUrl,
 				createdAt: script.created_on ?? database.created_at ?? new Date().toISOString(),
 			});
@@ -1574,6 +1698,7 @@ async function vaultStatus(args: string[]) {
 	console.log(`Account\t${vault.accountName}\t${vault.accountId}`);
 	console.log(`Worker\t${vault.scriptName}`);
 	console.log(`D1\t${vault.d1Name}\t${vault.d1Id}`);
+	console.log(`R2\t${vault.r2Name ?? getVaultResourceNames(vault.name).r2Name}`);
 	console.log(`Current\t${currentVersion}`);
 	console.log(`Latest\t${latestVersion}`);
 	console.log(`Manifest\t${manifest ? "present" : "missing"}`);
@@ -1664,6 +1789,7 @@ async function vaultUpdate(args: string[]) {
 		...(needsManifest ? ["initialize remote deployment manifest"] : []),
 		...(needsVersionUpdate ? [`deploy Worker/PWA artifact ${targetVersion}`] : []),
 		"ensure D1 manifest and migration tables",
+		"ensure encrypted browser-session R2 bucket and Worker binding",
 		...(willRotateVapid ? ["rotate VAPID push keys and require PWA push refresh"] : ["preserve VAPID push keys"]),
 		"verify /api/capabilities",
 		"write deployment manifest",
@@ -1690,7 +1816,11 @@ async function vaultUpdate(args: string[]) {
 	const lock = await acquireUpdateLock(vault, cloudflare.accessToken, currentVersion, targetVersion, forceUnlock);
 	try {
 		await ensureManifestTables(vault, cloudflare.accessToken);
+		await ensureBrowserSessionTables(vault.accountId, cloudflare.accessToken, vault.d1Id);
 		await markUpdateStep(vault, cloudflare.accessToken, "ensure_manifest_tables");
+		const r2Name = vault.r2Name ?? getVaultResourceNames(vault.name).r2Name;
+		await ensureR2Bucket(vault.accountId, cloudflare.accessToken, r2Name);
+		await markUpdateStep(vault, cloudflare.accessToken, "ensure_browser_session_r2");
 		const artifact = process.env.SICKRAT_WEB_DIST ? await resolveWebArtifact() : await downloadReleaseWebArtifact(targetVersion, true);
 		await markUpdateStep(vault, cloudflare.accessToken, "download_artifact");
 		const vapid = await deployVaultWorker({
@@ -1698,6 +1828,7 @@ async function vaultUpdate(args: string[]) {
 			accountId: vault.accountId,
 			scriptName: vault.scriptName,
 			d1Id: vault.d1Id,
+			r2Name,
 			vaultName: vault.name,
 			version: targetVersion,
 			artifact,
@@ -1709,12 +1840,12 @@ async function vaultUpdate(args: string[]) {
 			vault,
 			version: targetVersion,
 			fromVersion: currentVersion,
-			migrationsApplied: Array.from(new Set([...(existingManifest?.migrationsApplied ?? []), "0001_manifest", `deploy_${targetVersion}`])),
+			migrationsApplied: Array.from(new Set([...(existingManifest?.migrationsApplied ?? []), "0001_manifest", "0002_browser_sessions", `deploy_${targetVersion}`])),
 			lastUpdateStartedAt: lock.startedAt,
 		});
 		await writeRemoteManifest(vault, cloudflare.accessToken, manifest);
 		await markUpdateStep(vault, cloudflare.accessToken, "write_manifest");
-		const nextVault = { ...vault, vapidPublicKey: vapid.publicKey, vapidPrivateKey: vapid.privateKey };
+		const nextVault = { ...vault, r2Name, vapidPublicKey: vapid.publicKey, vapidPrivateKey: vapid.privateKey };
 		const otherVaults = (config.vaults ?? []).filter((existing) => existing.accountId !== vault.accountId || existing.slug !== vault.slug);
 		await writeConfig({ ...config, workerUrl: vault.workerUrl, vaults: [...otherVaults, nextVault] });
 		await releaseUpdateLock(vault, cloudflare.accessToken);
@@ -1849,8 +1980,8 @@ function uniqueRefs(refs: string[], allowEmpty = false) {
 
 async function requestGrant(input: { refs: string[]; resourceRequests?: ApprovalRequestCreate["resourceRequests"]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean }) {
 	validateRequestMessage(input.message);
-	const hasOAuthRequests = input.resourceRequests?.some((request) => request.type === "oauth_token") ?? false;
-	const refs = uniqueRefs(input.refs, hasOAuthRequests);
+	const hasNonSecretRequests = input.resourceRequests?.some((request) => request.type !== "secret") ?? false;
+	const refs = uniqueRefs(input.refs, hasNonSecretRequests);
 	const approvalWaitSeconds = input.approvalWaitSeconds ?? 2 * 60;
 	const config = await readConfig();
 	if (!config.workerUrl || !config.deviceId) {
@@ -1870,7 +2001,7 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 		command: input.command,
 		message: input.message,
 		secretRefs: refs,
-		resourceRequests: hasOAuthRequests ? input.resourceRequests : undefined,
+		resourceRequests: hasNonSecretRequests ? input.resourceRequests : undefined,
 		accessDurationSeconds: input.accessDurationSeconds,
 		approvalWaitSeconds,
 		ephemeralPublicKey,
@@ -1892,8 +2023,11 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 	}
 	const oauthLabels = (input.resourceRequests ?? [])
 		.filter((request) => request.type === "oauth_token")
-		.map((request) => `${request.providerId}${request.connectionName ? `/${request.connectionName}` : ""} (${request.scopes.join(", ")})`);
-	console.error(`Requested resources: ${[...refs, ...oauthLabels].join(", ")}`);
+		.map((request) => request.type === "oauth_token" ? `${request.providerId}${request.connectionName ? `/${request.connectionName}` : ""} (${request.scopes.join(", ")})` : "");
+	const browserSessionLabels = (input.resourceRequests ?? [])
+		.filter((request) => request.type === "browser_session")
+		.map((request) => request.type === "browser_session" ? `sickrat://${request.resourceRef} (${request.access.replaceAll("_", " ")})` : "");
+	console.error(`Requested resources: ${[...refs, ...oauthLabels, ...browserSessionLabels].join(", ")}`);
 	console.error(`If the notification does not appear, open ${config.workerUrl}/approve/${encodeURIComponent(created.requestId)} on your phone.`);
 
 	const started = Date.now();
@@ -1914,14 +2048,22 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 				if (secrets[ref] === undefined) throw new Error(`Approved grant did not include ${ref}.`);
 			}
 			for (const request of input.resourceRequests ?? []) {
-				if (request.type !== "oauth_token") continue;
-				if (!request.env) throw new Error(`OAuth request for ${request.providerId} did not include an environment binding.`);
-				const token = grant.oauthTokens?.[request.env];
-				if (!token) throw new Error(`Approved grant did not include OAuth token ${request.env}.`);
-				if (token.providerId !== request.providerId) throw new Error(`OAuth grant provider mismatch for ${request.env}.`);
-				if (request.connectionName && token.connectionName !== request.connectionName) throw new Error(`OAuth grant connection mismatch for ${request.env}.`);
-				if (request.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`OAuth grant scopes do not cover ${request.env}.`);
-				if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) throw new Error(`OAuth grant for ${request.env} is already expired.`);
+				if (request.type === "oauth_token") {
+					if (!request.env) throw new Error(`OAuth request for ${request.providerId} did not include an environment binding.`);
+					const token = grant.oauthTokens?.[request.env];
+					if (!token) throw new Error(`Approved grant did not include OAuth token ${request.env}.`);
+					if (token.providerId !== request.providerId) throw new Error(`OAuth grant provider mismatch for ${request.env}.`);
+					if (request.connectionName && token.connectionName !== request.connectionName) throw new Error(`OAuth grant connection mismatch for ${request.env}.`);
+					if (request.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`OAuth grant scopes do not cover ${request.env}.`);
+					if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) throw new Error(`OAuth grant for ${request.env} is already expired.`);
+				}
+				if (request.type === "browser_session") {
+					const session = grant.browserSession;
+					if (!session || session.resourceRef !== request.resourceRef || session.access !== request.access) {
+						throw new Error("Approved grant did not include the requested browser-session transaction.");
+					}
+					if (Date.parse(session.expiresAt) <= Date.now()) throw new Error("Browser-session transaction grant is already expired.");
+				}
 			}
 			if (grant.accessExpiresAt && Date.parse(grant.accessExpiresAt) > Date.now()) {
 				const providerExpiries = Object.values(grant.oauthTokens ?? {})
@@ -2113,6 +2255,288 @@ async function runWithSecrets(args: string[]) {
 	process.exit(code);
 }
 
+function browserSessionAssociatedData(grant: BrowserSessionGrant) {
+	return textEncoder.encode(JSON.stringify([
+		"sickrat-browser-session",
+		grant.vaultId,
+		grant.sessionId,
+		grant.resourceRef,
+		grant.artifactObjectKey,
+		"browser_session",
+	]));
+}
+
+async function importBrowserSessionDataKey(dataKey: string) {
+	const bytes = base64UrlToBytes(dataKey);
+	if (bytes.byteLength !== 32) throw new Error("Approved browser-session data key is malformed.");
+	try {
+		return await crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+	} finally {
+		bytes.fill(0);
+	}
+}
+
+async function encryptBrowserSessionArtifact(bundle: BrowserSessionBundle, key: CryptoKey, grant: BrowserSessionGrant) {
+	assertBrowserSessionBundle(bundle);
+	const plaintext = Buffer.from(JSON.stringify(bundle), "utf8");
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	try {
+		const ciphertext = await crypto.subtle.encrypt(
+			{ name: "AES-GCM", iv, additionalData: browserSessionAssociatedData(grant) },
+			key,
+			plaintext,
+		);
+		return Buffer.from(JSON.stringify({
+			alg: "AES-256-GCM",
+			iv: bytesToBase64Url(iv),
+			ciphertext: bytesToBase64Url(new Uint8Array(ciphertext)),
+		}), "utf8");
+	} finally {
+		plaintext.fill(0);
+		iv.fill(0);
+	}
+}
+
+async function decryptBrowserSessionArtifact(encrypted: ArrayBuffer, key: CryptoKey, grant: BrowserSessionGrant) {
+	if (encrypted.byteLength === 0 || encrypted.byteLength > 32 * 1024 * 1024 + 64 * 1024) {
+		throw new Error("Encrypted browser-session artifact is empty or exceeds the size limit.");
+	}
+	let envelope: Record<string, unknown>;
+	try {
+		envelope = JSON.parse(textDecoder.decode(encrypted)) as Record<string, unknown>;
+	} catch {
+		throw new Error("Encrypted browser-session artifact envelope is malformed.");
+	}
+	if (
+		!envelope ||
+		typeof envelope !== "object" ||
+		Array.isArray(envelope) ||
+		Object.keys(envelope).some((keyName) => !["alg", "iv", "ciphertext"].includes(keyName)) ||
+		envelope.alg !== "AES-256-GCM" ||
+		typeof envelope.iv !== "string" ||
+		typeof envelope.ciphertext !== "string"
+	) {
+		throw new Error("Encrypted browser-session artifact envelope is unsupported.");
+	}
+	const iv = base64UrlToBytes(envelope.iv);
+	const ciphertext = base64UrlToBytes(envelope.ciphertext);
+	if (iv.byteLength !== 12) throw new Error("Encrypted browser-session artifact IV is malformed.");
+	try {
+		const plaintext = await crypto.subtle.decrypt(
+			{ name: "AES-GCM", iv, additionalData: browserSessionAssociatedData(grant) },
+			key,
+			ciphertext,
+		);
+		const bytes = new Uint8Array(plaintext);
+		try {
+			const bundle = JSON.parse(textDecoder.decode(bytes)) as unknown;
+			assertBrowserSessionBundle(bundle);
+			return bundle;
+		} finally {
+			bytes.fill(0);
+		}
+	} catch (error) {
+		if (error instanceof Error && error.message === "Invalid browser-session bundle structure.") throw error;
+		throw new Error("Browser-session artifact could not be authenticated or decrypted.");
+	} finally {
+		iv.fill(0);
+		ciphertext.fill(0);
+	}
+}
+
+async function browserSessionArtifactRequest(
+	workerUrl: string,
+	grant: BrowserSessionGrant,
+	method: "GET" | "PUT" | "POST",
+	pathSuffix = "artifact",
+	body?: BodyInit,
+) {
+	const response = await fetch(
+		`${workerUrl}/api/browser-sessions/${encodeURIComponent(grant.sessionId)}/${pathSuffix}`,
+		{
+			method,
+			headers: {
+				authorization: `SickratBrowserSession ${grant.transactionCapability}`,
+				...(body ? { "content-type": pathSuffix === "artifact" ? "application/octet-stream" : "application/json" } : {}),
+			},
+			body,
+		},
+	);
+	if (!response.ok) {
+		const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+		throw new Error(payload?.error ?? `Browser-session transaction failed with HTTP ${response.status}.`);
+	}
+	return response;
+}
+
+async function abortBrowserSessionTransaction(workerUrl: string, grant: BrowserSessionGrant, safeReasonCode: string) {
+	await browserSessionArtifactRequest(
+		workerUrl,
+		grant,
+		"POST",
+		"abort",
+		JSON.stringify({ safeReasonCode }),
+	);
+}
+
+async function runBrowserSessionChild(
+	input: BrowserSessionInput,
+	commandArgs: string[],
+	timeoutMs: number,
+) {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(new Error("Browser-session child transaction timed out.")), timeoutMs);
+	const safeEnvironment = { ...process.env };
+	delete safeEnvironment.SICKRAT_BROWSER_SESSION_INPUT_FD;
+	delete safeEnvironment.SICKRAT_BROWSER_SESSION_OUTPUT_FD;
+	safeEnvironment.SICKRAT_BROWSER_SESSION_INPUT_FD = "3";
+	safeEnvironment.SICKRAT_BROWSER_SESSION_OUTPUT_FD = "4";
+	const child = spawn(commandArgs[0], commandArgs.slice(1), {
+		env: safeEnvironment,
+		stdio: ["inherit", "inherit", "inherit", "pipe", "pipe"],
+	});
+	const inputChannel = child.stdio[3] as Writable;
+	const outputChannel = child.stdio[4] as Readable;
+	let forceKillTimer: NodeJS.Timeout | undefined;
+	const exit = new Promise<number>((resolve, reject) => {
+		child.once("error", reject);
+		child.once("exit", (code, signal) => {
+			if (forceKillTimer) clearTimeout(forceKillTimer);
+			if (signal) reject(new Error(`Approved browser-session child exited with signal ${signal}.`));
+			else resolve(code ?? 1);
+		});
+	});
+	const stopChild = () => {
+		if (child.exitCode !== null || child.signalCode !== null) return;
+		child.kill("SIGTERM");
+		if (!forceKillTimer) {
+			forceKillTimer = setTimeout(() => {
+				if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+			}, 2_000);
+			forceKillTimer.unref();
+		}
+	};
+	const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+	for (const signal of signals) process.once(signal, stopChild);
+	controller.signal.addEventListener("abort", stopChild, { once: true });
+
+	try {
+		await writeLengthPrefixedJson(inputChannel, input, { timeoutMs, signal: controller.signal });
+		const [result, exitCode] = await Promise.all([
+			readLengthPrefixedJson(outputChannel, { timeoutMs, signal: controller.signal }),
+			exit,
+		]);
+		if (exitCode !== 0) throw new Error(`Approved browser-session child exited with code ${exitCode}.`);
+		if (!isBrowserSessionResult(result)) throw new Error("Approved browser-session child returned an invalid result.");
+		return result;
+	} finally {
+		clearTimeout(timer);
+		if (forceKillTimer) clearTimeout(forceKillTimer);
+		controller.abort();
+		inputChannel.destroy();
+		outputChannel.destroy();
+		for (const signal of signals) process.off(signal, stopChild);
+	}
+}
+
+async function browserSessionCommand(args: string[]) {
+	const action = args[1];
+	if (!["create", "run", "replace"].includes(action ?? "")) {
+		throw new Error("Browser-session action must be create, run, or replace.");
+	}
+	const referenceValue = args[2];
+	if (!referenceValue || referenceValue.startsWith("-")) throw new Error("A browser-session reference is required.");
+	const delimiter = args.indexOf("--");
+	if (delimiter < 0 || delimiter === args.length - 1) throw new Error("A userland command is required after --.");
+	const options = args.slice(3, delimiter);
+	const commandArgs = args.slice(delimiter + 1);
+	const message = getAnyArgValue(options, ["--message", "-m"]) ?? undefined;
+	const approvalWaitSeconds = parseApprovalTimeout(getArgValue(options, "--approval-timeout") ?? undefined);
+	const transactionTimeoutSeconds = parseDuration(getArgValue(options, "--transaction-timeout") ?? "10m", "Transaction timeout");
+	if (!transactionTimeoutSeconds || transactionTimeoutSeconds < 60 || transactionTimeoutSeconds > 60 * 60) {
+		throw new Error("Transaction timeout must be between 1 minute and 1 hour.");
+	}
+	const readOnly = options.includes("--read-only");
+	for (let index = 0; index < options.length; index += 1) {
+		const option = options[index];
+		if (["--message", "-m", "--approval-timeout", "--transaction-timeout"].includes(option)) {
+			index += 1;
+			continue;
+		}
+		if (option === "--read-only") continue;
+		throw new Error(`Unknown sickrat browser-session option: ${option}`);
+	}
+	if (readOnly && action !== "run") throw new Error("--read-only is supported only by browser-session run.");
+	validateRequestMessage(message);
+	const reference = parseBrowserSessionReference(referenceValue);
+	const access: BrowserSessionAccess = action === "create"
+		? "create"
+		: action === "replace"
+			? "replace"
+			: readOnly
+				? "restore"
+				: "restore_and_update";
+	const resourceRequest = { type: "browser_session" as const, resourceRef: reference.resourceRef, access };
+	const grantPayload = await requestGrant({
+		refs: [],
+		resourceRequests: [resourceRequest],
+		message,
+		command: `sickrat browser-session ${action} ${reference.uri} -- ${formatCommand(commandArgs)}`,
+		approvalWaitSeconds,
+		allowCache: false,
+	});
+	const grant = grantPayload.browserSession;
+	if (!grant || grant.resourceRef !== reference.resourceRef || grant.access !== access) {
+		throw new Error("Approved grant did not contain the requested browser-session transaction.");
+	}
+	if (Date.parse(grant.expiresAt) <= Date.now()) throw new Error("Approved browser-session transaction has expired.");
+	const config = await readConfig();
+	if (!config.workerUrl) throw new Error("No paired Sickrat vault is configured.");
+	const dataKey = await importBrowserSessionDataKey(grant.dataKey);
+	grant.dataKey = "";
+
+	let bundle: BrowserSessionBundle | undefined;
+	try {
+		if (access === "restore" || access === "restore_and_update") {
+			const response = await browserSessionArtifactRequest(config.workerUrl, grant, "GET");
+			bundle = await decryptBrowserSessionArtifact(await response.arrayBuffer(), dataKey, grant);
+		}
+		const childInput: BrowserSessionInput = {
+			resourceRef: reference.resourceRef,
+			access,
+			...(bundle ? { bundle } : {}),
+		};
+		console.error(`Starting approved userland browser-session ${action} transaction.`);
+		const result = await runBrowserSessionChild(childInput, commandArgs, transactionTimeoutSeconds * 1000);
+		bundle = undefined;
+		if (result.action === "abort") {
+			await abortBrowserSessionTransaction(config.workerUrl, grant, result.safeReasonCode);
+			console.error(`Browser-session transaction aborted safely: ${result.safeReasonCode}.`);
+			if (result.safeReasonCode !== "unchanged" && result.safeReasonCode !== "user_cancelled") {
+				throw new Error(`Browser-session transaction did not commit: ${result.safeReasonCode}.`);
+			}
+			return;
+		}
+		if (access === "restore") {
+			await abortBrowserSessionTransaction(config.workerUrl, grant, "operation_failed").catch(() => undefined);
+			throw new Error("A read-only browser-session child must abort with unchanged instead of committing.");
+		}
+		const encrypted = await encryptBrowserSessionArtifact(result.bundle, dataKey, grant);
+		try {
+			await browserSessionArtifactRequest(config.workerUrl, grant, "PUT", "artifact", encrypted);
+		} finally {
+			encrypted.fill(0);
+		}
+		console.error(`Browser-session ${action} transaction committed.`);
+	} catch (error) {
+		bundle = undefined;
+		await abortBrowserSessionTransaction(config.workerUrl, grant, "operation_failed").catch(() => undefined);
+		throw error;
+	} finally {
+		grant.transactionCapability = "";
+	}
+}
+
 async function main() {
 	const args = process.argv.slice(2);
 	const command = args[0];
@@ -2131,6 +2555,7 @@ async function main() {
 			if (command === "update") commandHelp("update");
 			if (command === "pair") commandHelp("pair");
 			if (command === "run") commandHelp("run");
+			if (command === "browser-session") commandHelp("browser-session");
 			if (command === "reveal" || command === "request") commandHelp("reveal");
 			unknownCommand(command);
 		}
@@ -2143,6 +2568,7 @@ async function main() {
 		if (command === "update") return await updateAll(args);
 		if (command === "pair") return await pair(args);
 		if (command === "run") return await runWithSecrets(args);
+		if (command === "browser-session") return await browserSessionCommand(args);
 		if (command === "reveal") return await revealSecret(args);
 		if (command === "request") {
 			console.error("sickrat request is deprecated. Use sickrat reveal for explicit stdout reveal, or sickrat run for env injection.");

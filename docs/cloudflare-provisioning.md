@@ -8,10 +8,10 @@ All vault resources are created in the user's Cloudflare account after the user 
 
 - Worker script for API, PWA assets, and approval coordination
 - D1 database for metadata and encrypted vault records
+- private R2 bucket for the one current encrypted artifact of each browser session
 - Durable Object namespace for pending approvals
 - Worker asset binding for the PWA shell
 - Worker vars/secrets for vault-specific VAPID push keys
-- Optional R2 bucket for large encrypted payloads
 - Optional KV namespace for deployment metadata and non-sensitive config
 
 ## Worker Secrets
@@ -30,9 +30,9 @@ Cloudflare Secrets Store is not required for the current vault model. The PWA en
 
 1. `sickrat login` performs Cloudflare OAuth with PKCE and stores the owner control-plane token locally.
 2. `sickrat vault create` selects a Cloudflare account.
-3. The CLI creates or finds D1.
+3. The CLI creates or finds D1 and the private browser-session R2 bucket.
 4. The CLI downloads and caches the matching Sickrat PWA/Worker release artifact.
-5. The CLI uploads assets and deploys the Worker with D1, Durable Object, assets, and VAPID bindings through the Cloudflare API.
+5. The CLI uploads assets and deploys the Worker with D1, R2, Durable Object, assets, and VAPID bindings through the Cloudflare API.
 6. The Worker upload metadata applies the Durable Object migration during deployment.
 7. The CLI stores the vault endpoint and account metadata locally.
 8. The user opens the vault URL on their phone, installs the PWA, then pairs CLI devices.

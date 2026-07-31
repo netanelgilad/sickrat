@@ -16,6 +16,9 @@ sickrat update [--yes]
 
 sickrat pair <worker-url>
 sickrat run [--env KEY=ref] [--env-file <file>] [--message <why>] [--access-for <duration>] -- <command> [args...]
+sickrat browser-session create <ref> [--message <why>] -- <producer> [args...]
+sickrat browser-session run <ref> [--read-only] [--message <why>] -- <consumer> [args...]
+sickrat browser-session replace <ref> [--message <why>] -- <producer> [args...]
 sickrat reveal <ref> [--message <why>]
 sickrat inject -i <template> -o <output>
 ```
@@ -75,6 +78,36 @@ Agents may request a reference that does not exist yet. The PWA should treat tha
 Agents may also request generated values for new refs when a workflow needs a fresh password or token. Keep that inside `sickrat run` rather than adding provider-specific commands. See [generated-secret-flows.md](generated-secret-flows.md).
 Agents may request OAuth access tokens from connected provider accounts. Keep the approval model the same: the PWA shows provider, account, scopes, command, device, and message, then returns a short-lived encrypted grant after approval. See [oauth-gateway.md](oauth-gateway.md).
 Agents may request a timed local grant with `--access-for <duration>` when a multi-step task is expected to need the same refs repeatedly. The phone approval screen should look distinct from one-shot approvals and should make the duration clear. After approval, the CLI may reuse those refs without another phone prompt until the local grant expires.
+
+## `browser-session`
+
+Browser-session bundles use a dedicated transaction command and never enter
+environment variables, standard input/output, or plaintext files:
+
+```sh
+sickrat browser-session create example/primary \
+  --message "Store my authenticated browser session" \
+  -- node capture-session.mjs
+
+sickrat browser-session run example/primary \
+  --message "Use and rotate my authenticated browser session" \
+  -- node use-session.mjs
+```
+
+The child reads and finishes the private transaction with the browser-neutral
+SDK:
+
+```js
+import { openGrantedBrowserSession } from "@sickrat/browser-session";
+
+const transaction = openGrantedBrowserSession();
+const { bundle } = await transaction.read();
+const updatedBundle = await doUserlandWork(bundle);
+await transaction.commit(updatedBundle);
+```
+
+Capture/restore logic, browsers, HTTP recipes, authentication checks, and
+temporary browser cleanup remain userland responsibilities.
 
 Example:
 

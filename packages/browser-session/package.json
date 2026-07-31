@@ -1,0 +1,17 @@
+{
+	"name": "@sickrat/browser-session",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"test": "node --experimental-strip-types --test test/*.test.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/node": "^25.9.2",
+		"typescript": "^5.5.2"
+	}
+}

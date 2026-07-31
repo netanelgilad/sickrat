@@ -36,8 +36,16 @@ jobs:
       - name: Typecheck web
         run: npm --workspace apps/web run typecheck
 
+      - name: Test CLI and browser-session SDK
+        run: |
+          npm --workspace apps/cli test
+          npm --workspace packages/browser-session test
+
       - name: Build web
         run: npm run web:build
+
+      - name: Test Worker
+        run: npm --workspace apps/web test
 
       - name: Build CLI
         run: npm --workspace apps/cli run build

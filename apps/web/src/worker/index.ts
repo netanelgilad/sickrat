@@ -77,7 +77,45 @@ type PairingCodeRecord = {
 
 type ApprovalResourceRequest =
 	| { type: "secret"; ref: string; env?: string }
-	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env?: string };
+	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env?: string }
+	| {
+			type: "browser_session";
+			resourceRef: string;
+			access: "create" | "restore" | "restore_and_update" | "replace";
+		};
+
+type BrowserSessionRecord = {
+	id: string;
+	resource_ref: string;
+	artifact_object_key: string;
+	artifact_etag: string | null;
+	artifact_bytes: number | null;
+	wrapped_data_key: string;
+	wrapped_data_key_iv: string;
+	wrapped_data_key_kdf: string;
+	encryption_algorithm: string;
+	state: "creating" | "healthy" | "unknown" | "reauth_required" | "revoked";
+	created_at: string;
+	updated_at: string;
+	last_validated_at: string | null;
+	expected_expires_at: string | null;
+};
+
+type BrowserSessionLeaseRecord = {
+	id: string;
+	session_id: string;
+	request_id: string;
+	device_id: string;
+	base_etag: string | null;
+	access: "create" | "restore" | "restore_and_update" | "replace";
+	capability_hash: string;
+	expires_at: string;
+	created_at: string;
+	downloaded_at: string | null;
+	consumed_at: string | null;
+	safe_reason_code: string | null;
+	writer_slot: string | null;
+};
 
 type OAuthProviderConfigRecord = {
 	provider_id: string;
@@ -140,6 +178,7 @@ type EnvWithBindings = Env & {
 	ASSETS: Fetcher;
 	APPROVAL_HUB?: DurableObjectNamespace;
 	DB?: D1Database;
+	BROWSER_SESSION_ARTIFACTS?: R2Bucket;
 	CF_OAUTH_CLIENT_ID?: string;
 	VAPID_PUBLIC_KEY?: string;
 	VAPID_PRIVATE_KEY?: string;
@@ -193,6 +232,8 @@ const defaultApprovalWaitSeconds = 2 * 60;
 const oauthHandoffTtlMs = 5 * 60 * 1000;
 const oauthHandoffWrapSalt = new TextEncoder().encode("sickrat:oauth-handoff-salt:v1");
 const oauthHandoffWrapInfo = new TextEncoder().encode("sickrat:oauth-handoff:v1");
+const browserSessionLeaseTtlMs = 5 * 60 * 1000;
+const maxBrowserSessionArtifactBytes = 32 * 1024 * 1024 + 64 * 1024;
 
 const vapidJwtCache = new Map<string, { token: string; expiresAt: number }>();
 
@@ -455,8 +496,72 @@ async function ensureSchema(env: EnvWithBindings) {
 			consumed_at TEXT
 		)`,
 	).run();
+	await env.DB.prepare(
+		`CREATE TABLE IF NOT EXISTS browser_sessions (
+			id TEXT PRIMARY KEY,
+			resource_ref TEXT NOT NULL UNIQUE,
+			artifact_object_key TEXT NOT NULL UNIQUE,
+			artifact_etag TEXT,
+			artifact_bytes INTEGER,
+			wrapped_data_key TEXT NOT NULL,
+			wrapped_data_key_iv TEXT NOT NULL,
+			wrapped_data_key_kdf TEXT NOT NULL,
+			encryption_algorithm TEXT NOT NULL,
+			state TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			last_validated_at TEXT,
+			expected_expires_at TEXT
+		)`,
+	).run();
+	await env.DB.prepare(
+		`CREATE TABLE IF NOT EXISTS browser_session_leases (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			request_id TEXT NOT NULL UNIQUE,
+			device_id TEXT NOT NULL,
+			base_etag TEXT,
+			access TEXT NOT NULL,
+			capability_hash TEXT NOT NULL UNIQUE,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			downloaded_at TEXT,
+			consumed_at TEXT,
+			safe_reason_code TEXT,
+			writer_slot TEXT,
+			FOREIGN KEY(session_id) REFERENCES browser_sessions(id)
+		)`,
+	).run();
 	await env.DB.prepare("CREATE INDEX IF NOT EXISTS oauth_connections_provider_idx ON oauth_connections(provider_id, revoked_at)").run();
 	await env.DB.prepare("CREATE INDEX IF NOT EXISTS oauth_handoffs_expiry_idx ON oauth_handoffs(expires_at)").run();
+	await env.DB.prepare("CREATE INDEX IF NOT EXISTS browser_sessions_state_idx ON browser_sessions(state, updated_at)").run();
+	await env.DB.prepare("CREATE INDEX IF NOT EXISTS browser_session_leases_active_idx ON browser_session_leases(session_id, expires_at, consumed_at)").run();
+	await ensureColumn(env.DB, "browser_session_leases", "writer_slot", "TEXT");
+	await env.DB.prepare("CREATE UNIQUE INDEX IF NOT EXISTS browser_session_single_writer_idx ON browser_session_leases(writer_slot) WHERE writer_slot IS NOT NULL").run();
+	const staleCreatingBefore = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+	const cleanupNow = new Date().toISOString();
+	await env.DB.prepare(
+		`DELETE FROM browser_session_leases
+		 WHERE expires_at <= ?
+			AND session_id IN (
+				SELECT id FROM browser_sessions
+				WHERE state = 'creating' AND artifact_etag IS NULL AND updated_at < ?
+			)`,
+	)
+		.bind(cleanupNow, staleCreatingBefore)
+		.run();
+	await env.DB.prepare(
+		`DELETE FROM browser_sessions
+		 WHERE state = 'creating' AND artifact_etag IS NULL AND updated_at < ?
+			AND NOT EXISTS (
+				SELECT 1 FROM browser_session_leases
+				WHERE browser_session_leases.session_id = browser_sessions.id
+					AND browser_session_leases.consumed_at IS NULL
+					AND browser_session_leases.expires_at > ?
+			)`,
+	)
+		.bind(staleCreatingBefore, cleanupNow)
+		.run();
 	await ensureColumn(env.DB, "approval_requests", "device_id", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "message", "TEXT");
 	await ensureColumn(env.DB, "approval_requests", "resource_requests", "TEXT");
@@ -904,6 +1009,15 @@ function isValidResourceRequest(request: unknown): request is ApprovalResourceRe
 	const validEnv = candidate.env === undefined || (typeof candidate.env === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate.env));
 	if (!validEnv) return false;
 	if (candidate.type === "secret") return isValidSecretRef(candidate.ref);
+	if (candidate.type === "browser_session") {
+		return (
+			typeof candidate.resourceRef === "string" &&
+			/^browser-session\/[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)+$/.test(candidate.resourceRef) &&
+			candidate.resourceRef.length <= 512 &&
+			["create", "restore", "restore_and_update", "replace"].includes(String(candidate.access)) &&
+			candidate.env === undefined
+		);
+	}
 	return (
 		candidate.type === "oauth_token" &&
 		typeof candidate.providerId === "string" &&
@@ -920,6 +1034,113 @@ function isValidResourceRequest(request: unknown): request is ApprovalResourceRe
 
 function isValidCiphertext(value: unknown) {
 	return typeof value === "string" && value.length > 0 && value.length <= 64 * 1024;
+}
+
+const browserSessionSelect = `
+	SELECT id, resource_ref, artifact_object_key, artifact_etag, artifact_bytes,
+		wrapped_data_key, wrapped_data_key_iv, wrapped_data_key_kdf, encryption_algorithm,
+		state, created_at, updated_at, last_validated_at, expected_expires_at
+	FROM browser_sessions
+`;
+
+function mapBrowserSession(row: BrowserSessionRecord, includeWrappedDataKey = false) {
+	return {
+		id: row.id,
+		resourceRef: row.resource_ref,
+		artifactEtag: row.artifact_etag,
+		state: row.state,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		lastValidatedAt: row.last_validated_at,
+		expectedExpiresAt: row.expected_expires_at,
+		...(includeWrappedDataKey
+			? {
+					artifactObjectKey: row.artifact_object_key,
+					wrappedDataKey: row.wrapped_data_key,
+					wrappedDataKeyIv: row.wrapped_data_key_iv,
+					wrappedDataKeyKdf: row.wrapped_data_key_kdf,
+					encryptionAlgorithm: row.encryption_algorithm,
+				}
+			: {}),
+	};
+}
+
+function browserSessionRequestForApproval(approval: ApprovalRequestRecord) {
+	const resources = approval.resource_requests
+		? (JSON.parse(approval.resource_requests) as ApprovalResourceRequest[])
+		: [];
+	return resources.find((resource): resource is Extract<ApprovalResourceRequest, { type: "browser_session" }> => resource.type === "browser_session");
+}
+
+function isBrowserSessionGrantMaterial(value: unknown) {
+	if (!value || typeof value !== "object") return false;
+	const candidate = value as Record<string, unknown>;
+	return (
+		typeof candidate.sessionId === "string" &&
+		/^[0-9a-f-]{36}$/.test(candidate.sessionId) &&
+		typeof candidate.resourceRef === "string" &&
+		isValidSecretRef(candidate.resourceRef) &&
+		typeof candidate.transactionCapabilityHash === "string" &&
+		/^[A-Za-z0-9_-]{43}$/.test(candidate.transactionCapabilityHash) &&
+		typeof candidate.expiresAt === "string" &&
+		Number.isFinite(Date.parse(candidate.expiresAt)) &&
+		(candidate.wrappedDataKey === undefined || isValidCiphertext(candidate.wrappedDataKey)) &&
+		(candidate.wrappedDataKeyIv === undefined || (typeof candidate.wrappedDataKeyIv === "string" && candidate.wrappedDataKeyIv.length <= 256)) &&
+		(candidate.wrappedDataKeyKdf === undefined || (typeof candidate.wrappedDataKeyKdf === "string" && candidate.wrappedDataKeyKdf.length <= 256)) &&
+		(candidate.encryptionAlgorithm === undefined || candidate.encryptionAlgorithm === "AES-256-GCM")
+	);
+}
+
+async function reconcileBrowserSession(row: BrowserSessionRecord, env: EnvWithBindings) {
+	if (!env.DB || !env.BROWSER_SESSION_ARTIFACTS || row.state === "revoked") return row;
+	const object = await env.BROWSER_SESSION_ARTIFACTS.head(row.artifact_object_key);
+	if (!object) return row;
+	if (row.artifact_etag === object.etag && row.state !== "creating") return row;
+	const now = new Date().toISOString();
+	await env.DB.prepare(
+		`UPDATE browser_sessions
+		 SET artifact_etag = ?, artifact_bytes = ?, state = 'healthy', updated_at = ?
+		 WHERE id = ?`,
+	)
+		.bind(object.etag, object.size, now, row.id)
+		.run();
+	return {
+		...row,
+		artifact_etag: object.etag,
+		artifact_bytes: object.size,
+		state: "healthy" as const,
+		updated_at: now,
+	};
+}
+
+async function browserSessionLeaseFromCapability(request: Request, sessionId: string, env: EnvWithBindings) {
+	if (!env.DB) return null;
+	const authorization = request.headers.get("authorization") ?? "";
+	const match = authorization.match(/^SickratBrowserSession ([A-Za-z0-9_-]{32,256})$/);
+	if (!match) return null;
+	const capabilityHash = await sha256Base64Url(match[1]);
+	return env.DB.prepare(
+		`SELECT id, session_id, request_id, device_id, base_etag, access, capability_hash,
+			expires_at, created_at, downloaded_at, consumed_at, safe_reason_code, writer_slot
+		 FROM browser_session_leases
+		 WHERE session_id = ? AND capability_hash = ?`,
+	)
+		.bind(sessionId, capabilityHash)
+		.first<BrowserSessionLeaseRecord>();
+}
+
+function isActiveBrowserSessionLease(lease: BrowserSessionLeaseRecord | null) {
+	return Boolean(lease && !lease.consumed_at && Date.parse(lease.expires_at) > Date.now());
+}
+
+function browserSessionArtifactResponse(object: R2ObjectBody) {
+	return new Response(object.body, {
+		headers: {
+			"content-type": "application/octet-stream",
+			"cache-control": "no-store",
+			etag: object.httpEtag,
+		},
+	});
 }
 
 function mapOAuthConnection(row: OAuthConnectionRecord, includeCiphertext = false) {
@@ -1051,6 +1272,159 @@ async function createDemoApproval(subscriptionId: string, env: EnvWithBindings) 
 
 async function handleApi(request: Request, env: EnvWithBindings) {
 	const url = new URL(request.url);
+
+	if (url.pathname === "/api/browser-sessions" && request.method === "GET") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const result = await env.DB.prepare(`${browserSessionSelect} ORDER BY updated_at DESC LIMIT 200`).all<BrowserSessionRecord>();
+		return json({ browserSessions: result.results.map((row) => mapBrowserSession(row)) });
+	}
+
+	if (url.pathname === "/api/browser-sessions/resolve" && request.method === "GET") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		if (!env.BROWSER_SESSION_ARTIFACTS) return json({ error: "R2 browser-session binding is not configured." }, { status: 500 });
+		const resourceRef = url.searchParams.get("resourceRef");
+		if (!resourceRef || !isValidSecretRef(resourceRef)) return json({ error: "A canonical resourceRef is required." }, { status: 400 });
+		const found = await env.DB.prepare(`${browserSessionSelect} WHERE resource_ref = ?`)
+			.bind(resourceRef)
+			.first<BrowserSessionRecord>();
+		if (!found || found.state === "revoked") return json({ error: "Browser session not found." }, { status: 404 });
+		const session = await reconcileBrowserSession(found, env);
+		if (!session.artifact_etag || session.state === "creating") {
+			return json({ error: "Browser session creation is not complete." }, { status: 409 });
+		}
+		return json({ browserSession: mapBrowserSession(session, true) });
+	}
+
+	const browserSessionArtifactMatch = url.pathname.match(/^\/api\/browser-sessions\/([^/]+)\/artifact$/);
+	if (browserSessionArtifactMatch) {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		if (!env.BROWSER_SESSION_ARTIFACTS) return json({ error: "R2 browser-session binding is not configured." }, { status: 500 });
+		const sessionId = decodeURIComponent(browserSessionArtifactMatch[1]);
+		const session = await env.DB.prepare(`${browserSessionSelect} WHERE id = ?`)
+			.bind(sessionId)
+			.first<BrowserSessionRecord>();
+		if (!session || session.state === "revoked") return json({ error: "Browser session not found." }, { status: 404 });
+		const lease = await browserSessionLeaseFromCapability(request, sessionId, env);
+		if (!isActiveBrowserSessionLease(lease)) return json({ error: "Browser-session transaction is missing, expired, or consumed." }, { status: 403 });
+
+		if (request.method === "GET") {
+			if (lease!.access !== "restore" && lease!.access !== "restore_and_update") {
+				return json({ error: "This browser-session transaction does not allow restore." }, { status: 403 });
+			}
+			if (lease!.downloaded_at) return json({ error: "Browser-session artifact was already delivered." }, { status: 409 });
+			const object = await env.BROWSER_SESSION_ARTIFACTS.get(session.artifact_object_key, {
+				onlyIf: lease!.base_etag ? { etagMatches: lease!.base_etag } : undefined,
+			});
+			if (!object || !("body" in object)) return json({ error: "The current browser-session artifact changed or is unavailable." }, { status: 412 });
+			const downloadedAt = new Date().toISOString();
+			const marked = await env.DB.prepare(
+				`UPDATE browser_session_leases
+				 SET downloaded_at = ?
+				 WHERE id = ? AND downloaded_at IS NULL AND consumed_at IS NULL AND expires_at > ?`,
+			)
+				.bind(downloadedAt, lease!.id, downloadedAt)
+				.run();
+			if (((marked.meta as { changes?: number } | undefined)?.changes ?? 0) !== 1) {
+				return json({ error: "Browser-session artifact was already delivered." }, { status: 409 });
+			}
+			return browserSessionArtifactResponse(object);
+		}
+
+		if (request.method === "PUT") {
+			if (!["create", "restore_and_update", "replace"].includes(lease!.access)) {
+				return json({ error: "This browser-session transaction is read-only." }, { status: 403 });
+			}
+			if (lease!.access === "restore_and_update" && !lease!.downloaded_at) {
+				return json({ error: "Restore-and-update must retrieve the current artifact before replacement." }, { status: 409 });
+			}
+			const declaredLength = Number.parseInt(request.headers.get("content-length") ?? "0", 10);
+			if (Number.isFinite(declaredLength) && declaredLength > maxBrowserSessionArtifactBytes) {
+				return json({ error: "Encrypted browser-session artifact exceeds the size limit." }, { status: 413 });
+			}
+			const ciphertext = await request.arrayBuffer();
+			if (ciphertext.byteLength === 0 || ciphertext.byteLength > maxBrowserSessionArtifactBytes) {
+				return json({ error: "Encrypted browser-session artifact is empty or exceeds the size limit." }, { status: 413 });
+			}
+			const commitStartedAt = new Date().toISOString();
+			const claimed = await env.DB.prepare(
+				`UPDATE browser_session_leases
+				 SET consumed_at = ?, safe_reason_code = NULL, writer_slot = NULL
+				 WHERE id = ? AND consumed_at IS NULL AND expires_at > ?`,
+			)
+				.bind(commitStartedAt, lease!.id, commitStartedAt)
+				.run();
+			if (((claimed.meta as { changes?: number } | undefined)?.changes ?? 0) !== 1) {
+				return json({ error: "Browser-session transaction expired or was consumed before commit." }, { status: 403 });
+			}
+			const onlyIf = lease!.access === "create"
+				? { etagDoesNotMatch: "*" }
+				: lease!.base_etag
+					? { etagMatches: lease!.base_etag }
+					: null;
+			if (!onlyIf) return json({ error: "Browser-session replacement is missing its base ETag." }, { status: 409 });
+			const stored = await env.BROWSER_SESSION_ARTIFACTS.put(session.artifact_object_key, ciphertext, {
+				onlyIf,
+				httpMetadata: { contentType: "application/octet-stream" },
+			});
+			if (!stored) return json({ error: "The browser-session artifact changed before commit." }, { status: 412 });
+			const committedAt = new Date().toISOString();
+			const finalized = await env.DB.prepare(
+				`UPDATE browser_sessions
+				 SET artifact_etag = ?, artifact_bytes = ?, state = 'healthy',
+					updated_at = ?, last_validated_at = ?
+				 WHERE id = ? AND state != 'revoked'`,
+			)
+				.bind(stored.etag, stored.size, committedAt, committedAt, session.id)
+				.run();
+			if (((finalized.meta as { changes?: number } | undefined)?.changes ?? 0) !== 1) {
+				await env.BROWSER_SESSION_ARTIFACTS.delete(session.artifact_object_key);
+				return json({ error: "Browser session was revoked before commit completed." }, { status: 409 });
+			}
+			return json({ ok: true, browserSession: mapBrowserSession({ ...session, artifact_etag: stored.etag, artifact_bytes: stored.size, state: "healthy", updated_at: committedAt, last_validated_at: committedAt }) });
+		}
+	}
+
+	const browserSessionAbortMatch = url.pathname.match(/^\/api\/browser-sessions\/([^/]+)\/abort$/);
+	if (browserSessionAbortMatch && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const sessionId = decodeURIComponent(browserSessionAbortMatch[1]);
+		const lease = await browserSessionLeaseFromCapability(request, sessionId, env);
+		if (!isActiveBrowserSessionLease(lease)) return json({ error: "Browser-session transaction is missing, expired, or consumed." }, { status: 403 });
+		const body = (await request.json()) as { safeReasonCode?: string };
+		if (!["unchanged", "reauth_required", "user_cancelled", "operation_failed"].includes(body.safeReasonCode ?? "")) {
+			return json({ error: "A safe browser-session abort reason is required." }, { status: 400 });
+		}
+		const now = new Date().toISOString();
+		const statements = [
+			env.DB.prepare(
+				"UPDATE browser_session_leases SET consumed_at = ?, safe_reason_code = ?, writer_slot = NULL WHERE id = ? AND consumed_at IS NULL",
+			).bind(now, body.safeReasonCode, lease!.id),
+		];
+		if (body.safeReasonCode === "reauth_required") {
+			statements.push(env.DB.prepare("UPDATE browser_sessions SET state = 'reauth_required', updated_at = ? WHERE id = ? AND state != 'revoked'").bind(now, sessionId));
+		}
+		if (lease!.access === "create") {
+			statements.push(env.DB.prepare("DELETE FROM browser_sessions WHERE id = ? AND state = 'creating' AND artifact_etag IS NULL").bind(sessionId));
+		}
+		await env.DB.batch(statements);
+		return json({ ok: true, safeReasonCode: body.safeReasonCode });
+	}
+
+	const browserSessionRevokeMatch = url.pathname.match(/^\/api\/browser-sessions\/([^/]+)\/revoke$/);
+	if (browserSessionRevokeMatch && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		if (!env.BROWSER_SESSION_ARTIFACTS) return json({ error: "R2 browser-session binding is not configured." }, { status: 500 });
+		const sessionId = decodeURIComponent(browserSessionRevokeMatch[1]);
+		const session = await env.DB.prepare(`${browserSessionSelect} WHERE id = ?`).bind(sessionId).first<BrowserSessionRecord>();
+		if (!session) return json({ error: "Browser session not found." }, { status: 404 });
+		const now = new Date().toISOString();
+		await env.BROWSER_SESSION_ARTIFACTS.delete(session.artifact_object_key);
+		await env.DB.batch([
+			env.DB.prepare("UPDATE browser_sessions SET state = 'revoked', artifact_etag = NULL, artifact_bytes = NULL, updated_at = ? WHERE id = ?").bind(now, session.id),
+			env.DB.prepare("UPDATE browser_session_leases SET consumed_at = COALESCE(consumed_at, ?), safe_reason_code = COALESCE(safe_reason_code, 'revoked'), writer_slot = NULL WHERE session_id = ?").bind(now, session.id),
+		]);
+		return json({ ok: true, revokedAt: now });
+	}
 
 	if (url.pathname === "/api/oauth/providers" && request.method === "GET") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
@@ -1625,6 +1999,18 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		if (resourceRequests.length === 0 || resourceRequests.length > 20) {
 			return json({ error: "Approval requests must contain between one and twenty resources." }, { status: 400 });
 		}
+		const browserSessionRequests = resourceRequests.filter(
+			(resource): resource is Extract<ApprovalResourceRequest, { type: "browser_session" }> => resource.type === "browser_session",
+		);
+		if (browserSessionRequests.length > 0 && (browserSessionRequests.length !== 1 || resourceRequests.length !== 1)) {
+			return json({ error: "A browser-session transaction must be the only resource in its approval request." }, { status: 400 });
+		}
+		if (browserSessionRequests.length > 0 && body.accessDurationSeconds !== undefined) {
+			return json({ error: "Browser-session transactions do not support reusable timed grants." }, { status: 400 });
+		}
+		if (browserSessionRequests.length > 0 && !env.BROWSER_SESSION_ARTIFACTS) {
+			return json({ error: "R2 browser-session binding is not configured." }, { status: 500 });
+		}
 		const typedSecretRefs = [...new Set(resourceRequests.filter((resource) => resource.type === "secret").map((resource) => resource.ref))].sort();
 		const legacySecretRefs = [...new Set(body.secretRefs)].sort();
 		if (typedSecretRefs.join("\n") !== legacySecretRefs.join("\n")) {
@@ -1633,6 +2019,25 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		const unsupportedProvider = resourceRequests.find((resource) => resource.type === "oauth_token" && !getOAuthProvider(resource.providerId));
 		if (unsupportedProvider?.type === "oauth_token") {
 			return json({ error: `Unsupported OAuth provider: ${unsupportedProvider.providerId}`, code: "unsupported-provider" }, { status: 400 });
+		}
+		const browserSessionRequest = browserSessionRequests[0];
+		if (browserSessionRequest) {
+			const existing = await env.DB.prepare(`${browserSessionSelect} WHERE resource_ref = ?`)
+				.bind(browserSessionRequest.resourceRef)
+				.first<BrowserSessionRecord>();
+			if (browserSessionRequest.access === "create" && existing) {
+				return json({ error: "Browser session already exists. Use replace to overwrite its current artifact." }, { status: 409 });
+			}
+			if (browserSessionRequest.access !== "create" && (!existing || existing.state === "revoked")) {
+				return json({ error: "Browser session not found." }, { status: 404 });
+			}
+			if (
+				existing &&
+				["restore", "restore_and_update"].includes(browserSessionRequest.access) &&
+				(!existing.artifact_etag || existing.state === "creating")
+			) {
+				return json({ error: "Browser session creation is not complete." }, { status: 409 });
+			}
 		}
 		if (!isValidApprovalMessage(body.message)) {
 			return json({ error: "Message must be 600 characters or fewer without leading or trailing spaces." }, { status: 400 });
@@ -1923,7 +2328,11 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 	if (approvalGrantMatch && request.method === "POST") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const id = decodeURIComponent(approvalGrantMatch[1]);
-		const body = (await request.json()) as { grantCiphertext?: unknown; createdSecrets?: SecretCiphertextInput[] };
+		const body = (await request.json()) as {
+			grantCiphertext?: unknown;
+			createdSecrets?: SecretCiphertextInput[];
+			browserSessionAuthorization?: unknown;
+		};
 		if (!body.grantCiphertext) return json({ error: "grantCiphertext is required." }, { status: 400 });
 		const approval = await env.DB.prepare(`${approvalSelect} WHERE id = ?`)
 			.bind(id)
@@ -1931,6 +2340,144 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		if (!approval) return json({ error: "Approval request not found." }, { status: 404 });
 		if (approval.status !== "pending") return json({ error: `Approval request is already ${approval.status}.` }, { status: 409 });
 		if (isExpiredPendingApproval(approval)) return expiredApprovalResponse();
+
+		const browserRequest = browserSessionRequestForApproval(approval);
+		if (browserRequest) {
+			if (!env.BROWSER_SESSION_ARTIFACTS) return json({ error: "R2 browser-session binding is not configured." }, { status: 500 });
+			if (!isBrowserSessionGrantMaterial(body.browserSessionAuthorization)) {
+				return json({ error: "Valid browser-session authorization material is required." }, { status: 400 });
+			}
+			const material = body.browserSessionAuthorization as {
+				sessionId: string;
+				resourceRef: string;
+				transactionCapabilityHash: string;
+				expiresAt: string;
+				wrappedDataKey?: string;
+				wrappedDataKeyIv?: string;
+				wrappedDataKeyKdf?: string;
+				encryptionAlgorithm?: string;
+			};
+			if (material.resourceRef !== browserRequest.resourceRef) {
+				return json({ error: "Browser-session authorization resource does not match the approval." }, { status: 400 });
+			}
+			const expiresAtMs = Date.parse(material.expiresAt);
+			if (expiresAtMs <= Date.now() || expiresAtMs > Date.now() + browserSessionLeaseTtlMs + 5_000) {
+				return json({ error: "Browser-session transaction expiry is outside the allowed window." }, { status: 400 });
+			}
+			const decidedAt = new Date().toISOString();
+			let session: BrowserSessionRecord;
+			if (browserRequest.access === "create") {
+				if (!material.wrappedDataKey || !material.wrappedDataKeyIv || !material.wrappedDataKeyKdf || material.encryptionAlgorithm !== "AES-256-GCM") {
+					return json({ error: "Creation requires a wrapped browser-session data key." }, { status: 400 });
+				}
+				const existing = await env.DB.prepare("SELECT id FROM browser_sessions WHERE resource_ref = ?")
+					.bind(browserRequest.resourceRef)
+					.first<{ id: string }>();
+				if (existing) return json({ error: "Browser session already exists." }, { status: 409 });
+				session = {
+					id: material.sessionId,
+					resource_ref: browserRequest.resourceRef,
+					artifact_object_key: `browser-session-artifacts/${material.sessionId}/current`,
+					artifact_etag: null,
+					artifact_bytes: null,
+					wrapped_data_key: material.wrappedDataKey,
+					wrapped_data_key_iv: material.wrappedDataKeyIv,
+					wrapped_data_key_kdf: material.wrappedDataKeyKdf,
+					encryption_algorithm: material.encryptionAlgorithm,
+					state: "creating",
+					created_at: decidedAt,
+					updated_at: decidedAt,
+					last_validated_at: null,
+					expected_expires_at: null,
+				};
+			} else {
+				const found = await env.DB.prepare(`${browserSessionSelect} WHERE resource_ref = ?`)
+					.bind(browserRequest.resourceRef)
+					.first<BrowserSessionRecord>();
+				if (!found || found.state === "revoked") return json({ error: "Browser session not found." }, { status: 404 });
+				session = await reconcileBrowserSession(found, env);
+				if (session.id !== material.sessionId) return json({ error: "Browser-session authorization identity mismatch." }, { status: 400 });
+				if (["restore", "restore_and_update"].includes(browserRequest.access) && !session.artifact_etag) {
+					return json({ error: "Browser session has no current artifact." }, { status: 409 });
+				}
+			}
+			if (browserRequest.access !== "restore") {
+				await env.DB.prepare(
+					`UPDATE browser_session_leases
+					 SET consumed_at = COALESCE(consumed_at, ?),
+						safe_reason_code = COALESCE(safe_reason_code, 'expired'),
+						writer_slot = NULL
+					 WHERE session_id = ? AND writer_slot IS NOT NULL AND expires_at <= ?`,
+				)
+					.bind(decidedAt, session.id, decidedAt)
+					.run();
+				const activeWriter = await env.DB.prepare(
+					`SELECT id FROM browser_session_leases
+					 WHERE session_id = ? AND consumed_at IS NULL AND expires_at > ?
+						AND access IN ('create', 'restore_and_update', 'replace')
+					 LIMIT 1`,
+				)
+					.bind(session.id, decidedAt)
+					.first<{ id: string }>();
+				if (activeWriter) return json({ error: "Another browser-session update is already active." }, { status: 409 });
+			}
+			const statements: D1PreparedStatement[] = [];
+			if (browserRequest.access === "create") {
+				statements.push(
+					env.DB.prepare(
+						`INSERT INTO browser_sessions
+							(id, resource_ref, artifact_object_key, artifact_etag, artifact_bytes,
+							 wrapped_data_key, wrapped_data_key_iv, wrapped_data_key_kdf, encryption_algorithm,
+							 state, created_at, updated_at, last_validated_at, expected_expires_at)
+						 VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'creating', ?, ?, NULL, NULL)`,
+					).bind(
+						session.id,
+						session.resource_ref,
+						session.artifact_object_key,
+						session.wrapped_data_key,
+						session.wrapped_data_key_iv,
+						session.wrapped_data_key_kdf,
+						session.encryption_algorithm,
+						decidedAt,
+						decidedAt,
+					),
+				);
+			}
+			statements.push(
+				env.DB.prepare(
+					`INSERT INTO browser_session_leases
+						(id, session_id, request_id, device_id, base_etag, access, capability_hash,
+						 expires_at, created_at, downloaded_at, consumed_at, safe_reason_code, writer_slot)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)`,
+				).bind(
+					crypto.randomUUID(),
+					session.id,
+					approval.id,
+					approval.device_id,
+					session.artifact_etag,
+					browserRequest.access,
+					material.transactionCapabilityHash,
+					material.expiresAt,
+					decidedAt,
+					browserRequest.access === "restore" ? null : session.id,
+				),
+			);
+			statements.push(
+				env.DB.prepare(
+					"UPDATE approval_requests SET status = 'approved', decided_at = ?, grant_ciphertext = ?, grant_ready_at = ?, access_expires_at = ? WHERE id = ? AND status = 'pending'",
+				).bind(decidedAt, JSON.stringify(body.grantCiphertext), decidedAt, material.expiresAt, id),
+			);
+			try {
+				await env.DB.batch(statements);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (/browser_session_single_writer_idx|unique constraint.*writer_slot/i.test(message)) {
+					return json({ error: "Another browser-session update is already active." }, { status: 409 });
+				}
+				throw error;
+			}
+			return json({ ok: true, id, status: "approved", decidedAt, accessExpiresAt: material.expiresAt });
+		}
 
 		const requestedRefs = JSON.parse(approval.secret_refs) as string[];
 		const requestedRefSet = new Set(requestedRefs);

@@ -100,7 +100,43 @@ type ApprovalRequest = {
 
 type ApprovalResourceRequest =
 	| { type: "secret"; ref: string; env?: string }
-	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env: string };
+	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env: string }
+	| {
+			type: "browser_session";
+			resourceRef: string;
+			access: "create" | "restore" | "restore_and_update" | "replace";
+		};
+
+type BrowserSessionMetadata = {
+	id: string;
+	resourceRef: string;
+	artifactEtag: string | null;
+	state: "creating" | "healthy" | "unknown" | "reauth_required" | "revoked";
+	createdAt: string;
+	updatedAt: string;
+	lastValidatedAt: string | null;
+	expectedExpiresAt: string | null;
+};
+
+type BrowserSessionKeyRecord = BrowserSessionMetadata & {
+	artifactObjectKey: string;
+	wrappedDataKey: string;
+	wrappedDataKeyIv: string;
+	wrappedDataKeyKdf: string;
+	encryptionAlgorithm: "AES-256-GCM";
+};
+
+type BrowserSessionGrantPayload = {
+	sessionId: string;
+	resourceRef: string;
+	access: "create" | "restore" | "restore_and_update" | "replace";
+	vaultId: string;
+	artifactObjectKey: string;
+	baseEtag?: string;
+	dataKey: string;
+	transactionCapability: string;
+	expiresAt: string;
+};
 
 type SecretMetadata = {
 	id: string;
@@ -293,6 +329,7 @@ type PendingSecretOptions = {
 const primaryNavItems: Array<{ route: AppRoute; href: string; label: string; icon: React.ComponentType<{ size?: number }> }> = [
 	{ route: "app", href: "/", label: "Home", icon: Home },
 	{ route: "secrets", href: "/secrets", label: "Secrets", icon: KeyRound },
+	{ route: "sessions", href: "/sessions", label: "Browser Sessions", icon: ShieldCheck },
 	{ route: "connections", href: "/connections", label: "Connections", icon: Plug },
 	{ route: "approvals", href: "/approvals", label: "Grants", icon: ShieldCheck },
 	{ route: "devices", href: "/devices", label: "Machines", icon: Laptop },
@@ -649,12 +686,37 @@ const api = {
 			salt: string;
 			kdf: string;
 		}> = [],
+		browserSessionAuthorization?: {
+			sessionId: string;
+			resourceRef: string;
+			transactionCapabilityHash: string;
+			expiresAt: string;
+			wrappedDataKey?: string;
+			wrappedDataKeyIv?: string;
+			wrappedDataKeyKdf?: string;
+			encryptionAlgorithm?: "AES-256-GCM";
+		},
 	) {
 		const response = await fetch(`/api/approvals/${encodeURIComponent(id)}/grant`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ grantCiphertext, createdSecrets }),
+			body: JSON.stringify({ grantCiphertext, createdSecrets, browserSessionAuthorization }),
 		});
+		if (!response.ok) throw new Error(await response.text());
+		return response.json();
+	},
+	async listBrowserSessions() {
+		const response = await fetch("/api/browser-sessions");
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { browserSessions: BrowserSessionMetadata[] }).browserSessions;
+	},
+	async resolveBrowserSession(resourceRef: string) {
+		const response = await fetch(`/api/browser-sessions/resolve?resourceRef=${encodeURIComponent(resourceRef)}`);
+		if (!response.ok) throw new Error(await response.text());
+		return ((await response.json()) as { browserSession: BrowserSessionKeyRecord }).browserSession;
+	},
+	async revokeBrowserSession(id: string) {
+		const response = await fetch(`/api/browser-sessions/${encodeURIComponent(id)}/revoke`, { method: "POST" });
 		if (!response.ok) throw new Error(await response.text());
 		return response.json();
 	},
@@ -985,6 +1047,7 @@ async function encryptGrantForCli(payload: {
 		scopes: string[];
 		expiresAt?: string;
 	}>;
+	browserSession?: BrowserSessionGrantPayload;
 	approvedAt: string;
 	accessExpiresAt?: string;
 }, cliPublicKey: JsonWebKey) {
@@ -1346,6 +1409,7 @@ type AppRoute =
 	| "app"
 	| "vaults"
 	| "secrets"
+	| "sessions"
 	| "connections"
 	| "connection-add"
 	| "connection-detail"
@@ -1430,6 +1494,7 @@ function AppShell({
 	const [approvalFilter, setApprovalFilter] = useState<ApprovalRequest["status"] | "all">("pending");
 	const [devices, setDevices] = useState<Device[]>([]);
 	const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
+	const [browserSessions, setBrowserSessions] = useState<BrowserSessionMetadata[]>([]);
 	const [oauthProviders, setOAuthProviders] = useState<OAuthProvider[]>([]);
 	const [oauthConnections, setOAuthConnections] = useState<OAuthConnection[]>([]);
 	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
@@ -1494,6 +1559,10 @@ function AppShell({
 	}, [approval, secrets]);
 	const approvalOAuthRequests = useMemo(
 		() => approval?.resourceRequests.filter((resource): resource is Extract<ApprovalResourceRequest, { type: "oauth_token" }> => resource.type === "oauth_token") ?? [],
+		[approval],
+	);
+	const approvalBrowserSessionRequests = useMemo(
+		() => approval?.resourceRequests.filter((resource): resource is Extract<ApprovalResourceRequest, { type: "browser_session" }> => resource.type === "browser_session") ?? [],
 		[approval],
 	);
 	const matchingOAuthConnections = (request: Extract<ApprovalResourceRequest, { type: "oauth_token" }>) =>
@@ -1564,6 +1633,14 @@ function AppShell({
 			});
 		} catch (error) {
 			setOAuthStatus(friendlyError(error, "Failed to load OAuth connections."));
+		}
+	}
+
+	async function refreshBrowserSessions() {
+		try {
+			setBrowserSessions(await api.listBrowserSessions());
+		} catch (error) {
+			setStatus(friendlyError(error, "Failed to load browser sessions."));
 		}
 	}
 
@@ -1757,6 +1834,10 @@ function AppShell({
 	useEffect(() => {
 		if (route === "approvals" || route === "app") void refreshApprovals(approvalFilter);
 	}, [approvalFilter, route]);
+
+	useEffect(() => {
+		if (route === "sessions" || route === "app") void refreshBrowserSessions();
+	}, [route]);
 
 	useEffect(() => {
 		if (route === "devices" || route === "app") void refreshDevices();
@@ -2391,6 +2472,83 @@ function AppShell({
 		return oauthTokens;
 	}
 
+	async function prepareBrowserSessionForApproval(target: ApprovalRequest, key: CryptoKey) {
+		const request = target.resourceRequests.find(
+			(resource): resource is Extract<ApprovalResourceRequest, { type: "browser_session" }> => resource.type === "browser_session",
+		);
+		if (!request) return null;
+		if (!capabilities?.vault.name) throw new Error("The vault identity is unavailable.");
+
+		const transactionCapability = randomBase64Url(32);
+		const transactionCapabilityHash = await sha256Base64Url(transactionCapability);
+		const expiresAt = new Date(Math.min(Date.now() + 5 * 60 * 1000, Date.parse(target.expiresAt))).toISOString();
+		if (Date.parse(expiresAt) <= Date.now()) throw new Error("This browser-session approval has expired.");
+
+		let sessionId: string;
+		let artifactObjectKey: string;
+		let baseEtag: string | undefined;
+		let dataKey: string;
+		let wrappedDataKey: string | undefined;
+		let wrappedDataKeyIv: string | undefined;
+		let wrappedDataKeyKdf: string | undefined;
+
+		if (request.access === "create") {
+			sessionId = crypto.randomUUID();
+			artifactObjectKey = `browser-session-artifacts/${sessionId}/current`;
+			dataKey = randomBase64Url(32);
+			const wrapped = await encryptSecretValue(dataKey, key);
+			wrappedDataKey = wrapped.ciphertext;
+			wrappedDataKeyIv = wrapped.iv;
+			wrappedDataKeyKdf = wrapped.kdf;
+		} else {
+			const record = await api.resolveBrowserSession(request.resourceRef);
+			if (record.encryptionAlgorithm !== "AES-256-GCM") {
+				throw new Error("This browser session uses an unsupported artifact encryption algorithm.");
+			}
+			sessionId = record.id;
+			artifactObjectKey = record.artifactObjectKey;
+			baseEtag = record.artifactEtag ?? undefined;
+			dataKey = await decryptVaultValue(
+				{
+					ciphertext: record.wrappedDataKey,
+					iv: record.wrappedDataKeyIv,
+					kdf: record.wrappedDataKeyKdf,
+				},
+				key,
+				request.resourceRef,
+			);
+			if (base64UrlToUint8Array(dataKey).byteLength !== 32) throw new Error("The browser-session data key is malformed.");
+		}
+
+		return {
+			grant: {
+				sessionId,
+				resourceRef: request.resourceRef,
+				access: request.access,
+				vaultId: capabilities.vault.name,
+				artifactObjectKey,
+				...(baseEtag ? { baseEtag } : {}),
+				dataKey,
+				transactionCapability,
+				expiresAt,
+			} satisfies BrowserSessionGrantPayload,
+			authorization: {
+				sessionId,
+				resourceRef: request.resourceRef,
+				transactionCapabilityHash,
+				expiresAt,
+				...(wrappedDataKey
+					? {
+							wrappedDataKey,
+							wrappedDataKeyIv,
+							wrappedDataKeyKdf,
+							encryptionAlgorithm: "AES-256-GCM" as const,
+						}
+					: {}),
+			},
+		};
+	}
+
 	async function approveExistingApprovalRequest(target: ApprovalRequest) {
 		const storedRefs = new Set(secrets.map((secret) => secret.ref));
 		const missingRefs = target.secretRefs.filter((ref) => !storedRefs.has(ref));
@@ -2424,12 +2582,13 @@ function AppShell({
 			plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 		}
 		const oauthTokens = await resolveOAuthTokensForApproval(target, key);
+		const browserSession = await prepareBrowserSessionForApproval(target, key);
 		setStatus("Sealing a short-lived grant for this machine...");
 		const grant = await encryptGrantForCli(
-			{ secrets: plaintextSecrets, oauthTokens, approvedAt: approvedAt.toISOString(), accessExpiresAt },
+			{ secrets: plaintextSecrets, oauthTokens, browserSession: browserSession?.grant, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 			target.ephemeralPublicKey,
 		);
-		await api.sendGrant(target.id, grant);
+		await api.sendGrant(target.id, grant, [], browserSession?.authorization);
 	}
 
 	async function decideApprovalRequest(target: ApprovalRequest, action: "approve" | "deny") {
@@ -2503,12 +2662,13 @@ function AppShell({
 					}
 					for (const ref of missingApprovalRefs) plaintextSecrets[ref] = approvalSecretValues[ref];
 					const oauthTokens = await resolveOAuthTokensForApproval(approval, key);
+					const browserSession = await prepareBrowserSessionForApproval(approval, key);
 					setStatus("Sealing a short-lived grant for this machine...");
 					const grant = await encryptGrantForCli(
-						{ secrets: plaintextSecrets, oauthTokens, approvedAt: approvedAt.toISOString(), accessExpiresAt },
+						{ secrets: plaintextSecrets, oauthTokens, browserSession: browserSession?.grant, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
 					);
-					await api.sendGrant(approval.id, grant, createdSecrets);
+					await api.sendGrant(approval.id, grant, createdSecrets, browserSession?.authorization);
 					const createdAt = new Date().toISOString();
 					const savedSecrets = createdSecrets.map((secret) => ({
 						id: secret.ref,
@@ -2540,12 +2700,13 @@ function AppShell({
 						plaintextSecrets[secret.ref] = await decryptSecretValue(secret, key);
 					}
 					const oauthTokens = await resolveOAuthTokensForApproval(approval, key);
+					const browserSession = await prepareBrowserSessionForApproval(approval, key);
 					setStatus("Sealing a short-lived grant for this machine...");
 					const grant = await encryptGrantForCli(
-						{ secrets: plaintextSecrets, oauthTokens, approvedAt: approvedAt.toISOString(), accessExpiresAt },
+						{ secrets: plaintextSecrets, oauthTokens, browserSession: browserSession?.grant, approvedAt: approvedAt.toISOString(), accessExpiresAt },
 						approval.ephemeralPublicKey,
 					);
-					await api.sendGrant(approval.id, grant);
+					await api.sendGrant(approval.id, grant, [], browserSession?.authorization);
 				}
 			} else {
 				await api.decideApproval(approval.id, action);
@@ -2701,6 +2862,21 @@ function AppShell({
 		}
 	}
 
+	async function revokeBrowserSession(session: BrowserSessionMetadata) {
+		if (!window.confirm(`Revoke ${session.resourceRef}? Its encrypted current artifact will be deleted.`)) return;
+		setBusy(true);
+		setStatus(`Revoking sickrat://${session.resourceRef}...`);
+		try {
+			await api.revokeBrowserSession(session.id);
+			await refreshBrowserSessions();
+			setStatus("Browser session revoked. Existing transaction capabilities are no longer usable.");
+		} catch (error) {
+			setStatus(friendlyError(error, "Failed to revoke browser session."));
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	function handleApprovalTouchStart(item: ApprovalRequest, event: React.TouchEvent<HTMLLIElement>) {
 		setApprovalTouchStart({ id: item.id, x: event.touches[0]?.clientX ?? 0 });
 	}
@@ -2799,6 +2975,23 @@ function AppShell({
 									/>
 							))}
 						</List> : null}
+						{approvalBrowserSessionRequests.length > 0 ? (
+							<>
+								<BlockTitle>Browser Session</BlockTitle>
+								<List strong inset>
+									{approvalBrowserSessionRequests.map((request) => (
+										<ListItem
+											key={request.resourceRef}
+											title={`sickrat://${request.resourceRef}`}
+											subtitle="This bundle is equivalent to being signed in. The approved command can use the account until this transaction ends."
+											after={request.access.replaceAll("_", " ")}
+											media={<ShieldCheck size={22} />}
+											footer="Sickrat releases it through private process pipes; browser automation remains in the command."
+										/>
+									))}
+								</List>
+							</>
+						) : null}
 						{approvalOAuthRequests.length > 0 ? (
 							<>
 								<BlockTitle>Connected Services</BlockTitle>
@@ -3224,6 +3417,7 @@ function AppShell({
 						<List strong inset>
 							<ListItem link onClick={() => navigate("/vaults")} title="Vault" after={vaultName} subtitle={capabilities?.database.configured ? "Private deployment healthy" : "Vault storage needs setup"} media={<Cloud size={22} />} />
 							<ListItem link onClick={() => navigate("/secrets")} title="Secrets" after={String(secrets.length)} subtitle="Encrypted refs saved in your vault" media={<KeyRound size={22} />} />
+							<ListItem link onClick={() => navigate("/sessions")} title="Browser sessions" after={String(browserSessions.filter((item) => item.state !== "revoked").length)} subtitle="Encrypted sign-in bundles released only for approved commands" media={<ShieldCheck size={22} />} />
 							<ListItem link onClick={() => navigate("/connections")} title="Connections" after={String(oauthConnections.filter((item) => !item.revokedAt).length)} subtitle="OAuth accounts available for approved grants" media={<Plug size={22} />} />
 							<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
 						<ListItem link onClick={() => navigate("/devices")} title="Active devices" after={String(activeDevices.length)} subtitle="Paired machines that can request access" media={<Laptop size={22} />} />
@@ -3278,6 +3472,39 @@ function AppShell({
 							<ListItem title="No matching encrypted refs" />
 						)}
 					</List>
+				</>
+			);
+		} else if (route === "sessions") {
+			routeContent = (
+				<>
+					<Block strong inset>
+						<h1 className="m-0 text-3xl font-bold">Browser Sessions</h1>
+						<p className="mb-0 text-black/55 dark:text-white/55">Each encrypted bundle is equivalent to being signed in. Sickrat stores it; approved userland code decides how to use it.</p>
+					</Block>
+					<BlockTitle>Stored Sessions</BlockTitle>
+					<List strong inset>
+						{browserSessions.length > 0 ? (
+							browserSessions.map((session) => (
+								<ListItem
+									key={session.id}
+									title={`sickrat://${session.resourceRef}`}
+									subtitle={`State: ${session.state.replaceAll("_", " ")}`}
+									footer={`Updated ${formatAgo(session.updatedAt)}${session.lastValidatedAt ? ` · validated ${formatAgo(session.lastValidatedAt)}` : ""}`}
+									media={<ShieldCheck size={22} />}
+									after={
+										session.state === "revoked" ? (
+											<Badge colors={{ bg: "bg-red-500" }}>revoked</Badge>
+										) : (
+											<Button small rounded outline disabled={busy} onClick={() => void revokeBrowserSession(session)}>Revoke</Button>
+										)
+									}
+								/>
+							))
+						) : (
+							<ListItem title="No browser sessions" subtitle="Create one from a paired machine with sickrat browser-session create." />
+						)}
+					</List>
+					<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{status}</Block>
 				</>
 			);
 		} else if (route === "connections") {
@@ -3459,13 +3686,21 @@ function AppShell({
 								{approval.resourceRequests.map((resource, index) =>
 									resource.type === "secret" ? (
 										<ListItem key={`secret:${resource.ref}:${index}`} title={resource.ref} subtitle="Encrypted secret" media={<KeyRound size={22} />} />
-									) : (
+									) : resource.type === "oauth_token" ? (
 										<ListItem
 											key={`oauth:${resource.providerId}:${resource.env}:${index}`}
 											title={oauthProviders.find((provider) => provider.id === resource.providerId)?.name ?? resource.providerId}
 											subtitle={resource.scopes.join(" · ")}
 											after={resource.env}
 											media={<Link2 size={22} />}
+										/>
+									) : (
+										<ListItem
+											key={`browser-session:${resource.resourceRef}:${index}`}
+											title={`sickrat://${resource.resourceRef}`}
+											subtitle="Authenticated browser-session bundle"
+											after={resource.access.replaceAll("_", " ")}
+											media={<ShieldCheck size={22} />}
 										/>
 									),
 								)}
@@ -3654,6 +3889,7 @@ function App() {
 					<Route path="/login" element={<AppShell route="login" />} />
 					<Route path="/vaults" element={<AppShell route="vaults" />} />
 					<Route path="/secrets" element={<AppShell route="secrets" />} />
+					<Route path="/sessions" element={<AppShell route="sessions" />} />
 					<Route path="/connections" element={<AppShell route="connections" />} />
 					<Route path="/connections/new" element={<AppShell route="connection-add" />} />
 					<Route path="/connections/providers/:providerId" element={<ProviderSetupRoute />} />
@@ -3668,6 +3904,7 @@ function App() {
 					<Route path="/app" element={<Navigate to="/" replace />} />
 					<Route path="/app/vaults" element={<Navigate to="/vaults" replace />} />
 					<Route path="/app/secrets" element={<Navigate to="/secrets" replace />} />
+					<Route path="/app/sessions" element={<Navigate to="/sessions" replace />} />
 					<Route path="/app/connections" element={<Navigate to="/connections" replace />} />
 					<Route path="/app/approvals" element={<Navigate to="/approvals" replace />} />
 					<Route path="/app/approvals/:requestId" element={<ApprovalDetailRoute />} />

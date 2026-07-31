@@ -48,6 +48,17 @@ This is a weaker property than static secret approval, where the Worker does not
 
 Environment variables are not a hard security boundary. V1 supports env injection because it is the compatibility path most agent tools can use, but the product should clearly support safer delivery channels over time.
 
+Browser-session bundles are never delivered through environment variables,
+stdin/stdout, command arguments, or intentional plaintext files. Two anonymous
+inherited pipes exist only for the approved CLI/child transaction. A one-time
+capability and, for updates, an exclusive ETag-bound lease expire after five
+minutes.
+
+The approved child necessarily sees the plaintext session and can copy or
+exfiltrate it. Sickrat does not protect against malicious approved code, root,
+a same-user debugger with sufficient permission, a compromised kernel, OS
+swap, or browser artifacts that userland fails to clean up.
+
 ## Cloudflare Compromise Or Misconfiguration
 
 If Cloudflare storage is exposed, the attacker should see:

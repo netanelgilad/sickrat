@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { canonicalApprovalPayload } from "@sickrat/protocol";
-import { parseSickratUri, resourceRequestForEnv } from "../src/resource-requests.ts";
+import { parseBrowserSessionReference, parseSickratUri, resourceRequestForEnv } from "../src/resource-requests.ts";
 
 describe("Sickrat resource URI parsing", () => {
 	it("preserves existing static secret refs", () => {
@@ -38,6 +38,19 @@ describe("Sickrat resource URI parsing", () => {
 		assert.throws(() => parseSickratUri("sickrat://oauth/cloudflare/personal/extra?scope=d1.write"), /Invalid Sickrat OAuth provider URI/);
 		assert.throws(() => parseSickratUri("sickrat://oauth/cloudflare?scope=%20d1.write"), /At least one OAuth scope is required/);
 		assert.throws(() => parseSickratUri("sickrat://default/openai/api-key?scope=nope"), /do not support query parameters/);
+	});
+
+	it("parses browser-session references only for the dedicated transaction command", () => {
+		assert.deepEqual(parseBrowserSessionReference("chatgpt/primary"), {
+			resourceRef: "browser-session/chatgpt/primary",
+			uri: "sickrat://browser-session/chatgpt/primary",
+		});
+		assert.deepEqual(parseBrowserSessionReference("sickrat://browser-session/fair/primary"), {
+			resourceRef: "browser-session/fair/primary",
+			uri: "sickrat://browser-session/fair/primary",
+		});
+		assert.throws(() => parseBrowserSessionReference("chatgpt"), /two path segments/);
+		assert.throws(() => parseSickratUri("sickrat://browser-session/chatgpt/primary"), /not environment injection/);
 	});
 
 	it("binds typed provider requests into the signed approval payload", () => {

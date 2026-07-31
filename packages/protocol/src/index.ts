@@ -17,7 +17,12 @@ export type PairingCodeStatusResponse = {
 
 export type ApprovalResourceRequest =
 	| { type: "secret"; ref: string; env?: string }
-	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env?: string };
+	| { type: "oauth_token"; providerId: string; connectionName?: string; scopes: string[]; env?: string }
+	| {
+			type: "browser_session";
+			resourceRef: string;
+			access: "create" | "restore" | "restore_and_update" | "replace";
+		};
 
 export type OAuthTokenGrant = {
 	providerId: string;
@@ -27,6 +32,18 @@ export type OAuthTokenGrant = {
 	tokenType: string;
 	scopes: string[];
 	expiresAt?: string;
+};
+
+export type BrowserSessionGrant = {
+	sessionId: string;
+	resourceRef: string;
+	access: "create" | "restore" | "restore_and_update" | "replace";
+	vaultId: string;
+	artifactObjectKey: string;
+	baseEtag?: string;
+	dataKey: string;
+	transactionCapability: string;
+	expiresAt: string;
 };
 
 export type ApprovalRequestCreate = {
@@ -46,6 +63,7 @@ export type ApprovalRequestCreate = {
 export type GrantPayload = {
 	secrets?: Record<string, string>;
 	oauthTokens?: Record<string, OAuthTokenGrant>;
+	browserSession?: BrowserSessionGrant;
 	approvedAt: string;
 	accessExpiresAt?: string;
 };

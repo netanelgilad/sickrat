@@ -11,7 +11,7 @@ User Cloudflare account
   Worker API
   D1 database
   Durable Object namespace
-  R2 bucket, optional
+  R2 browser-session artifact bucket
   KV namespace, optional
   Worker secrets for operational config only
 ```
@@ -23,7 +23,7 @@ The open-source mobile app and CLI act as clients for that user-owned backend.
 - **Workers:** API surface for CLI, mobile, provisioning callbacks, device pairing, and approval polling.
 - **Durable Objects:** Pending approval sessions. Durable Objects are a good fit because each request needs coordination, TTL cleanup, one-time consumption, and possibly WebSocket or long-poll state.
 - **D1:** Relational metadata: devices, secret records, vaults, audit events, approval history, push registrations.
-- **R2:** Optional encrypted blob storage for larger secret payloads, file secrets, attachments, or version history.
+- **R2:** One current encrypted artifact per browser session at a stable opaque object key.
 - **KV:** Optional cache for non-sensitive config such as provisioning version markers.
 - **Worker Secrets / Cloudflare Secrets Store:** Operational secrets for the user's Worker deployment, not vault secret storage.
 
@@ -57,6 +57,17 @@ Only trusted clients with the user's vault key can decrypt.
 - Worker validates identity, records audit events, and relays encrypted approval envelopes.
 - The spawned process receives plaintext only through the selected injection mechanism.
 
+Browser sessions use a narrower local boundary than ordinary secrets. D1 holds
+only the resource reference, wrapped per-record data key, current opaque R2
+ETag, health metadata, and short-lived leases. The phone unwraps the record key
+after passkey approval and seals it to the requesting CLI; the Worker never
+receives the plaintext bundle or record key.
+
+The CLI gives an approved userland child the bundle over one inherited input
+pipe and accepts one commit/abort result over a second pipe. Sickrat core has no
+Playwright, Patchright, browser, provider adapter, or request-profile
+dependency.
+
 ## Approval Flow
 
 1. CLI parses requested references from command args, environment files, or templates.
@@ -85,7 +96,7 @@ The mobile app should provide a guided provisioning flow:
 3. Create or update Worker project.
 4. Create D1 database.
 5. Create Durable Object namespace.
-6. Create optional R2 bucket.
+6. Create the private browser-session R2 bucket.
 7. Set Worker secrets needed for push/config.
 8. Deploy Worker code.
 9. Store deployment metadata locally and in the user's Cloudflare resources.

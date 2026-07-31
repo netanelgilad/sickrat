@@ -84,6 +84,31 @@ Typed requests can mix static secrets and OAuth access tokens:
 }
 ```
 
+A browser-session transaction is always the only resource in its approval:
+
+```json
+{
+  "resource_requests": [
+    {
+      "type": "browser_session",
+      "resourceRef": "browser-session/chatgpt/primary",
+      "access": "restore_and_update"
+    }
+  ]
+}
+```
+
+The phone-generated encrypted approval payload contains the plaintext record
+data key and random one-time transaction capability. The public approval
+commit contains only the capability hash, lease expiry, and—during
+creation—the vault-wrapped record key. The Worker therefore authorizes R2
+access without being able to decrypt the artifact.
+
+The CLI-to-child protocol carries one four-byte big-endian length followed by
+one UTF-8 JSON value on inherited descriptor 3. The child returns exactly one
+framed `commit` or safe `abort` result on descriptor 4. Browser-session grants
+are never eligible for timed local grant caching.
+
 ## Approval Response
 
 ```json

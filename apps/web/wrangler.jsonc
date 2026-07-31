@@ -28,7 +28,14 @@
 		{
 			"binding": "DB",
 			"database_name": "sickrat-local",
-			"database_id": "00000000-0000-0000-0000-000000000000"
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "migrations"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "BROWSER_SESSION_ARTIFACTS",
+			"bucket_name": "sickrat-local-browser-sessions"
 		}
 	],
 	"durable_objects": {

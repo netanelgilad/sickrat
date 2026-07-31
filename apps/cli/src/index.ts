@@ -21,6 +21,7 @@ import {
 import { canonicalApprovalPayload, type ApprovalRequestCreate, type BrowserSessionGrant, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
 import { parseBrowserSessionReference, parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
 import QRCode from "qrcode";
+import { cloudflareProvisioningScopes } from "./cloudflare-scopes.js";
 
 type Config = {
 	workerUrl?: string;
@@ -177,7 +178,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.37";
+const cliVersion = "0.1.38";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type WebArtifact = {
@@ -819,14 +820,7 @@ async function cloudflareLogin(args: string[]) {
 	const state = randomBase64Url(24);
 	const codeVerifier = randomBase64Url(72);
 	const codeChallenge = await sha256Base64Url(codeVerifier);
-	const scopes = [
-		"account-settings.read",
-		"user-details.read",
-		"d1.write",
-		"r2.write",
-		"workers-scripts.read",
-		"workers-scripts.write",
-	];
+	const scopes = cloudflareProvisioningScopes;
 
 	const authUrl = new URL("https://dash.cloudflare.com/oauth2/auth");
 	authUrl.searchParams.set("response_type", "code");

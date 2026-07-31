@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { describeOAuthApprovalBlocker, matchingOAuthConnection as findMatchingOAuthConnection, matchingOAuthConnections as findMatchingOAuthConnections } from "./oauth-approval";
 import { createRoot } from "react-dom/client";
 import {
 	App as KonstaApp,
@@ -1566,18 +1567,14 @@ function AppShell({
 		[approval],
 	);
 	const matchingOAuthConnections = (request: Extract<ApprovalResourceRequest, { type: "oauth_token" }>) =>
-		oauthConnections.filter(
-			(connection) =>
-				!connection.revokedAt &&
-				connection.providerId === request.providerId &&
-				(!request.connectionName || connection.connectionName === request.connectionName) &&
-				request.scopes.every((scope) => connection.grantedScopes.includes(scope)),
-		);
+		findMatchingOAuthConnections(request, oauthConnections);
 	const matchingOAuthConnection = (request: Extract<ApprovalResourceRequest, { type: "oauth_token" }>) => {
-		const matches = matchingOAuthConnections(request);
-		return request.connectionName ? matches[0] : matches.length === 1 ? matches[0] : undefined;
+		return findMatchingOAuthConnection(request, oauthConnections);
 	};
 	const missingOAuthRequests = approvalOAuthRequests.filter((request) => !matchingOAuthConnection(request));
+	const oauthApprovalBlockers = missingOAuthRequests
+		.map((request) => describeOAuthApprovalBlocker(request, oauthConnections))
+		.filter((message): message is string => Boolean(message));
 
 	function getPendingSecretOptions(ref: string) {
 		return approvalSecretOptions[ref] ?? { show: false, symbols: false, copied: false };
@@ -2157,7 +2154,10 @@ function AppShell({
 		const token = progress.token;
 		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
 		const requiredGrantedScopes = pending.scopes.filter((scope) => !provider.connectionScopes.includes(scope));
-		if (requiredGrantedScopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
+		const missingGrantedScopes = requiredGrantedScopes.filter((scope) => !token.scopes.includes(scope));
+		if (missingGrantedScopes.length > 0) {
+			throw new Error(`${provider.name} did not grant required OAuth scopes: ${missingGrantedScopes.join(", ")}. Confirm that the OAuth client permits these exact scope IDs, then reconnect.`);
+		}
 		if (!progress.identity) {
 			setOAuthStatus(`Verifying the connected ${provider.name} account...`);
 			try {
@@ -3049,6 +3049,13 @@ function AppShell({
 								copied={copiedOAuthAuthorizationProviderId === oauthAuthorization.providerId}
 								onCopy={() => void copyOAuthAuthorizationUrl()}
 							/>
+						) : null}
+						{oauthApprovalBlockers.length > 0 ? (
+							<Block strong inset className="text-sm text-red-600 dark:text-red-400">
+								<div className="font-semibold">Approval is blocked</div>
+								{oauthApprovalBlockers.map((message) => <div key={message} className="mt-2">{message}</div>)}
+								{oauthStatus ? <div className="mt-2">Connection status: {oauthStatus}</div> : null}
+							</Block>
 						) : null}
 						{missingApprovalRefs.length > 0 ? (
 							<>

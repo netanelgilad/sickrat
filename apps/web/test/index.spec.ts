@@ -135,7 +135,7 @@ describe("OAuth gateway Worker API", () => {
 	it("publishes a generic Cloudflare provider descriptor", async () => {
 		const response = await request("/api/oauth/providers");
 		expect(response.status).toBe(200);
-		const body = (await response.json()) as { providers: Array<Record<string, unknown>> };
+		const body = (await response.json()) as { providers: Array<Record<string, unknown> & { scopes?: Array<{ id: string }> }> };
 		expect(body.providers).toContainEqual(
 			expect.objectContaining({
 				id: "cloudflare",
@@ -145,6 +145,13 @@ describe("OAuth gateway Worker API", () => {
 				connectionScopes: ["offline_access"],
 			}),
 		);
+		const cloudflare = body.providers.find((provider) => provider.id === "cloudflare");
+		expect(cloudflare?.scopes?.map((scope) => scope.id)).toEqual(expect.arrayContaining([
+			"workers-scripts.read",
+			"workers-scripts.write",
+			"workers-r2-storage.read",
+			"workers-r2-storage.write",
+		]));
 	});
 
 	it("stores a provider client ID independently from owner login", async () => {
@@ -173,7 +180,8 @@ describe("OAuth gateway Worker API", () => {
 		const callback = await request(`/oauth/callback/cloudflare?code=one-time-code&state=${encodeURIComponent(state)}`);
 		expect(callback.status).toBe(200);
 		const callbackHtml = await callback.text();
-		expect(callbackHtml).toContain("Return to the installed Sickrat app");
+		expect(callbackHtml).toContain("Cloudflare response received");
+		expect(callbackHtml).toContain("does not yet confirm that every requested scope was granted");
 		expect(callbackHtml).not.toContain("one-time-code");
 
 		const polled = await request(`/api/oauth/handoffs/${handoffId}`);

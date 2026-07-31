@@ -42,7 +42,7 @@ OAuth token requests also use the `sickrat://` scheme with the reserved `oauth` 
 
 ```text
 sickrat://oauth/github/work?scope=repo&scope=read:user
-sickrat://oauth/cloudflare/personal?scope=workers-platform.write&scope=d1.write
+sickrat://oauth/cloudflare/personal?scope=workers-scripts.write&scope=d1.write
 sickrat://oauth/slack/community?scope=chat:write
 ```
 
@@ -57,14 +57,14 @@ Cloudflare is the first supported provider. In the PWA, open **Connections**, co
 For Atlas Status Cloudflare provisioning, request the narrow Worker and D1 write scopes (and replace the command after `--` with the actual setup command):
 
 ```sh
-sickrat run --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare/work?scope=workers-platform.write&scope=d1.write' --message "Configure Atlas Status Cloudflare resources" -- <atlas-status-setup-command>
+sickrat run --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare/work?scope=workers-scripts.write&scope=d1.write' --message "Configure Atlas Status Cloudflare resources" -- <atlas-status-setup-command>
 ```
 
 Read-only verification:
 
 ```sh
 sickrat run \
-  --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare/work?scope=account-settings.read&scope=workers-platform.read' \
+  --env CLOUDFLARE_API_TOKEN='sickrat://oauth/cloudflare/work?scope=account-settings.read&scope=workers-scripts.read' \
   --message "Verify the connected Cloudflare account and list Worker scripts" \
   -- sh -c 'curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts"'
 ```

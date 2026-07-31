@@ -93,7 +93,7 @@ The CLI detects OAuth requests from the existing `sickrat://` URI scheme. The re
 
 ```text
 sickrat://oauth/github/work?scope=repo&scope=read:user
-sickrat://oauth/cloudflare/personal?scope=workers-platform.write&scope=d1.write
+sickrat://oauth/cloudflare/personal?scope=workers-scripts.write&scope=d1.write
 sickrat://oauth/slack/community?scope=chat:write
 ```
 
@@ -111,6 +111,7 @@ The complete Cloudflare flow is implemented:
 - Authorization uses authorization code with PKCE; refresh is proxied through the user-owned Worker.
 - Refresh tokens are encrypted under the passkey-protected vault key before D1 storage.
 - Approval shows the requested scopes and the connection's effective scope set.
+- When approval is blocked, the PWA names the missing OAuth scope IDs and shows connection-flow errors on the approval screen. The provider callback page only confirms that a response was received; it does not claim that all requested scopes were granted.
 - The PWA seals access tokens to the requesting CLI's ephemeral public key.
 - The CLI validates provider, scopes, and expiry before environment injection.
 - Timed local grants cache the encrypted access-token grant only until the earlier of approval expiry or provider-token expiry.

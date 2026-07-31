@@ -636,7 +636,7 @@ async function sealOAuthHandoff(publicKey: JsonWebKey, payload: string) {
 }
 
 function oauthCallbackPage(options: { ok: boolean; providerName?: string; message: string }, status = 200) {
-	const title = options.ok ? `${options.providerName ?? "OAuth"} authorization received` : "Authorization could not be received";
+	const title = options.ok ? `${options.providerName ?? "OAuth"} response received` : "Authorization could not be received";
 	const accent = options.ok ? "#33d69f" : "#ff6b6b";
 	const html = `<!doctype html>
 <html lang="en">
@@ -648,7 +648,7 @@ function oauthCallbackPage(options: { ok: boolean; providerName?: string; messag
 <style>
 html{background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;box-sizing:border-box}.panel{width:min(100%,520px);background:#1c1c1e;border-radius:8px;padding:28px;box-sizing:border-box}.mark{width:48px;height:48px;border-radius:8px;display:grid;place-items:center;background:${accent}22;color:${accent};font-size:28px;font-weight:700}h1{font-size:30px;line-height:1.15;margin:22px 0 12px;letter-spacing:0}p{color:#aaa;font-size:17px;line-height:1.45;margin:0}.hint{margin-top:24px;color:#fff;font-weight:600}</style>
 </head>
-<body><main class="panel"><div class="mark">${options.ok ? "✓" : "!"}</div><h1>${title}</h1><p>${options.message}</p>${options.ok ? '<p class="hint">Return to the installed Sickrat app to finish securely.</p>' : ""}</main></body>
+<body><main class="panel"><div class="mark">${options.ok ? "✓" : "!"}</div><h1>${title}</h1><p>${options.message}</p>${options.ok ? '<p class="hint">This does not yet confirm that every requested scope was granted. Return to the installed Sickrat app for the final result.</p>' : ""}</main></body>
 </html>`;
 	return new Response(html, {
 		status,

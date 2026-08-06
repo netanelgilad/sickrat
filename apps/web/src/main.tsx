@@ -2,6 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { describeOAuthApprovalBlocker, matchingOAuthConnection as findMatchingOAuthConnection, matchingOAuthConnections as findMatchingOAuthConnections } from "./oauth-approval";
 import { createRoot } from "react-dom/client";
 import {
+	QueryClient,
+	QueryClientProvider,
+	queryOptions,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
+import {
 	App as KonstaApp,
 	Badge,
 	Block,
@@ -32,6 +40,7 @@ import {
 	KeyRound,
 	Laptop,
 	Link2,
+	LoaderCircle,
 	LockKeyhole,
 	Menu,
 	Plug,
@@ -426,8 +435,8 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit, ti
 }
 
 const api = {
-	async getCapabilities() {
-		const response = await fetch("/api/capabilities");
+	async getCapabilities(signal?: AbortSignal) {
+		const response = await fetch("/api/capabilities", { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return (await response.json()) as Capabilities;
 	},
@@ -466,15 +475,15 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { notification: PendingNotification | null }).notification;
 	},
-	async listApprovals(status?: ApprovalRequest["status"] | "all") {
+	async listApprovals(status?: ApprovalRequest["status"] | "all", signal?: AbortSignal) {
 		const params = new URLSearchParams();
 		if (status && status !== "all") params.set("status", status);
-		const response = await fetch(`/api/approvals${params.size ? `?${params.toString()}` : ""}`);
+		const response = await fetch(`/api/approvals${params.size ? `?${params.toString()}` : ""}`, { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { approvals: ApprovalRequest[] }).approvals;
 	},
-	async listDevices() {
-		const response = await fetch("/api/devices");
+	async listDevices(signal?: AbortSignal) {
+		const response = await fetch("/api/devices", { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { devices: Device[] }).devices;
 	},
@@ -483,8 +492,8 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { device: Device }).device;
 	},
-	async listSecrets() {
-		const response = await fetch("/api/secrets");
+	async listSecrets(signal?: AbortSignal) {
+		const response = await fetch("/api/secrets", { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { secrets: SecretMetadata[] }).secrets;
 	},
@@ -513,8 +522,8 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { secrets: SecretCiphertext[] }).secrets;
 	},
-	async listOAuthProviders() {
-		const response = await fetch("/api/oauth/providers");
+	async listOAuthProviders(signal?: AbortSignal) {
+		const response = await fetch("/api/oauth/providers", { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { providers: OAuthProvider[] }).providers;
 	},
@@ -578,8 +587,8 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { identity: { subject: string; label: string } }).identity;
 	},
-	async listOAuthConnections() {
-		const response = await fetch("/api/oauth/connections");
+	async listOAuthConnections(signal?: AbortSignal) {
+		const response = await fetch("/api/oauth/connections", { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { connections: OAuthConnection[] }).connections;
 	},
@@ -625,8 +634,8 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { connection: OAuthConnection }).connection;
 	},
-	async getCloudflareOAuthConfig() {
-		const response = await fetch("/api/cloudflare/oauth-config");
+	async getCloudflareOAuthConfig(signal?: AbortSignal) {
+		const response = await fetch("/api/cloudflare/oauth-config", { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return (await response.json()) as CloudflareOAuthConfig;
 	},
@@ -640,9 +649,10 @@ const api = {
 		if (!response.ok || !body.accessToken) throw new Error(body.error ?? "Cloudflare token exchange failed.");
 		return body.accessToken;
 	},
-	async getCloudflareAccounts(accessToken: string) {
+	async getCloudflareAccounts(accessToken: string, signal?: AbortSignal) {
 		const response = await fetch("/api/cloudflare/accounts", {
 			headers: { authorization: `Bearer ${accessToken}` },
+			signal,
 		});
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { accounts: CloudflareAccount[] }).accounts;
@@ -664,8 +674,8 @@ const api = {
 			throw new Error(error instanceof Error ? error.message : "Vault creation request could not reach the Worker.");
 		}
 	},
-	async getApproval(id: string) {
-		const response = await fetch(`/api/approvals/${encodeURIComponent(id)}`);
+	async getApproval(id: string, signal?: AbortSignal) {
+		const response = await fetch(`/api/approvals/${encodeURIComponent(id)}`, { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { approval: ApprovalRequest }).approval;
 	},
@@ -706,8 +716,8 @@ const api = {
 		if (!response.ok) throw new Error(await response.text());
 		return response.json();
 	},
-	async listBrowserSessions() {
-		const response = await fetch("/api/browser-sessions");
+	async listBrowserSessions(signal?: AbortSignal) {
+		const response = await fetch("/api/browser-sessions", { signal });
 		if (!response.ok) throw new Error(await response.text());
 		return ((await response.json()) as { browserSessions: BrowserSessionMetadata[] }).browserSessions;
 	},
@@ -732,6 +742,64 @@ const api = {
 		return response.json();
 	},
 };
+
+const queryKeys = {
+	capabilities: ["capabilities"] as const,
+	secrets: ["secrets"] as const,
+	oauth: ["oauth"] as const,
+	oauthProviders: ["oauth", "providers"] as const,
+	oauthConnections: ["oauth", "connections"] as const,
+	browserSessions: ["browser-sessions"] as const,
+	approvals: ["approvals"] as const,
+	approvalsList: (status: ApprovalRequest["status"] | "all") => ["approvals", "list", status] as const,
+	approval: (id: string) => ["approvals", "detail", id] as const,
+	devices: ["devices"] as const,
+	latestRelease: ["release", "latest"] as const,
+	cloudflareConfig: ["cloudflare", "config"] as const,
+	cloudflareAccounts: ["cloudflare", "accounts"] as const,
+};
+
+const vaultQueries = {
+	capabilities: () => queryOptions({
+		queryKey: queryKeys.capabilities,
+		queryFn: ({ signal }) => api.getCapabilities(signal),
+		staleTime: 5 * 60_000,
+	}),
+	secrets: () => queryOptions({ queryKey: queryKeys.secrets, queryFn: ({ signal }) => api.listSecrets(signal), staleTime: 30_000 }),
+	oauthProviders: () => queryOptions({ queryKey: queryKeys.oauthProviders, queryFn: ({ signal }) => api.listOAuthProviders(signal), staleTime: 5 * 60_000 }),
+	oauthConnections: () => queryOptions({ queryKey: queryKeys.oauthConnections, queryFn: ({ signal }) => api.listOAuthConnections(signal), staleTime: 30_000 }),
+	browserSessions: () => queryOptions({ queryKey: queryKeys.browserSessions, queryFn: ({ signal }) => api.listBrowserSessions(signal), staleTime: 30_000 }),
+	approvals: (status: ApprovalRequest["status"] | "all") => queryOptions({
+		queryKey: queryKeys.approvalsList(status),
+		queryFn: ({ signal }) => api.listApprovals(status, signal),
+		staleTime: 10_000,
+	}),
+	approval: (id: string) => queryOptions({ queryKey: queryKeys.approval(id), queryFn: ({ signal }) => api.getApproval(id, signal), staleTime: 5_000 }),
+	devices: () => queryOptions({ queryKey: queryKeys.devices, queryFn: ({ signal }) => api.listDevices(signal), staleTime: 30_000 }),
+	latestRelease: () => queryOptions({
+		queryKey: queryKeys.latestRelease,
+		queryFn: async ({ signal }) => {
+			const response = await fetch("https://sickrat.dev/releases/latest.json", { cache: "no-store", signal });
+			if (!response.ok) throw new Error(`Release metadata request failed with ${response.status}.`);
+			const metadata = (await response.json()) as Partial<LatestReleaseMetadata>;
+			if (typeof metadata.version !== "string") throw new Error("Release metadata is malformed.");
+			return { version: metadata.version, notesUrl: metadata.notesUrl } satisfies LatestReleaseMetadata;
+		},
+		staleTime: 60 * 60_000,
+	}),
+	cloudflareConfig: () => queryOptions({ queryKey: queryKeys.cloudflareConfig, queryFn: ({ signal }) => api.getCloudflareOAuthConfig(signal), staleTime: 5 * 60_000 }),
+};
+
+const queryClient = new QueryClient({
+	defaultOptions: {
+		queries: {
+			retry: 2,
+			refetchOnWindowFocus: true,
+			gcTime: 10 * 60_000,
+		},
+		mutations: { retry: 0 },
+	},
+});
 
 function base64UrlToUint8Array(value: string) {
 	const padding = "=".repeat((4 - (value.length % 4)) % 4);
@@ -1487,17 +1555,10 @@ function AppShell({
 	providerSetupId?: string;
 }) {
 	const navigate = useNavigate();
-	const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+	const queryClient = useQueryClient();
 	const [status, setStatus] = useState("Loading vault status...");
 	const [subscription, setSubscription] = useState<PushRecord | null>(null);
-	const [approval, setApproval] = useState<ApprovalRequest | null>(null);
-	const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
 	const [approvalFilter, setApprovalFilter] = useState<ApprovalRequest["status"] | "all">("pending");
-	const [devices, setDevices] = useState<Device[]>([]);
-	const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
-	const [browserSessions, setBrowserSessions] = useState<BrowserSessionMetadata[]>([]);
-	const [oauthProviders, setOAuthProviders] = useState<OAuthProvider[]>([]);
-	const [oauthConnections, setOAuthConnections] = useState<OAuthConnection[]>([]);
 	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
 	const [oauthConnectionName, setOAuthConnectionName] = useState("");
 	const [editedOAuthConnectionName, setEditedOAuthConnectionName] = useState("");
@@ -1522,9 +1583,7 @@ function AppShell({
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
 	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown in your terminal.");
 	const [pushSubscriptionChecked, setPushSubscriptionChecked] = useState(false);
-	const [cloudflareConfig, setCloudflareConfig] = useState<CloudflareOAuthConfig | null>(null);
 	const [cloudflareToken, setCloudflareToken] = useState<string | null>(() => localStorage.getItem("sickrat.cf.accessToken"));
-	const [cloudflareAccounts, setCloudflareAccounts] = useState<CloudflareAccount[]>([]);
 	const [selectedAccountId, setSelectedAccountId] = useState("");
 	const [provisioning, setProvisioning] = useState<CloudflareProvisioning | null>(null);
 	const [cloudflareStatus, setCloudflareStatus] = useState(
@@ -1532,14 +1591,110 @@ function AppShell({
 	);
 	const [notificationToast, setNotificationToast] = useState<NotificationToast | null>(null);
 	const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
-	const [latestRelease, setLatestRelease] = useState<LatestReleaseMetadata | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [navigationOpen, setNavigationOpen] = useState(false);
 	const edgeSwipeRef = useRef<{ x: number; y: number } | null>(null);
 	const oauthCallbackStartedRef = useRef(false);
+	const oauthEnabled = ["connections", "connection-add", "connection-detail", "provider-setup", "approval", "app"].includes(route);
+	const capabilitiesQuery = useQuery(vaultQueries.capabilities());
+	const secretsQuery = useQuery(vaultQueries.secrets());
+	const oauthProvidersQuery = useQuery({ ...vaultQueries.oauthProviders(), enabled: oauthEnabled });
+	const oauthConnectionsQuery = useQuery({ ...vaultQueries.oauthConnections(), enabled: oauthEnabled });
+	const browserSessionsQuery = useQuery({ ...vaultQueries.browserSessions(), enabled: route === "sessions" || route === "app" });
+	const approvalsQuery = useQuery({ ...vaultQueries.approvals(approvalFilter), enabled: route === "approvals" || route === "app" });
+	const devicesQuery = useQuery({ ...vaultQueries.devices(), enabled: route === "devices" || route === "app" });
+	const approvalQuery = useQuery({ ...vaultQueries.approval(requestId ?? ""), enabled: Boolean(requestId) });
+	const latestReleaseQuery = useQuery(vaultQueries.latestRelease());
+	const cloudflareConfigQuery = useQuery(vaultQueries.cloudflareConfig());
+	const cloudflareAccountsQuery = useQuery({
+		queryKey: queryKeys.cloudflareAccounts,
+		queryFn: ({ signal }) => api.getCloudflareAccounts(cloudflareToken!, signal),
+		enabled: Boolean(cloudflareToken),
+		staleTime: 30_000,
+	});
+	const capabilities = capabilitiesQuery.data ?? null;
+	const capabilitiesLoading = capabilitiesQuery.isPending;
+	const secrets = secretsQuery.data ?? [];
+	const secretsLoading = secretsQuery.isPending;
+	const oauthProviders = oauthProvidersQuery.data ?? [];
+	const oauthConnections = oauthConnectionsQuery.data ?? [];
+	const oauthLoading = oauthProvidersQuery.isPending || oauthConnectionsQuery.isPending;
+	const browserSessions = browserSessionsQuery.data ?? [];
+	const browserSessionsLoading = browserSessionsQuery.isPending;
+	const approvals = approvalsQuery.data ?? [];
+	const approvalsLoading = approvalsQuery.isPending;
+	const devices = devicesQuery.data ?? [];
+	const devicesLoading = devicesQuery.isPending;
+	const approval = approvalQuery.data ?? null;
+	const approvalLoading = Boolean(requestId) && approvalQuery.isPending;
+	const latestRelease = latestReleaseQuery.data ?? null;
+	const cloudflareConfig = cloudflareConfigQuery.data ?? null;
+	const cloudflareAccounts = cloudflareAccountsQuery.data ?? [];
+	const configureProviderMutation = useMutation({
+		mutationKey: ["oauth", "configure-provider"],
+		mutationFn: ({ providerId, clientId }: { providerId: string; clientId: string }) => api.configureOAuthProvider(providerId, clientId),
+		onSuccess: (configured) => {
+			queryClient.setQueryData<OAuthProvider[]>(queryKeys.oauthProviders, (current = []) =>
+				current.map((provider) => provider.id === configured.id ? configured : provider),
+			);
+		},
+	});
+	const saveOAuthConnectionMutation = useMutation({
+		mutationKey: ["oauth", "save-connection"],
+		mutationFn: api.saveOAuthConnection,
+		onSuccess: (connection) => {
+			queryClient.setQueryData<OAuthConnection[]>(queryKeys.oauthConnections, (current = []) => [
+				connection,
+				...current.filter((item) => item.id !== connection.id),
+			]);
+		},
+	});
+	const revokeOAuthConnectionMutation = useMutation({
+		mutationKey: ["oauth", "revoke-connection"],
+		mutationFn: (connection: OAuthConnection) => api.revokeOAuthConnection(connection.id),
+		onSuccess: (result, connection) => {
+			queryClient.setQueryData<OAuthConnection[]>(queryKeys.oauthConnections, (current = []) =>
+				current.map((item) => item.id === connection.id ? { ...item, revokedAt: result.revokedAt } : item),
+			);
+		},
+	});
+	const renameOAuthConnectionMutation = useMutation({
+		mutationKey: ["oauth", "rename-connection"],
+		mutationFn: ({ connection, connectionName }: { connection: OAuthConnection; connectionName: string }) =>
+			api.renameOAuthConnection(connection.id, connectionName),
+		onSuccess: (updated) => {
+			queryClient.setQueryData<OAuthConnection[]>(queryKeys.oauthConnections, (current = []) =>
+				current.map((item) => item.id === updated.id ? updated : item),
+			);
+		},
+	});
+	const saveSecretMutation = useMutation({
+		mutationKey: ["secrets", "save"],
+		mutationFn: api.saveSecret,
+		onSuccess: (saved) => {
+			queryClient.setQueryData<SecretMetadata[]>(queryKeys.secrets, (current = []) => [saved, ...current.filter((secret) => secret.ref !== saved.ref)]);
+		},
+	});
+	const revokeDeviceMutation = useMutation({
+		mutationKey: ["devices", "revoke"],
+		mutationFn: api.revokeDevice,
+		onSuccess: (device) => {
+			queryClient.setQueryData<Device[]>(queryKeys.devices, (current = []) => current.map((item) => item.id === device.id ? device : item));
+		},
+	});
+	const revokeBrowserSessionMutation = useMutation({
+		mutationKey: ["browser-sessions", "revoke"],
+		mutationFn: api.revokeBrowserSession,
+		onSuccess: async () => queryClient.invalidateQueries({ queryKey: queryKeys.browserSessions }),
+	});
+	const decideApprovalMutation = useMutation({
+		mutationKey: ["approvals", "decide"],
+		mutationFn: ({ id, action }: { id: string; action: "approve" | "deny" }) => api.decideApproval(id, action),
+		onSuccess: async () => queryClient.invalidateQueries({ queryKey: queryKeys.approvals }),
+	});
 
 	const installed = useMemo(isStandalone, []);
-	const vaultName = capabilities?.vault.name ?? "default";
+	const vaultName = capabilities?.vault.name ?? "Loading…";
 	const updateAvailable = Boolean(
 		capabilities?.vault.version &&
 			capabilities.vault.version !== "unknown" &&
@@ -1610,52 +1765,12 @@ function AppShell({
 		}
 	}
 
-	async function refreshSecrets() {
-		try {
-			setSecrets(await api.listSecrets());
-		} catch (error) {
-			setSecretStatus(friendlyError(error, "Failed to load secrets."));
-		}
-	}
-
-	async function refreshOAuthData() {
-		try {
-			const [providers, connections] = await Promise.all([api.listOAuthProviders(), api.listOAuthConnections()]);
-			setOAuthProviders(providers);
-			setOAuthConnections(connections);
-			setOAuthClientIds((current) => {
-				const next = { ...current };
-				for (const provider of providers) if (provider.clientId && !next[provider.id]) next[provider.id] = provider.clientId;
-				return next;
-			});
-		} catch (error) {
-			setOAuthStatus(friendlyError(error, "Failed to load OAuth connections."));
-		}
-	}
-
-	async function refreshBrowserSessions() {
-		try {
-			setBrowserSessions(await api.listBrowserSessions());
-		} catch (error) {
-			setStatus(friendlyError(error, "Failed to load browser sessions."));
-		}
-	}
-
-	async function refreshApprovals(status: ApprovalRequest["status"] | "all" = approvalFilter) {
-		try {
-			setApprovals([]);
-			setApprovals(await api.listApprovals(status));
-		} catch (error) {
-			setStatus(friendlyError(error, "Failed to load approvals."));
-		}
+	async function refreshApprovals(_status: ApprovalRequest["status"] | "all" = approvalFilter) {
+		await queryClient.invalidateQueries({ queryKey: queryKeys.approvals });
 	}
 
 	async function refreshDevices() {
-		try {
-			setDevices(await api.listDevices());
-		} catch (error) {
-			setPairingStatus(friendlyError(error, "Failed to load paired machines."));
-		}
+		await queryClient.invalidateQueries({ queryKey: queryKeys.devices });
 	}
 
 	function routeNotification(notification: Pick<PendingNotification, "url">) {
@@ -1717,25 +1832,12 @@ function AppShell({
 	}, [navigate]);
 
 	useEffect(() => {
-		api
-			.getCapabilities()
-			.then((next) => {
-				setCapabilities(next);
-				setStatus(next.push.configured ? "Notifications are ready to enable." : "This vault needs notification setup from the command line.");
-			})
-			.catch((error: unknown) => setStatus(friendlyError(error, "Failed to load this vault.")));
-	}, []);
-
-	useEffect(() => {
-		fetch("https://sickrat.dev/releases/latest.json", { cache: "no-store" })
-			.then(async (response) => {
-				if (!response.ok) return null;
-				const metadata = (await response.json()) as Partial<LatestReleaseMetadata>;
-				return typeof metadata.version === "string" ? { version: metadata.version, notesUrl: metadata.notesUrl } : null;
-			})
-			.then((metadata) => setLatestRelease(metadata))
-			.catch(() => undefined);
-	}, []);
+		if (capabilitiesQuery.data) {
+			setStatus(capabilitiesQuery.data.push.configured ? "Notifications are ready to enable." : "This vault needs notification setup from the command line.");
+		} else if (capabilitiesQuery.error) {
+			setStatus(friendlyError(capabilitiesQuery.error, "Failed to load this vault."));
+		}
+	}, [capabilitiesQuery.data, capabilitiesQuery.error]);
 
 	useEffect(() => {
 		if (getPasskeyVaultRecord()) {
@@ -1748,12 +1850,21 @@ function AppShell({
 	}, []);
 
 	useEffect(() => {
-		void refreshSecrets();
-	}, []);
+		if (secretsQuery.error) setSecretStatus(friendlyError(secretsQuery.error, "Failed to load secrets."));
+	}, [secretsQuery.error]);
 
 	useEffect(() => {
-		if (["connections", "connection-add", "connection-detail", "provider-setup", "approval", "app"].includes(route)) void refreshOAuthData();
-	}, [route]);
+		const error = oauthProvidersQuery.error ?? oauthConnectionsQuery.error;
+		if (error) setOAuthStatus(friendlyError(error, "Failed to load OAuth connections."));
+	}, [oauthProvidersQuery.error, oauthConnectionsQuery.error]);
+
+	useEffect(() => {
+		setOAuthClientIds((current) => {
+			const next = { ...current };
+			for (const provider of oauthProviders) if (provider.clientId && !next[provider.id]) next[provider.id] = provider.clientId;
+			return next;
+		});
+	}, [oauthProviders]);
 
 	useEffect(() => {
 		const selected = oauthConnections.find((connection) => connection.id === connectionId);
@@ -1829,16 +1940,16 @@ function AppShell({
 	}, [pendingOAuthFlow, oauthProviders]);
 
 	useEffect(() => {
-		if (route === "approvals" || route === "app") void refreshApprovals(approvalFilter);
-	}, [approvalFilter, route]);
+		if (approvalsQuery.error) setStatus(friendlyError(approvalsQuery.error, "Failed to load approvals."));
+	}, [approvalsQuery.error]);
 
 	useEffect(() => {
-		if (route === "sessions" || route === "app") void refreshBrowserSessions();
-	}, [route]);
+		if (browserSessionsQuery.error) setStatus(friendlyError(browserSessionsQuery.error, "Failed to load browser sessions."));
+	}, [browserSessionsQuery.error]);
 
 	useEffect(() => {
-		if (route === "devices" || route === "app") void refreshDevices();
-	}, [route]);
+		if (devicesQuery.error) setPairingStatus(friendlyError(devicesQuery.error, "Failed to load paired machines."));
+	}, [devicesQuery.error]);
 
 	useEffect(() => {
 		if (route !== "devices") return;
@@ -1851,14 +1962,12 @@ function AppShell({
 	}, [navigate, route]);
 
 	useEffect(() => {
-		api
-			.getCloudflareOAuthConfig()
-			.then((config) => {
-				setCloudflareConfig(config);
-				if (!config.clientId) setCloudflareStatus("Vault setup is handled by the Sickrat command line.");
-			})
-			.catch(() => setCloudflareStatus("Vault setup is handled by the Sickrat command line."));
-	}, []);
+		if (cloudflareConfigQuery.data && !cloudflareConfigQuery.data.clientId) {
+			setCloudflareStatus("Vault setup is handled by the Sickrat command line.");
+		} else if (cloudflareConfigQuery.error) {
+			setCloudflareStatus("Vault setup is handled by the Sickrat command line.");
+		}
+	}, [cloudflareConfigQuery.data, cloudflareConfigQuery.error]);
 
 	useEffect(() => {
 		if (!isCloudflareCallback || !cloudflareConfig) return;
@@ -1902,22 +2011,17 @@ function AppShell({
 	}, [isCloudflareCallback, navigate, route]);
 
 	useEffect(() => {
-		if (!cloudflareToken) return;
-		api
-			.getCloudflareAccounts(cloudflareToken)
-			.then((accounts) => {
-				setCloudflareAccounts(accounts);
-				setSelectedAccountId((current) => current || accounts[0]?.id || "");
-				setCloudflareStatus(accounts.length > 0 ? "Sign-in complete. Select an account to create a vault." : "Sign-in complete, but no accounts were returned.");
-			})
-			.catch((error: unknown) => {
-				localStorage.removeItem("sickrat.cf.accessToken");
-				setCloudflareToken(null);
-				setCloudflareAccounts([]);
-				setSelectedAccountId("");
-				setCloudflareStatus(friendlyError(error, "Setup session expired."));
-			});
-	}, [cloudflareToken]);
+		if (cloudflareAccountsQuery.data) {
+			setSelectedAccountId((current) => current || cloudflareAccountsQuery.data[0]?.id || "");
+			setCloudflareStatus(cloudflareAccountsQuery.data.length > 0 ? "Sign-in complete. Select an account to create a vault." : "Sign-in complete, but no accounts were returned.");
+		} else if (cloudflareAccountsQuery.error) {
+			localStorage.removeItem("sickrat.cf.accessToken");
+			setCloudflareToken(null);
+			setSelectedAccountId("");
+			queryClient.removeQueries({ queryKey: queryKeys.cloudflareAccounts });
+			setCloudflareStatus(friendlyError(cloudflareAccountsQuery.error, "Setup session expired."));
+		}
+	}, [cloudflareAccountsQuery.data, cloudflareAccountsQuery.error, queryClient]);
 
 	useEffect(() => {
 		if (!capabilities) return;
@@ -1954,15 +2058,9 @@ function AppShell({
 	}, [capabilities]);
 
 	useEffect(() => {
-		if (!requestId) return;
-		api
-			.getApproval(requestId)
-			.then((next) => {
-				setApproval(next);
-				setStatus(`Loaded request from ${next.device}.`);
-			})
-			.catch((error: unknown) => setStatus(friendlyError(error, "Failed to load request.")));
-	}, [requestId]);
+		if (approvalQuery.data) setStatus(`Loaded request from ${approvalQuery.data.device}.`);
+		else if (approvalQuery.error) setStatus(friendlyError(approvalQuery.error, "Failed to load request."));
+	}, [approvalQuery.data, approvalQuery.error]);
 
 	useEffect(() => {
 		if (requestId || !subscription?.endpoint) return;
@@ -2111,8 +2209,7 @@ function AppShell({
 		setBusy(true);
 		setOAuthStatus(`Saving ${provider.name} OAuth client configuration...`);
 		try {
-			const configured = await api.configureOAuthProvider(provider.id, clientId);
-			setOAuthProviders((current) => current.map((item) => (item.id === configured.id ? configured : item)));
+			await configureProviderMutation.mutateAsync({ providerId: provider.id, clientId });
 			setOAuthStatus(`${provider.name} is ready to connect. The client ID is configuration, not a credential.`);
 		} catch (error) {
 			setOAuthStatus(friendlyError(error, `Failed to configure ${provider.name}.`));
@@ -2154,10 +2251,7 @@ function AppShell({
 		const token = progress.token;
 		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
 		const requiredGrantedScopes = pending.scopes.filter((scope) => !provider.connectionScopes.includes(scope));
-		const missingGrantedScopes = requiredGrantedScopes.filter((scope) => !token.scopes.includes(scope));
-		if (missingGrantedScopes.length > 0) {
-			throw new Error(`${provider.name} did not grant required OAuth scopes: ${missingGrantedScopes.join(", ")}. Confirm that the OAuth client permits these exact scope IDs, then reconnect.`);
-		}
+		if (requiredGrantedScopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
 		if (!progress.identity) {
 			setOAuthStatus(`Verifying the connected ${provider.name} account...`);
 			try {
@@ -2186,7 +2280,7 @@ function AppShell({
 		progress.connectionId ??= existing?.id ?? crypto.randomUUID();
 		let connection: OAuthConnection;
 		try {
-			connection = await api.saveOAuthConnection({
+			connection = await saveOAuthConnectionMutation.mutateAsync({
 				id: progress.connectionId,
 				providerId: provider.id,
 				connectionName: pending.connectionName,
@@ -2203,7 +2297,6 @@ function AppShell({
 		} catch (error) {
 			throw new Error(`Saving the ${provider.name} connection failed: ${friendlyError(error, "Unknown vault storage error.")}`);
 		}
-		setOAuthConnections((current) => [connection, ...current.filter((item) => item.id !== connection.id)]);
 		setOAuthStatus(`${provider.name} connected as ${connection.accountLabel}.`);
 		navigate(pending.redirectTo, { replace: true });
 	}
@@ -2282,8 +2375,7 @@ function AppShell({
 		setBusy(true);
 		setOAuthStatus(`Disconnecting ${connection.accountLabel}...`);
 		try {
-			const result = await api.revokeOAuthConnection(connection.id);
-			setOAuthConnections((current) => current.map((item) => (item.id === connection.id ? { ...item, revokedAt: result.revokedAt } : item)));
+			await revokeOAuthConnectionMutation.mutateAsync(connection);
 			setOAuthStatus(`${connection.accountLabel} is disconnected from Sickrat.`);
 			navigate("/connections", { replace: true });
 		} catch (error) {
@@ -2301,8 +2393,7 @@ function AppShell({
 		}
 		setBusy(true);
 		try {
-			const updated = await api.renameOAuthConnection(connection.id, connectionName);
-			setOAuthConnections((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+			await renameOAuthConnectionMutation.mutateAsync({ connection, connectionName });
 			setOAuthStatus(`Connection renamed to ${connectionName}.`);
 		} catch (error) {
 			setOAuthStatus(friendlyError(error, "Failed to rename connection."));
@@ -2353,7 +2444,7 @@ function AppShell({
 		sessionStorage.removeItem("sickrat.cf.codeVerifier");
 		sessionStorage.removeItem("sickrat.cf.redirectTo");
 		setCloudflareToken(null);
-		setCloudflareAccounts([]);
+		queryClient.removeQueries({ queryKey: queryKeys.cloudflareAccounts });
 		setSelectedAccountId("");
 		setProvisioning(null);
 		setCloudflareStatus("Setup session cleared from this browser.");
@@ -2439,7 +2530,7 @@ function AppShell({
 				refreshed.set(connection.id, token);
 				if (token.refreshToken) {
 					const encrypted = await encryptSecretValue(token.refreshToken, key);
-					const updated = await api.saveOAuthConnection({
+					await saveOAuthConnectionMutation.mutateAsync({
 						id: connection.id,
 						providerId: connection.providerId,
 						connectionName: connection.connectionName,
@@ -2454,7 +2545,6 @@ function AppShell({
 						refreshTokenKdf: encrypted.kdf,
 						providerMetadata: connection.providerMetadata ?? undefined,
 					});
-					setOAuthConnections((current) => current.map((item) => (item.id === updated.id ? updated : item)));
 				}
 			}
 			if (request.scopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`Refreshed token does not cover ${request.env}.`);
@@ -2598,9 +2688,9 @@ function AppShell({
 			if (action === "approve") {
 				await approveExistingApprovalRequest(target);
 			} else {
-				await api.decideApproval(target.id, action);
+				await decideApprovalMutation.mutateAsync({ id: target.id, action });
 			}
-			if (approval?.id === target.id) setApproval(await api.getApproval(target.id));
+			if (approval?.id === target.id) await queryClient.invalidateQueries({ queryKey: queryKeys.approval(target.id) });
 			await refreshApprovals(approvalFilter);
 			setStatus(action === "approve" ? "Approved. This machine can continue." : "Denied. The request is closed.");
 		} catch (error) {
@@ -2678,7 +2768,7 @@ function AppShell({
 						createdAt,
 						updatedAt: createdAt,
 					}));
-					setSecrets((current) => [
+					queryClient.setQueryData<SecretMetadata[]>(queryKeys.secrets, (current = []) => [
 						...savedSecrets,
 						...current.filter((secret) => !savedSecrets.some((saved) => saved.ref === secret.ref)),
 					]);
@@ -2709,10 +2799,10 @@ function AppShell({
 					await api.sendGrant(approval.id, grant, [], browserSession?.authorization);
 				}
 			} else {
-				await api.decideApproval(approval.id, action);
+				await decideApprovalMutation.mutateAsync({ id: approval.id, action });
 			}
 			const next = await api.getApproval(approval.id);
-			setApproval(next);
+			queryClient.setQueryData(queryKeys.approval(approval.id), next);
 			await refreshApprovals(approvalFilter);
 			setStatus(action === "approve" ? "Approved. This machine can continue." : "Denied. The request is closed.");
 		} catch (error) {
@@ -2833,12 +2923,11 @@ function AppShell({
 		try {
 			const encrypted = await encryptSecretValue(secretForm.value, vaultKey);
 			setSecretStatus("Saving encrypted value to your vault...");
-			const saved = await api.saveSecret({
+			await saveSecretMutation.mutateAsync({
 				ref: secretForm.ref,
 				label: secretForm.label || secretForm.ref,
 				...encrypted,
 			});
-			setSecrets((current) => [saved, ...current.filter((secret) => secret.ref !== saved.ref)]);
 			setSecretForm({ label: "", ref: "", value: "" });
 			setSecretStatus("Secret saved. Only encrypted data left this phone.");
 		} catch (error) {
@@ -2852,8 +2941,7 @@ function AppShell({
 		setBusy(true);
 		setPairingStatus("Revoking paired device...");
 		try {
-			const device = await api.revokeDevice(id);
-			setDevices((current) => current.map((item) => (item.id === device.id ? device : item)));
+			const device = await revokeDeviceMutation.mutateAsync(id);
 			setPairingStatus(`${device.label} is revoked.`);
 		} catch (error) {
 			setPairingStatus(friendlyError(error, "Failed to revoke machine."));
@@ -2867,8 +2955,7 @@ function AppShell({
 		setBusy(true);
 		setStatus(`Revoking sickrat://${session.resourceRef}...`);
 		try {
-			await api.revokeBrowserSession(session.id);
-			await refreshBrowserSessions();
+			await revokeBrowserSessionMutation.mutateAsync(session.id);
 			setStatus("Browser session revoked. Existing transaction capabilities are no longer usable.");
 		} catch (error) {
 			setStatus(friendlyError(error, "Failed to revoke browser session."));
@@ -2892,7 +2979,7 @@ function AppShell({
 	}
 
 	function hideApprovalRow(id: string) {
-		setApprovals((current) => current.filter((item) => item.id !== id));
+		queryClient.setQueryData<ApprovalRequest[]>(queryKeys.approvalsList(approvalFilter), (current = []) => current.filter((item) => item.id !== id));
 		setSwipedApprovalId(null);
 	}
 
@@ -3220,9 +3307,9 @@ function AppShell({
 			<>
 				<BlockTitle>Vault Health</BlockTitle>
 				<List strong inset>
-					<ListItem title="Vault" after={capabilities?.vault.name ?? "default"} media={<Cloud size={22} />} />
+					<ListItem title="Vault" after={capabilitiesLoading ? <LoaderCircle size={18} className="loading-spinner" /> : vaultName} media={<Cloud size={22} />} />
 					<ListItem title="Origin" subtitle={window.location.origin} media={<ExternalLink size={22} />} />
-					<ListItem title="Storage" after={capabilities?.database.configured ? "Ready" : "Needs setup"} media={<Database size={22} />} />
+					<ListItem title="Storage" after={capabilitiesLoading ? "Loading…" : capabilities?.database.configured ? "Ready" : "Needs setup"} media={<Database size={22} />} />
 					<ListItem link title="Agent Skill" subtitle="Open Sickrat setup instructions" media={<BookOpen size={22} />} component="a" href="https://sickrat.dev/skills/sickrat.md" />
 				</List>
 			</>
@@ -3422,12 +3509,12 @@ function AppShell({
 					) : null}
 					<BlockTitle>Overview</BlockTitle>
 						<List strong inset>
-							<ListItem link onClick={() => navigate("/vaults")} title="Vault" after={vaultName} subtitle={capabilities?.database.configured ? "Private deployment healthy" : "Vault storage needs setup"} media={<Cloud size={22} />} />
-							<ListItem link onClick={() => navigate("/secrets")} title="Secrets" after={String(secrets.length)} subtitle="Encrypted refs saved in your vault" media={<KeyRound size={22} />} />
-							<ListItem link onClick={() => navigate("/sessions")} title="Browser sessions" after={String(browserSessions.filter((item) => item.state !== "revoked").length)} subtitle="Encrypted sign-in bundles released only for approved commands" media={<ShieldCheck size={22} />} />
-							<ListItem link onClick={() => navigate("/connections")} title="Connections" after={String(oauthConnections.filter((item) => !item.revokedAt).length)} subtitle="OAuth accounts available for approved grants" media={<Plug size={22} />} />
-							<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
-						<ListItem link onClick={() => navigate("/devices")} title="Active devices" after={String(activeDevices.length)} subtitle="Paired machines that can request access" media={<Laptop size={22} />} />
+							<ListItem link onClick={() => navigate("/vaults")} title="Vault" after={capabilitiesLoading ? <LoaderCircle size={18} className="loading-spinner" /> : vaultName} subtitle={capabilitiesLoading ? "Loading vault status" : capabilities?.database.configured ? "Private deployment healthy" : "Vault storage needs setup"} media={<Cloud size={22} />} />
+							<ListItem link onClick={() => navigate("/secrets")} title="Secrets" after={secretsLoading ? <LoaderCircle size={18} className="loading-spinner" /> : String(secrets.length)} subtitle="Encrypted refs saved in your vault" media={<KeyRound size={22} />} />
+							<ListItem link onClick={() => navigate("/sessions")} title="Browser sessions" after={browserSessionsLoading ? <LoaderCircle size={18} className="loading-spinner" /> : String(browserSessions.filter((item) => item.state !== "revoked").length)} subtitle="Encrypted sign-in bundles released only for approved commands" media={<ShieldCheck size={22} />} />
+							<ListItem link onClick={() => navigate("/connections")} title="Connections" after={oauthLoading ? <LoaderCircle size={18} className="loading-spinner" /> : String(oauthConnections.filter((item) => !item.revokedAt).length)} subtitle="OAuth accounts available for approved grants" media={<Plug size={22} />} />
+							<ListItem link onClick={() => navigate("/approvals")} title="Pending grants" after={approvalsLoading ? <LoaderCircle size={18} className="loading-spinner" /> : String(pendingApprovals.length)} subtitle="Release only what the command needs" media={<ShieldCheck size={22} />} />
+						<ListItem link onClick={() => navigate("/devices")} title="Active devices" after={devicesLoading ? <LoaderCircle size={18} className="loading-spinner" /> : String(activeDevices.length)} subtitle="Paired machines that can request access" media={<Laptop size={22} />} />
 					</List>
 					</>
 				);
@@ -3440,9 +3527,9 @@ function AppShell({
 					</Block>
 					<BlockTitle>Current Vault</BlockTitle>
 					<List strong inset>
-						<ListItem title="Name" after={vaultName} media={<Cloud size={22} />} />
+							<ListItem title="Name" after={capabilitiesLoading ? <LoaderCircle size={18} className="loading-spinner" /> : vaultName} media={<Cloud size={22} />} />
 						<ListItem title="Origin" subtitle={window.location.origin} media={<ExternalLink size={22} />} />
-						<ListItem title="Storage" after={capabilities?.database.configured ? "Ready" : "Needs setup"} media={<Database size={22} />} />
+							<ListItem title="Storage" after={capabilitiesLoading ? "Loading…" : capabilities?.database.configured ? "Ready" : "Needs setup"} media={<Database size={22} />} />
 						<ListItem title="Realtime" after={subscription ? "Connected" : "Enable push"} media={<Bell size={22} />} />
 					</List>
 					{renderCloudflareControls()}
@@ -3471,7 +3558,9 @@ function AppShell({
 							placeholder="Filter refs"
 							media={<Search size={22} />}
 						/>
-						{filteredSecrets.length > 0 ? (
+							{secretsLoading && secrets.length === 0 ? (
+								<ListItem title="Loading encrypted refs…" media={<LoaderCircle size={22} className="loading-spinner" />} />
+							) : filteredSecrets.length > 0 ? (
 							filteredSecrets.map((secret) => (
 								<ListItem key={secret.id} title={secret.label} subtitle={secret.ref} media={<KeyRound size={22} />} />
 							))
@@ -3490,7 +3579,9 @@ function AppShell({
 					</Block>
 					<BlockTitle>Stored Sessions</BlockTitle>
 					<List strong inset>
-						{browserSessions.length > 0 ? (
+							{browserSessionsLoading && browserSessions.length === 0 ? (
+								<ListItem title="Loading browser sessions…" media={<LoaderCircle size={22} className="loading-spinner" />} />
+							) : browserSessions.length > 0 ? (
 							browserSessions.map((session) => (
 								<ListItem
 									key={session.id}
@@ -3519,7 +3610,9 @@ function AppShell({
 					<>
 						<BlockTitle>Connected Accounts</BlockTitle>
 						<List strong inset>
-							{oauthConnections.filter((connection) => !connection.revokedAt).length > 0 ? (
+							{oauthLoading && oauthConnections.length === 0 ? (
+								<ListItem title="Loading connected accounts…" media={<LoaderCircle size={22} className="loading-spinner" />} />
+							) : oauthConnections.filter((connection) => !connection.revokedAt).length > 0 ? (
 								oauthConnections.filter((connection) => !connection.revokedAt).map((connection) => {
 									const provider = oauthProviders.find((item) => item.id === connection.providerId);
 									return (
@@ -3549,7 +3642,7 @@ function AppShell({
 					<>
 						<BlockTitle>Choose Provider</BlockTitle>
 						<List strong inset>
-							{oauthProviders.map((provider) => (
+							{oauthLoading && oauthProviders.length === 0 ? <ListItem title="Loading providers…" media={<LoaderCircle size={22} className="loading-spinner" />} /> : oauthProviders.map((provider) => (
 								<ListItem
 									key={provider.id}
 									link
@@ -3605,7 +3698,7 @@ function AppShell({
 						{oauthAuthorization ? <OAuthAuthorizationActions authorization={oauthAuthorization} providerName={provider.name} copied={copiedOAuthAuthorizationProviderId === provider.id} onCopy={() => void copyOAuthAuthorizationUrl()} /> : null}
 						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
 					</>
-				) : <Block inset>Provider not found.</Block>;
+					) : <Block inset>{oauthLoading ? "Loading provider…" : "Provider not found."}</Block>;
 			} else if (route === "connection-detail") {
 				const connection = oauthConnections.find((item) => item.id === connectionId && !item.revokedAt);
 				const provider = oauthProviders.find((item) => item.id === connection?.providerId);
@@ -3632,7 +3725,7 @@ function AppShell({
 						{oauthAuthorization ? <OAuthAuthorizationActions authorization={oauthAuthorization} providerName={provider?.name ?? connection.providerId} copied={copiedOAuthAuthorizationProviderId === connection.providerId} onCopy={() => void copyOAuthAuthorizationUrl()} /> : null}
 						<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{oauthStatus}</Block>
 					</>
-				) : <Block inset>Connection not found.</Block>;
+					) : <Block inset>{oauthLoading ? "Loading connection…" : "Connection not found."}</Block>;
 			} else if (route === "approvals") {
 			routeContent = (
 				<>
@@ -3650,7 +3743,7 @@ function AppShell({
 						</Segmented>
 					</Block>
 					<List strong inset>
-						{approvals.map((item) => (
+							{approvalsLoading && approvals.length === 0 ? <ListItem title="Loading grants…" media={<LoaderCircle size={22} className="loading-spinner" />} /> : approvals.map((item) => (
 							<ListItem
 								key={item.id}
 								link
@@ -3665,7 +3758,7 @@ function AppShell({
 								}}
 							/>
 						))}
-						{approvals.length === 0 ? <ListItem title="No approvals in this view" /> : null}
+							{!approvalsLoading && approvals.length === 0 ? <ListItem title="No approvals in this view" /> : null}
 					</List>
 				</>
 			);
@@ -3719,8 +3812,8 @@ function AppShell({
 								<Button rounded outline onClick={() => navigate("/approvals")}>Approvals</Button>
 							</Block>
 						</>
-					) : (
-						<Block strong inset>{status}</Block>
+						) : (
+							<Block strong inset>{approvalLoading ? "Loading request…" : status}</Block>
 					)}
 				</>
 			);
@@ -3738,7 +3831,9 @@ function AppShell({
 					{renderPairForm()}
 					<BlockTitle>Paired Devices</BlockTitle>
 					<List strong inset>
-						{devices.length > 0 ? (
+							{devicesLoading && devices.length === 0 ? (
+								<ListItem title="Loading paired machines…" media={<LoaderCircle size={22} className="loading-spinner" />} />
+							) : devices.length > 0 ? (
 							devices.map((device) => (
 								<ListItem
 									key={device.id}
@@ -3927,8 +4022,10 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
 	<React.StrictMode>
-		<BrowserRouter>
-			<App />
-		</BrowserRouter>
+		<QueryClientProvider client={queryClient}>
+			<BrowserRouter>
+				<App />
+			</BrowserRouter>
+		</QueryClientProvider>
 	</React.StrictMode>,
 );

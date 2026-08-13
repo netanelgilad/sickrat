@@ -14,6 +14,12 @@ sickrat vault use <vault>
 sickrat self update [--yes]
 sickrat update [--yes]
 
+sickrat connection list [--all] [--json]
+sickrat connection show <provider>/<name> [--json]
+sickrat connection rename <provider>/<name> <new-name>
+sickrat connection disconnect <provider>/<name> [--yes]
+sickrat connection reauthorize <provider>/<name>
+
 sickrat pair <worker-url>
 sickrat run [--env KEY=ref] [--env-file <file>] [--message <why>] [--access-for <duration>] -- <command> [args...]
 sickrat reveal <ref> [--message <why>]
@@ -50,6 +56,19 @@ The optional path after the provider is the connection name configured in the PW
 The CLI recognizes these descriptors in direct `--env` mappings and env files. It sends a signed typed request, waits for PWA approval, decrypts the sealed access-token grant, validates provider/scopes/expiry, and injects the token into the named environment variable. Refresh tokens never leave the encrypted vault connection.
 
 Cloudflare is the first supported provider. In the PWA, open **Connections**, configure a Cloudflare public OAuth client, and connect an account. The OAuth client must use authorization code with PKCE (`S256`), token endpoint authentication `none`, the `refresh_token` grant, and the callback URL shown by the PWA.
+
+## `connection`
+
+`sickrat connection` manages OAuth connections in the paired vault. `list` and `show` expose the same PWA data, including account identity, scopes, creation and update timestamps, and last-used time. Use `--json` for scriptable output and `--all` to include disconnected records.
+
+```sh
+sickrat connection list
+sickrat connection show cloudflare/work
+sickrat connection rename cloudflare/work production
+sickrat connection disconnect cloudflare/default --yes
+```
+
+`reauthorize` opens the PWA detail flow. It remains browser-based because the refresh token is unlocked only with the vault key and is never supplied to the CLI.
 
 For Atlas Status Cloudflare provisioning, request the narrow Worker and D1 write scopes (and replace the command after `--` with the actual setup command):
 

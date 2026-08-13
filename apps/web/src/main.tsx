@@ -3489,7 +3489,19 @@ function AppShell({
 							</Button>
 						</div>
 					</Card>
-					{!subscription ? (
+					{!pushSubscriptionChecked ? (
+						<Card outline aria-live="polite">
+							<div className="flex items-center gap-3">
+								<div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-black/5 text-black/55 dark:bg-white/10 dark:text-white/60">
+									<LoaderCircle size={20} className="loading-spinner" aria-hidden="true" />
+								</div>
+								<div className="min-w-0">
+									<div className="font-semibold">Checking push approvals…</div>
+									<div className="text-sm text-black/55 dark:text-white/55">Checking this device’s notification setup.</div>
+								</div>
+							</div>
+						</Card>
+					) : !subscription ? (
 						<Card outline>
 							<div className="flex items-center justify-between gap-4">
 								<div className="flex min-w-0 items-center gap-3">

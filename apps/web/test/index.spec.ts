@@ -149,6 +149,8 @@ describe("OAuth gateway Worker API", () => {
 		expect(cloudflare?.scopes?.map((scope) => scope.id)).toEqual(expect.arrayContaining([
 			"workers-scripts.read",
 			"workers-scripts.write",
+			"workers-routes.read",
+			"workers-routes.write",
 			"workers-r2-storage.read",
 			"workers-r2-storage.write",
 		]));

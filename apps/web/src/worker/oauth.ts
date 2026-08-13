@@ -48,6 +48,8 @@ const providers: OAuthProviderDefinition[] = [
 			{ id: "account-settings.read", label: "Accounts", description: "List accessible Cloudflare accounts.", risk: "low" },
 			{ id: "workers-scripts.read", label: "Workers scripts read", description: "List and inspect Worker scripts.", risk: "medium" },
 			{ id: "workers-scripts.write", label: "Workers scripts write", description: "Create and update Worker scripts.", risk: "high" },
+			{ id: "workers-routes.read", label: "Workers routes read", description: "List Worker routes configured on zones.", risk: "medium" },
+			{ id: "workers-routes.write", label: "Workers routes write", description: "Create and update Worker routes on zones.", risk: "high" },
 			{ id: "d1.read", label: "D1 read", description: "Read D1 databases and metadata.", risk: "medium" },
 			{ id: "d1.write", label: "D1 write", description: "Create and modify D1 databases.", risk: "high" },
 			{ id: "workers-r2-storage.read", label: "R2 Storage read", description: "Read R2 bucket configuration and objects.", risk: "medium" },

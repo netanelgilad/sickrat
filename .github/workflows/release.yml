@@ -151,3 +151,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npm run site:deploy
+
+      - name: Point agents to deploy-token recovery
+        if: failure()
+        run: |
+          echo "::notice::If the deploy failed with Cloudflare authentication code 10000 or 9109, use the repo skill at .agents/skills/renew-cloudflare-deploy-token/SKILL.md."

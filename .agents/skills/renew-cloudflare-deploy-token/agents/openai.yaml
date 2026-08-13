@@ -1,0 +1,4 @@
+interface:
+  display_name: "Renew Cloudflare Deploy Token"
+  short_description: "Restore Cloudflare CI deploy authentication"
+  default_prompt: "Use $renew-cloudflare-deploy-token to renew the Cloudflare GitHub Actions secret through a phone-approved Sickrat connection."

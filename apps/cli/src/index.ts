@@ -178,8 +178,24 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.40";
+const cliVersion = "0.1.44";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
+
+type OAuthConnection = {
+	id: string;
+	providerId: string;
+	connectionName: string;
+	accountLabel: string;
+	accountSubject: string;
+	grantedScopes: string[];
+	tokenType: string;
+	accessTokenExpiresAt: string | null;
+	providerMetadata: Record<string, unknown> | null;
+	createdAt: string;
+	updatedAt: string;
+	lastUsedAt: string | null;
+	revokedAt: string | null;
+};
 
 type WebArtifact = {
 	workerDir: string;
@@ -362,6 +378,11 @@ Usage:
   sickrat self update [--yes]
   sickrat update [--yes]
   sickrat pair <worker-url> [--label <name>]
+  sickrat connection list [--all] [--json]
+  sickrat connection show <provider>/<name> [--json]
+  sickrat connection rename <provider>/<name> <new-name>
+  sickrat connection disconnect <provider>/<name> [--yes]
+  sickrat connection reauthorize <provider>/<name>
   sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] [--approval-timeout <duration>] -- <command...>
   sickrat browser-session create <ref> [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <producer...>
   sickrat browser-session run <ref> [--read-only] [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <consumer...>
@@ -374,6 +395,8 @@ Examples:
   sickrat vault status personal
   sickrat vault update personal --dry-run
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
+  sickrat connection list
+  sickrat connection disconnect cloudflare/default --yes
   sickrat run --env SERVICE_TOKEN=service/api-token -- npm test
   sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm test
   sickrat run --env SERVICE_TOKEN=service/api-token --approval-timeout 15m -- npm test
@@ -435,6 +458,20 @@ Usage:
 
 Pairs this machine with an existing Sickrat vault after phone approval.
 `,
+		connection: `sickrat connection
+
+Usage:
+  sickrat connection list [--all] [--json]
+  sickrat connection show <provider>/<name> [--json]
+  sickrat connection rename <provider>/<name> <new-name>
+  sickrat connection disconnect <provider>/<name> [--yes]
+  sickrat connection reauthorize <provider>/<name>
+
+Lists and manages the OAuth connections in the paired vault. Connection details include
+the provider, account identity, granted scopes, timestamps, and last-used time.
+Reauthorization opens the corresponding secure PWA flow because the refresh token stays
+encrypted under the vault key and is never available to the CLI.
+`,
 		run: `sickrat run
 
 Usage:
@@ -477,6 +514,107 @@ function hasHelpFlag(args: string[]) {
 
 function unknownCommand(command: string): never {
 	printAndExit(`Unknown command: ${command}\nRun sickrat --help for usage.`, 1);
+}
+
+function formatConnectionTime(value: string | null) {
+	return value ?? "never";
+}
+
+function parseConnectionReference(value: string | undefined) {
+	if (!value) throw new Error("A connection reference in the form <provider>/<name> is required.");
+	const [providerId, connectionName, ...extra] = value.split("/");
+	if (extra.length || !providerId || !connectionName || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(providerId) || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(connectionName)) {
+		throw new Error(`Invalid connection reference: ${value}. Use <provider>/<name>, for example cloudflare/work.`);
+	}
+	return { providerId, connectionName };
+}
+
+function connectionReference(connection: OAuthConnection) {
+	return `${connection.providerId}/${connection.connectionName}`;
+}
+
+async function listOAuthConnections(includeRevoked: boolean) {
+	const config = await readConfig();
+	if (!config.workerUrl) throw new Error("No paired Sickrat vault is configured. Run sickrat pair <worker-url> first.");
+	const result = await api<{ connections: OAuthConnection[] }>(config.workerUrl, "/api/oauth/connections");
+	return result.connections.filter((connection) => includeRevoked || !connection.revokedAt);
+}
+
+async function findOAuthConnection(reference: string, includeRevoked = false) {
+	const target = parseConnectionReference(reference);
+	const connection = (await listOAuthConnections(includeRevoked)).find((item) => item.providerId === target.providerId && item.connectionName === target.connectionName);
+	if (!connection) throw new Error(`OAuth connection ${reference} was not found.`);
+	return connection;
+}
+
+function printOAuthConnection(connection: OAuthConnection) {
+	console.log(`Reference: ${connectionReference(connection)}`);
+	console.log(`ID: ${connection.id}`);
+	console.log(`Provider: ${connection.providerId}`);
+	console.log(`Name: ${connection.connectionName}`);
+	console.log(`Account: ${connection.accountLabel}`);
+	console.log(`Account subject: ${connection.accountSubject}`);
+	console.log(`Scopes: ${connection.grantedScopes.join(", ")}`);
+	console.log(`Token type: ${connection.tokenType}`);
+	console.log(`Access token expires: ${formatConnectionTime(connection.accessTokenExpiresAt)}`);
+	console.log(`Created: ${connection.createdAt}`);
+	console.log(`Updated: ${connection.updatedAt}`);
+	console.log(`Last used: ${formatConnectionTime(connection.lastUsedAt)}`);
+	console.log(`Status: ${connection.revokedAt ? `disconnected (${connection.revokedAt})` : "connected"}`);
+}
+
+async function connectionCommand(args: string[]) {
+	const subcommand = args[1];
+	if (!subcommand || hasHelpFlag(args)) commandHelp("connection");
+	if (subcommand === "list") {
+		const unsupported = args.slice(2).filter((arg) => arg !== "--all" && arg !== "--json");
+		if (unsupported.length) throw new Error(`Unknown sickrat connection list option: ${unsupported[0]}`);
+		const connections = await listOAuthConnections(args.includes("--all"));
+		if (args.includes("--json")) return void console.log(JSON.stringify(connections, null, 2));
+		if (!connections.length) return void console.log("No OAuth connections.");
+		for (const connection of connections) console.log(`${connectionReference(connection)}\t${connection.accountLabel}\tlast used: ${formatConnectionTime(connection.lastUsedAt)}\t${connection.revokedAt ? "disconnected" : "connected"}`);
+		return;
+	}
+	if (subcommand === "show") {
+		const reference = args[2];
+		if (!reference || args.slice(3).some((arg) => arg !== "--json")) commandHelp("connection");
+		const connection = await findOAuthConnection(reference);
+		if (args.includes("--json")) console.log(JSON.stringify(connection, null, 2)); else printOAuthConnection(connection);
+		return;
+	}
+	if (subcommand === "rename") {
+		const [reference, newName] = [args[2], args[3]];
+		if (!reference || !newName || args.length !== 4) commandHelp("connection");
+		if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(newName)) throw new Error("Connection names must use lowercase letters, numbers, and hyphens.");
+		const connection = await findOAuthConnection(reference);
+		const config = await readConfig();
+		const result = await api<{ connection: OAuthConnection }>(config.workerUrl!, `/api/oauth/connections/${encodeURIComponent(connection.id)}/name`, { method: "POST", body: JSON.stringify({ connectionName: newName }) });
+		console.log(`Renamed ${reference} to ${connectionReference(result.connection)}.`);
+		return;
+	}
+	if (subcommand === "disconnect") {
+		const reference = args[2];
+		if (!reference || args.slice(3).some((arg) => arg !== "--yes")) commandHelp("connection");
+		const connection = await findOAuthConnection(reference);
+		if (!args.includes("--yes")) {
+			if (!process.stdin.isTTY) throw new Error("Refusing to disconnect without --yes when stdin is not interactive.");
+			const readline = createInterface({ input: process.stdin, output: process.stderr });
+			try { if (!/^y(es)?$/i.test((await readline.question(`Disconnect ${reference} (${connection.accountLabel})? [y/N] `)).trim())) return void console.log("Cancelled."); } finally { readline.close(); }
+		}
+		const config = await readConfig();
+		await api(config.workerUrl!, `/api/oauth/connections/${encodeURIComponent(connection.id)}/revoke`, { method: "POST" });
+		console.log(`Disconnected ${reference}.`);
+		return;
+	}
+	if (subcommand === "reauthorize") {
+		if (!args[2] || args.length !== 3) commandHelp("connection");
+		const connection = await findOAuthConnection(args[2]);
+		const config = await readConfig();
+		console.log(`Opening the secure reauthorization flow for ${connectionReference(connection)}.`);
+		openBrowser(`${config.workerUrl}/connections/${encodeURIComponent(connection.id)}`);
+		return;
+	}
+	throw new Error(`Unknown sickrat connection command: ${subcommand}`);
 }
 
 function bytesToBase64Url(bytes: Uint8Array) {
@@ -2544,7 +2682,8 @@ async function main() {
 			if (command === "login") commandHelp("login");
 			if (command === "vault" && args[1] === "create") commandHelp("vault create");
 			if (command === "vault" && args[1] === "status") commandHelp("vault status");
-			if (command === "vault" && args[1] === "update") commandHelp("vault update");
+		if (command === "vault" && args[1] === "update") commandHelp("vault update");
+			if (command === "connection") commandHelp("connection");
 			if (command === "self" && args[1] === "update") commandHelp("self update");
 			if (command === "update") commandHelp("update");
 			if (command === "pair") commandHelp("pair");
@@ -2561,6 +2700,7 @@ async function main() {
 		if (command === "self" && args[1] === "update") return await selfUpdate(args);
 		if (command === "update") return await updateAll(args);
 		if (command === "pair") return await pair(args);
+		if (command === "connection") return await connectionCommand(args);
 		if (command === "run") return await runWithSecrets(args);
 		if (command === "browser-session") return await browserSessionCommand(args);
 		if (command === "reveal") return await revealSecret(args);

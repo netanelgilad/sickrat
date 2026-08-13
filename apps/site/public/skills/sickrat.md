@@ -87,6 +87,10 @@ For first capture or reauthentication, use `browser-session create` or
 browser. The child uses `@sickrat/browser-session` to read the approved bundle
 and commit a rotated bundle or abort with a safe reason:
 
+```sh
+npm install https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-browser-session-sdk.tgz
+```
+
 ```js
 import { openGrantedBrowserSession } from "@sickrat/browser-session";
 
@@ -95,6 +99,14 @@ const { bundle } = await transaction.read();
 const updatedBundle = await doProviderWork(bundle);
 await transaction.commit(updatedBundle);
 ```
+
+If installing the SDK is inappropriate, run `sickrat browser-session --help`
+for the low-level protocol. It uses one four-byte big-endian length-prefixed
+JSON request and one framed commit or abort response on the inherited file
+descriptors named by `SICKRAT_BROWSER_SESSION_INPUT_FD` and
+`SICKRAT_BROWSER_SESSION_OUTPUT_FD`. Implement the documented size limits,
+validation, timeout, and one-shot lifecycle rules; never redirect the bundle
+through stdin, stdout, environment values, or a plaintext file.
 
 Keep Patchright, Playwright, provider endpoints, login/OTP/CAPTCHA handling,
 authentication checks, and browser cleanup in userland. Never request a

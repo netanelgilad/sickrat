@@ -178,7 +178,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.44";
+const cliVersion = "0.1.45";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type OAuthConnection = {
@@ -495,7 +495,14 @@ Usage:
   sickrat browser-session replace <ref> [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <producer...>
 
 The approved bundle and any updated bundle travel only through inherited file descriptors 3 and 4.
-The child can use @sickrat/browser-session and remains responsible for all browser or HTTP behavior.
+Install the helper SDK from the latest release asset:
+  npm install https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-browser-session-sdk.tgz
+
+The child reads one four-byte big-endian length-prefixed JSON request from the descriptor named by
+SICKRAT_BROWSER_SESSION_INPUT_FD and writes one framed commit or abort result to the descriptor named
+by SICKRAT_BROWSER_SESSION_OUTPUT_FD. Descriptor numbers are non-secret; bundle contents are secret.
+Use @sickrat/browser-session unless the child intentionally implements the bounded framing, validation,
+deadline, and one-shot transaction rules itself. Browser and HTTP behavior remains userland-owned.
 `,
 		reveal: `sickrat reveal
 

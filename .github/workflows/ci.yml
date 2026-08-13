@@ -41,6 +41,12 @@ jobs:
           npm --workspace apps/cli test
           npm --workspace packages/browser-session test
 
+      - name: Build browser-session SDK
+        run: npm --workspace packages/browser-session run build
+
+      - name: Test browser-session experiments
+        run: node --test experiments/chatgpt-session-http/*.test.mjs
+
       - name: Build web
         run: npm run web:build
 

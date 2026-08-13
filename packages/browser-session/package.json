@@ -1,12 +1,16 @@
 {
 	"name": "@sickrat/browser-session",
-	"version": "0.0.0",
-	"private": true,
+	"version": "0.1.45",
 	"type": "module",
 	"exports": {
-		".": "./src/index.ts"
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
 	},
+	"files": ["dist", "README.md"],
 	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
 		"test": "node --experimental-strip-types --test test/*.test.ts",
 		"typecheck": "tsc --noEmit"
 	},

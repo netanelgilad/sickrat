@@ -116,6 +116,10 @@ sickrat browser-session run example/primary \
 The child reads and finishes the private transaction with the browser-neutral
 SDK:
 
+```sh
+npm install https://github.com/netanelgilad/sickrat/releases/latest/download/sickrat-browser-session-sdk.tgz
+```
+
 ```js
 import { openGrantedBrowserSession } from "@sickrat/browser-session";
 
@@ -127,6 +131,12 @@ await transaction.commit(updatedBundle);
 
 Capture/restore logic, browsers, HTTP recipes, authentication checks, and
 temporary browser cleanup remain userland responsibilities.
+
+The matching GitHub release publishes the SDK as
+`sickrat-browser-session-sdk.tgz`. Consumers may implement the low-level
+length-prefixed descriptor protocol documented in
+`browser-session-vault.md`, but they then own the same bounded framing,
+validation, deadline, and one-shot lifecycle behavior supplied by the SDK.
 
 Example:
 

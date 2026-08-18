@@ -187,7 +187,7 @@ Only update local config to the new ref after the provider confirms the password
 
 ## Requesting OAuth Access
 
-Cloudflare is the first supported OAuth provider. Request an access token through the existing `sickrat run` environment flow with a `sickrat://oauth/<provider>/<connection-name>` descriptor and one or more explicit `scope` parameters:
+Cloudflare and X are supported OAuth providers. Request an access token through the existing `sickrat run` environment flow with a `sickrat://oauth/<provider>/<connection-name>` descriptor and one or more explicit `scope` parameters:
 
 ```sh
 sickrat run \
@@ -196,9 +196,27 @@ sickrat run \
   -- sh -c 'curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/workers/scripts"'
 ```
 
+For X research and draft preparation, request only the read scopes:
+
+```sh
+sickrat run \
+  --env X_ACCESS_TOKEN='sickrat://oauth/x/personal?scope=tweet.read&scope=users.read' \
+  --message "Research posts and prepare a draft without publishing" \
+  -- <personal-brand-draft-command>
+```
+
+Publishing requires a separate, explicit `tweet.write` approval. Include it only in the command that will publish, delete, repost, or undo a repost:
+
+```sh
+sickrat run \
+  --env X_ACCESS_TOKEN='sickrat://oauth/x/personal?scope=tweet.read&scope=users.read&scope=tweet.write' \
+  --message "Publish the approved personal-brand post" \
+  -- <personal-brand-publish-command>
+```
+
 Use CLI version `0.1.35` or newer for named OAuth connections. Keep non-sensitive values such as `CF_ACCOUNT_ID` in the normal process environment or env file.
 
-The user manages provider accounts from **Connections** in the installed PWA. It is valid to request Cloudflare access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
+The user manages provider accounts from **Connections** in the installed PWA. It is valid to request Cloudflare or X access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
 
 If the approval button is disabled for an OAuth request, read the blocker shown on the approval screen. It names missing canonical scope IDs or reports the provider connection error. Do not repeatedly request broader scopes to work around an OAuth client whose allowed-scope configuration is incomplete.
 

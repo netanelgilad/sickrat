@@ -1,6 +1,6 @@
 # OAuth Gateway
 
-Sickrat supports agent-requested access to OAuth integrations with the same approval and passkey protection model used for secret refs. Cloudflare is the first provider implementation.
+Sickrat supports agent-requested access to OAuth integrations with the same approval and passkey protection model used for secret refs. Cloudflare and X are the first provider implementations.
 
 The product goal is not to become a hosted connector platform. Each vault remains user-owned. Provider refresh tokens are stored as encrypted vault records in the user's D1 database, unlocked from the PWA with the vault key, and released to paired machines only as short-lived access-token grants after explicit approval.
 
@@ -103,7 +103,7 @@ The connection name is optional for backward compatibility and convenience. A pr
 
 ## Current Implementation
 
-The complete Cloudflare flow is implemented:
+The complete generic flow is implemented for Cloudflare and X:
 
 - The CLI parses canonical `sickrat://oauth/...` descriptors from `--env` and env files.
 - Typed resources are covered by the paired-device signature and persisted with the approval.
@@ -115,6 +115,8 @@ The complete Cloudflare flow is implemented:
 - The PWA seals access tokens to the requesting CLI's ephemeral public key.
 - The CLI validates provider, scopes, and expiry before environment injection.
 - Timed local grants cache the encrypted access-token grant only until the earlier of approval expiry or provider-token expiry.
+
+X uses OAuth 2.0 Authorization Code with PKCE as a public client. Its persistent connection requests `users.read`, `tweet.read`, and `offline.access`; identity comes from `GET https://api.x.com/2/users/me`. Personal-brand research and draft preparation use only `tweet.read` and `users.read`. Publishing is step-up authorization: the agent must explicitly request the sensitive `tweet.write` scope, and the PWA must show that permission in the approval rather than treating it as part of drafting.
 
 Adding another standards-based provider is primarily a catalog entry in `apps/web/src/worker/oauth.ts`: endpoints, scope descriptions, identity response paths, and token endpoint authentication mode. The request, connection, refresh, approval, grant, and CLI injection paths are provider-independent.
 
@@ -206,7 +208,7 @@ The browser callback relay is separate from token exchange. Its D1 record expire
 
 Provider OAuth apps are a separate product concern from vault ownership.
 
-V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL from the PWA into that client, and stores the public client ID from the Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant.
+V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL from the PWA into that client, and stores the public client ID from the Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant. X requires OAuth 2.0 user authentication, a public client, the exact X callback URL shown by Sickrat, PKCE `S256`, and `offline.access` for refresh tokens. The X app needs read permission for drafting and should enable write permission only when the user intends to approve publishing requests.
 
 A proactive connection requests only the provider's minimum identity scopes. Operational scopes come from an agent request and are authorized just in time. If an existing connection does not cover the requested scopes, the approval flow performs step-up authorization and replaces the encrypted refresh credential with the newly granted scope set. The provider-side OAuth client must still allow every scope Sickrat may request; that allowlist defines the client's maximum capability, while each authorization request and user consent define the connection's actual capability.
 

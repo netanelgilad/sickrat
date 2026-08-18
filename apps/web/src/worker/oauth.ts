@@ -64,6 +64,30 @@ const providers: OAuthProviderDefinition[] = [
 			labelPaths: ["result.email", "result.username", "result.id"],
 		},
 	},
+	{
+		id: "x",
+		name: "X",
+		description: "Account identity, post research, and approved publishing",
+		authorizationEndpoint: "https://x.com/i/oauth2/authorize",
+		tokenEndpoint: "https://api.x.com/2/oauth2/token",
+		documentationUrl: "https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code",
+		identityScopes: ["users.read", "tweet.read"],
+		connectionScopes: ["offline.access"],
+		scopes: [
+			{ id: "users.read", label: "Users read", description: "Identify the connected X account and read user profiles.", risk: "low" },
+			{ id: "tweet.read", label: "Posts read", description: "Read posts available to the connected X account for research and drafting.", risk: "medium" },
+			{ id: "offline.access", label: "Offline access", description: "Keep the X connection available until access is revoked.", risk: "medium" },
+			{ id: "tweet.write", label: "Publish posts", description: "Publish, delete, repost, and undo reposts as the connected X account.", risk: "sensitive" },
+		],
+		supportsPkce: true,
+		supportsRefreshToken: true,
+		tokenEndpointAuthMethod: "none",
+		identity: {
+			endpoint: "https://api.x.com/2/users/me",
+			subjectPath: "data.id",
+			labelPaths: ["data.username", "data.name", "data.id"],
+		},
+	},
 ];
 
 export function listOAuthProviders() {

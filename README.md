@@ -26,7 +26,7 @@ Agentic tools often need credentials to do useful work, but handing long-lived s
 - approvals return short-lived encrypted grants for the specific request
 - infrastructure lives in the user's own Cloudflare account
 
-The OAuth gateway extends the same approval model to short-lived provider access tokens for connected services, starting with Cloudflare. The browser-session vault applies that model to authenticated browser state without leaving durable sessions on userland machines. See [docs/oauth-gateway.md](docs/oauth-gateway.md), [docs/browser-session-vault.md](docs/browser-session-vault.md), [docs/architecture.md](docs/architecture.md), and [docs/threat-model.md](docs/threat-model.md) for the deeper designs.
+The OAuth gateway extends the same approval model to short-lived provider access tokens for connected services, starting with Cloudflare and X. The browser-session vault applies that model to authenticated browser state without leaving durable sessions on userland machines. See [docs/oauth-gateway.md](docs/oauth-gateway.md), [docs/browser-session-vault.md](docs/browser-session-vault.md), [docs/architecture.md](docs/architecture.md), and [docs/threat-model.md](docs/threat-model.md) for the deeper designs.
 
 ## Repository Layout
 

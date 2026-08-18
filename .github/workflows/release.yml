@@ -89,7 +89,7 @@ jobs:
           bun build --compile --target=bun-linux-arm64 apps/cli/src/index.ts --outfile dist/release/sickrat-linux-arm64
           bun build --compile --target=bun-linux-x64-baseline apps/cli/src/index.ts --outfile dist/release/sickrat-linux-x64
           npm pack --workspace packages/browser-session --pack-destination dist/release
-          mv dist/release/sickrat-browser-session-0.1.45.tgz dist/release/sickrat-browser-session-sdk.tgz
+          mv dist/release/sickrat-browser-session-0.1.46.tgz dist/release/sickrat-browser-session-sdk.tgz
           tar -C apps/web/dist -czf dist/release/sickrat-web-dist.tar.gz client sickrat
           (cd dist/release && shasum -a 256 sickrat-* > SHA256SUMS)
 

@@ -1,6 +1,6 @@
 {
 	"name": "@sickrat/cli",
-	"version": "0.1.45",
+	"version": "0.1.46",
 	"private": true,
 	"type": "module",
 	"bin": {
@@ -13,7 +13,7 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@sickrat/browser-session": "0.1.45",
+		"@sickrat/browser-session": "0.1.46",
 		"@sickrat/protocol": "0.0.0",
 		"qrcode": "^1.5.4"
 	},

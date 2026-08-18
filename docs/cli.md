@@ -49,6 +49,7 @@ OAuth token requests also use the `sickrat://` scheme with the reserved `oauth` 
 ```text
 sickrat://oauth/github/work?scope=repo&scope=read:user
 sickrat://oauth/cloudflare/personal?scope=workers-scripts.write&scope=d1.write
+sickrat://oauth/x/personal?scope=tweet.read&scope=users.read
 sickrat://oauth/slack/community?scope=chat:write
 ```
 
@@ -58,7 +59,21 @@ The optional path after the provider is the connection name configured in the PW
 
 The CLI recognizes these descriptors in direct `--env` mappings and env files. It sends a signed typed request, waits for PWA approval, decrypts the sealed access-token grant, validates provider/scopes/expiry, and injects the token into the named environment variable. Refresh tokens never leave the encrypted vault connection.
 
-Cloudflare is the first supported provider. In the PWA, open **Connections**, configure a Cloudflare public OAuth client, and connect an account. The OAuth client must use authorization code with PKCE (`S256`), token endpoint authentication `none`, the `refresh_token` grant, and the callback URL shown by the PWA.
+Cloudflare and X are supported providers. In the PWA, open **Connections**, choose the provider, configure its public OAuth client, and connect an account. Both clients use authorization code with PKCE (`S256`) and token endpoint authentication `none`; Cloudflare uses the `refresh_token` grant, while X uses `offline.access` to issue a refresh token. Register the exact provider-specific callback URL shown by the PWA.
+
+For an X personal-brand workflow, research and draft preparation need only `tweet.read` and `users.read`:
+
+```text
+sickrat://oauth/x/personal?scope=tweet.read&scope=users.read
+```
+
+Publishing is a separate sensitive operation. Request `tweet.write` explicitly only for the command that will publish, delete, repost, or undo a repost; X also requires the two read scopes for post-management endpoints:
+
+```text
+sickrat://oauth/x/personal?scope=tweet.read&scope=users.read&scope=tweet.write
+```
+
+Before connecting X, create a Project and App in the X Developer Console, enable OAuth 2.0 user authentication, configure it as a public client, register the callback URL copied from Sickrat, and allow the read permissions. Enable write permission only if publishing is intended. Save the public Client ID in Sickrat; do not enter or store an X client secret.
 
 ## `connection`
 

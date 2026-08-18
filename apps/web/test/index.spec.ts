@@ -156,6 +156,29 @@ describe("OAuth gateway Worker API", () => {
 		]));
 	});
 
+	it("publishes the minimal public-client X provider descriptor", async () => {
+		const response = await request("/api/oauth/providers");
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			providers: Array<Record<string, unknown> & { scopes?: Array<{ id: string; risk: string }> }>;
+		};
+		const x = body.providers.find((provider) => provider.id === "x");
+		expect(x).toEqual(
+			expect.objectContaining({
+				name: "X",
+				authorizationEndpoint: "https://x.com/i/oauth2/authorize",
+				configured: false,
+				redirectUri: "https://vault.example/oauth/callback/x",
+				identityScopes: ["users.read", "tweet.read"],
+				connectionScopes: ["offline.access"],
+				supportsPkce: true,
+				supportsRefreshToken: true,
+			}),
+		);
+		expect(x?.scopes?.map((scope) => scope.id)).toEqual(["users.read", "tweet.read", "offline.access", "tweet.write"]);
+		expect(x?.scopes?.find((scope) => scope.id === "tweet.write")?.risk).toBe("sensitive");
+	});
+
 	it("stores a provider client ID independently from owner login", async () => {
 		const saved = await request("/api/oauth/providers/cloudflare/config", {
 			method: "PUT",
@@ -216,6 +239,29 @@ describe("OAuth gateway Worker API", () => {
 		expect((await request(`/api/oauth/handoffs/${handoffId}`)).status).toBe(404);
 	});
 
+	it("routes an X callback through the generic encrypted handoff", async () => {
+		const handoffId = "handoff_x_abcdefghijkl";
+		const handoffKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+		const state = `v1.${handoffId}.nonce_x_abcdefghijkl`;
+		const created = await request("/api/oauth/handoffs", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				id: handoffId,
+				providerId: "x",
+				stateHash: await sha256Base64Url(state),
+				publicKey: await crypto.subtle.exportKey("jwk", handoffKeys.publicKey),
+			}),
+		});
+		expect(created.status).toBe(201);
+
+		const callback = await request(`/oauth/callback/x?code=x-code&state=${encodeURIComponent(state)}`);
+		expect(callback.status).toBe(200);
+		expect(await callback.text()).toContain("X response received");
+		const polled = await request(`/api/oauth/handoffs/${handoffId}`);
+		expect(await polled.json()).toEqual(expect.objectContaining({ providerId: "x", status: "completed" }));
+	});
+
 	it("exchanges a PKCE authorization code through the generic provider adapter", async () => {
 		await request("/api/oauth/providers/cloudflare/config", {
 			method: "PUT",
@@ -267,6 +313,118 @@ describe("OAuth gateway Worker API", () => {
 			tokenType: "Bearer",
 			scopes: ["user-details.read", "workers-platform.read"],
 		});
+	});
+
+	it("exchanges and refreshes X tokens as a public PKCE client", async () => {
+		await request("/api/oauth/providers/x/config", {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ clientId: "x-public-client-id" }),
+		});
+		fetchMock
+			.get("https://api.x.com")
+			.intercept({
+				path: "/2/oauth2/token",
+				method: "POST",
+				body: (body) => {
+					const params = new URLSearchParams(body);
+					return (
+						params.get("grant_type") === "authorization_code" &&
+						params.get("client_id") === "x-public-client-id" &&
+						params.get("code") === "x-authorization-code" &&
+						params.get("code_verifier") === "x-pkce-verifier" &&
+						params.get("redirect_uri") === "https://vault.example/oauth/callback/x" &&
+						!params.has("client_secret")
+					);
+				},
+			})
+			.reply(200, {
+				access_token: "x-access-token",
+				refresh_token: "x-refresh-token",
+				expires_in: 7200,
+				token_type: "bearer",
+				scope: "tweet.read users.read offline.access",
+			});
+
+		const exchange = await request("/api/oauth/token", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				action: "authorization_code",
+				providerId: "x",
+				code: "x-authorization-code",
+				codeVerifier: "x-pkce-verifier",
+				redirectUri: "https://vault.example/oauth/callback/x",
+				scopes: ["tweet.read", "users.read", "offline.access"],
+			}),
+		});
+		expect(exchange.status).toBe(200);
+		expect(await exchange.json()).toEqual({
+			accessToken: "x-access-token",
+			refreshToken: "x-refresh-token",
+			expiresIn: 7200,
+			tokenType: "bearer",
+			scopes: ["tweet.read", "users.read", "offline.access"],
+		});
+
+		fetchMock
+			.get("https://api.x.com")
+			.intercept({
+				path: "/2/oauth2/token",
+				method: "POST",
+				body: (body) => {
+					const params = new URLSearchParams(body);
+					return (
+						params.get("grant_type") === "refresh_token" &&
+						params.get("client_id") === "x-public-client-id" &&
+						params.get("refresh_token") === "x-refresh-token" &&
+						!params.has("client_secret")
+					);
+				},
+			})
+			.reply(200, {
+				access_token: "fresh-x-access-token",
+				refresh_token: "rotated-x-refresh-token",
+				expires_in: 7200,
+				token_type: "bearer",
+				scope: "tweet.read users.read offline.access",
+			});
+
+		const refresh = await request("/api/oauth/token", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				action: "refresh_token",
+				providerId: "x",
+				refreshToken: "x-refresh-token",
+				scopes: ["tweet.read", "users.read", "offline.access"],
+			}),
+		});
+		expect(refresh.status).toBe(200);
+		expect(await refresh.json()).toEqual(expect.objectContaining({
+			accessToken: "fresh-x-access-token",
+			refreshToken: "rotated-x-refresh-token",
+			scopes: ["tweet.read", "users.read", "offline.access"],
+		}));
+	});
+
+	it("inspects X account identity through users/me", async () => {
+		fetchMock
+			.get("https://api.x.com")
+			.intercept({
+				path: "/2/users/me",
+				method: "GET",
+				headers: { authorization: "Bearer x-access-token", accept: "application/json" },
+			})
+			.reply(200, { data: { id: "2244994945", name: "X Developers", username: "XDevelopers" } });
+
+		const response = await request("/api/oauth/identity", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ providerId: "x", accessToken: "x-access-token" }),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({ identity: { subject: "2244994945", label: "XDevelopers" } });
 	});
 
 	it("mints a fresh access token without persisting the plaintext refresh token", async () => {

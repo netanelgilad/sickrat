@@ -2249,7 +2249,7 @@ function AppShell({
 			}
 		}
 		const token = progress.token;
-		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Enable the refresh_token grant on the OAuth client and reconnect.`);
+		if (!token.refreshToken) throw new Error(`${provider.name} did not return a refresh token. Ensure the OAuth client is configured for persistent access and reconnect.`);
 		const requiredGrantedScopes = pending.scopes.filter((scope) => !provider.connectionScopes.includes(scope));
 		if (requiredGrantedScopes.some((scope) => !token.scopes.includes(scope))) throw new Error(`${provider.name} returned fewer scopes than were requested.`);
 		if (!progress.identity) {
@@ -3691,7 +3691,7 @@ function AppShell({
 								onChange={(event) => setOAuthClientIds((current) => ({ ...current, [provider.id]: event.target.value }))}
 								placeholder="Paste the public client ID"
 							/>
-							<ListItem link title="OAuth client setup" subtitle="Authorization code, refresh token, PKCE, and the callback URL above" href={provider.documentationUrl} media={<BookOpen size={22} />} />
+							<ListItem link title="OAuth client setup" subtitle="Authorization code, persistent access, PKCE, and the callback URL above" href={provider.documentationUrl} media={<BookOpen size={22} />} />
 						</List>
 						<Block inset><Button rounded outline disabled={busy} onClick={() => void configureOAuthProvider(provider)}>Save Client</Button></Block>
 						<BlockTitle>Connection</BlockTitle>

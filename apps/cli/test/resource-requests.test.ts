@@ -21,6 +21,18 @@ describe("Sickrat resource URI parsing", () => {
 		});
 	});
 
+	it("recognizes a named X connection with the minimum read scopes", () => {
+		const resource = parseSickratUri("sickrat://oauth/x/personal?scope=tweet.read&scope=users.read");
+		assert.deepEqual(resource, { type: "oauth_token", providerId: "x", connectionName: "personal", scopes: ["tweet.read", "users.read"] });
+		assert.deepEqual(resourceRequestForEnv(resource!, "X_ACCESS_TOKEN"), {
+			type: "oauth_token",
+			providerId: "x",
+			connectionName: "personal",
+			scopes: ["tweet.read", "users.read"],
+			env: "X_ACCESS_TOKEN",
+		});
+	});
+
 	it("keeps provider-only OAuth references as an unambiguous shorthand", () => {
 		assert.deepEqual(parseSickratUri("sickrat://oauth/cloudflare?scope=workers-platform.read"), {
 			type: "oauth_token",

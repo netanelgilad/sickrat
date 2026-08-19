@@ -22,6 +22,7 @@ import { canonicalApprovalPayload, isOAuthReferenceSegment, type ApprovalRequest
 import { parseBrowserSessionReference, parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
 import QRCode from "qrcode";
 import { cloudflareProvisioningScopes } from "./cloudflare-scopes.js";
+import { isCloudflareAuthenticationError, refreshCloudflareOAuth, retryCloudflareAuthentication, shouldRefreshCloudflareOAuth, type CloudflareOAuthState } from "./cloudflare-auth.js";
 import { formatOAuthProvider, parseConnectionReference, parseProviderCommand, providerListLine, providerSetupUrl } from "./oauth-management.js";
 
 type Config = {
@@ -31,15 +32,7 @@ type Config = {
 	signingPrivateKey?: JsonWebKey;
 	signingPublicKey?: JsonWebKey;
 	pairedAt?: string;
-	cloudflare?: {
-		clientId: string;
-		accessToken: string;
-		refreshToken?: string;
-		expiresAt?: string;
-		scope?: string;
-		tokenType: string;
-		loggedInAt: string;
-	};
+	cloudflare?: CloudflareOAuthState;
 	vaults?: Array<{
 		name: string;
 		slug: string;
@@ -179,8 +172,9 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.47";
+const cliVersion = "0.1.48";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
+let cloudflareRefreshPromise: Promise<string> | null = null;
 
 type OAuthConnection = {
 	id: string;
@@ -966,24 +960,61 @@ async function runChild(command: string, args: string[], env: NodeJS.ProcessEnv)
 }
 
 async function readCloudflareApi<T>(path: string, accessToken: string, init: RequestInit = {}) {
-	const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-		...init,
-		headers: {
-			"content-type": "application/json",
-			authorization: `Bearer ${accessToken}`,
-			...(init.headers ?? {}),
-		},
-	});
-	const body = (await response.json()) as {
-		success: boolean;
-		errors?: Array<{ code: number; message: string }>;
-		result: T;
+	type CloudflareApiResult = {
+		response: Response;
+		body: {
+			success: boolean;
+			errors?: Array<{ code: number; message: string }>;
+			result: T;
+		};
 	};
+	const initialAccessToken = await resolveCloudflareAccessToken(accessToken);
+	const { response, body } = await retryCloudflareAuthentication<CloudflareApiResult>({
+		accessToken: initialAccessToken,
+		request: async (requestAccessToken) => {
+			const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+				...init,
+				headers: {
+					"content-type": "application/json",
+					authorization: `Bearer ${requestAccessToken}`,
+					...(init.headers ?? {}),
+				},
+			});
+			const body = (await response.json()) as CloudflareApiResult["body"];
+			return { response, body };
+		},
+		isAuthenticationError: ({ response, body }) => isCloudflareAuthenticationError(response.status, body.errors),
+		refresh: (failedAccessToken) => resolveCloudflareAccessToken(failedAccessToken, true),
+	});
 	if (!response.ok || !body.success) {
 		const message = body.errors?.map((error) => error.message).join("; ") || `Cloudflare API returned ${response.status}`;
 		throw new Error(message);
 	}
 	return body.result;
+}
+
+async function resolveCloudflareAccessToken(accessToken: string, forceRefresh = false) {
+	if (process.env.SICKRAT_CF_ACCESS_TOKEN) return accessToken;
+	const config = await readConfig();
+	const stored = config.cloudflare;
+	if (!stored) return accessToken;
+	if (forceRefresh && stored.accessToken !== accessToken) return stored.accessToken;
+	if (!forceRefresh && !shouldRefreshCloudflareOAuth(stored)) return stored.accessToken;
+	if (!cloudflareRefreshPromise) {
+		cloudflareRefreshPromise = (async () => {
+			const latestConfig = await readConfig();
+			const latest = latestConfig.cloudflare;
+			if (!latest) throw new Error("Cloudflare is not logged in. Run sickrat login first.");
+			if (forceRefresh && latest.accessToken !== accessToken) return latest.accessToken;
+			const refreshed = await refreshCloudflareOAuth(latest);
+			await writeConfig({ ...latestConfig, cloudflare: refreshed });
+			console.error("Refreshed Cloudflare login.");
+			return refreshed.accessToken;
+		})().finally(() => {
+			cloudflareRefreshPromise = null;
+		});
+	}
+	return cloudflareRefreshPromise;
 }
 
 async function queryD1<T>(accountId: string, accessToken: string, databaseId: string, sql: string, params: unknown[] = []) {
@@ -1013,7 +1044,9 @@ async function ensureCloudflareConfig() {
 	if (!config.cloudflare?.accessToken) {
 		throw new Error("Cloudflare is not logged in. Run sickrat login first.");
 	}
-	return { config, cloudflare: config.cloudflare };
+	const accessToken = await resolveCloudflareAccessToken(config.cloudflare.accessToken);
+	const latestConfig = accessToken === config.cloudflare.accessToken ? config : await readConfig();
+	return { config: latestConfig, cloudflare: latestConfig.cloudflare! };
 }
 
 async function cloudflareLogin(args: string[]) {
@@ -1709,6 +1742,7 @@ async function deployVaultWorker(input: {
 	artifact?: WebArtifact;
 	vapid?: { publicKey: string; privateKey: string };
 }) {
+	const accessToken = await resolveCloudflareAccessToken(input.accessToken);
 	const version = input.version ?? cliVersion;
 	const artifact = input.artifact ?? (await resolveWebArtifact());
 	console.error("Preparing vault PWA and Worker bundle...");
@@ -1722,7 +1756,7 @@ async function deployVaultWorker(input: {
 	}
 	console.error("Uploading vault PWA assets...");
 	const assetsJwt = await uploadVaultAssets({
-		accessToken: input.accessToken,
+		accessToken,
 		accountId: input.accountId,
 		scriptName: input.scriptName,
 		clientDir: artifact.clientDir,
@@ -1731,7 +1765,7 @@ async function deployVaultWorker(input: {
 	console.error(`Deploying private vault Worker ${input.scriptName}...`);
 	try {
 		await uploadVaultWorker({
-			accessToken: input.accessToken,
+			accessToken,
 			accountId: input.accountId,
 			scriptName: input.scriptName,
 			d1Id: input.d1Id,
@@ -1743,7 +1777,7 @@ async function deployVaultWorker(input: {
 			assetsJwt,
 			workerDir: artifact.workerDir,
 		});
-		await enableWorkerSubdomain(input.accountId, input.accessToken, input.scriptName);
+		await enableWorkerSubdomain(input.accountId, accessToken, input.scriptName);
 		return vapid;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -2045,8 +2079,9 @@ async function vaultUpdate(args: string[]) {
 		await writeRemoteManifest(vault, cloudflare.accessToken, manifest);
 		await markUpdateStep(vault, cloudflare.accessToken, "write_manifest");
 		const nextVault = { ...vault, r2Name, vapidPublicKey: vapid.publicKey, vapidPrivateKey: vapid.privateKey };
-		const otherVaults = (config.vaults ?? []).filter((existing) => existing.accountId !== vault.accountId || existing.slug !== vault.slug);
-		await writeConfig({ ...config, workerUrl: vault.workerUrl, vaults: [...otherVaults, nextVault] });
+		const latestConfig = await readConfig();
+		const otherVaults = (latestConfig.vaults ?? []).filter((existing) => existing.accountId !== vault.accountId || existing.slug !== vault.slug);
+		await writeConfig({ ...latestConfig, workerUrl: vault.workerUrl, vaults: [...otherVaults, nextVault] });
 		await releaseUpdateLock(vault, cloudflare.accessToken);
 		console.log(`Vault ${vault.name} updated to ${targetVersion}.`);
 		if (willRotateVapid) {

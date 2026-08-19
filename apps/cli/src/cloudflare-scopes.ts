@@ -6,6 +6,7 @@
  * require bucket creation and read/write access during vault provisioning.
  */
 export const cloudflareProvisioningScopes = [
+	"offline_access",
 	"account-settings.read",
 	"user-details.read",
 	"d1.write",

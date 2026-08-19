@@ -5,6 +5,7 @@ import { cloudflareProvisioningScopes } from "../src/cloudflare-scopes.ts";
 describe("Cloudflare provisioning scopes", () => {
 	it("uses the configured R2 write scope alongside every existing provisioning scope", () => {
 		assert.deepEqual(cloudflareProvisioningScopes, [
+			"offline_access",
 			"account-settings.read",
 			"user-details.read",
 			"d1.write",

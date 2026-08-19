@@ -44,7 +44,7 @@ sickrat login
 sickrat vault create default
 ```
 
-`sickrat login` opens Cloudflare OAuth in the user's browser. Let the user complete the login. `sickrat vault create` creates the user's isolated vault resources in their Cloudflare account:
+`sickrat login` opens Cloudflare OAuth in the user's browser and requests `offline_access` so the configured public client can issue a refresh token. Let the user complete the login. The CLI automatically refreshes the stored Cloudflare owner login when the OAuth client issued a refresh token. Do not ask the user to repeat browser login merely because the access token expired; retry `sickrat login` only when Sickrat reports that the refresh grant is unavailable, expired, or revoked. `sickrat vault create` creates the user's isolated vault resources in their Cloudflare account:
 
 - D1 database for encrypted vault records, devices, approvals, and push subscriptions
 - Worker/PWA deployment for the phone console

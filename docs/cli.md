@@ -4,6 +4,8 @@ The CLI should feel familiar to users of tools like the 1Password CLI while addi
 
 ## Commands
 
+Cloudflare owner login requests `offline_access` and uses a short-lived access token plus a refresh token when the configured OAuth client permits the `refresh_token` grant. Sickrat refreshes that access automatically and retries one authentication failure, so normal CLI and vault updates should not repeatedly open browser consent. Run `sickrat login` again only if Cloudflare revoked the authorization, the refresh grant expired, or the OAuth client did not issue a refresh token.
+
 ```sh
 sickrat login
 sickrat vault create [name]

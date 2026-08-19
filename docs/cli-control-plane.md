@@ -19,7 +19,7 @@ sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] -- <command...
 sickrat reveal <ref> [--message <why>]
 ```
 
-`login` uses OAuth authorization code with PKCE and a loopback callback server. Cloudflare's OAuth client API currently documents `authorization_code` and optional `refresh_token` grant types, not device-code. The project client id is the default, and `--client-id` is only for alternate OAuth clients.
+`login` uses OAuth authorization code with PKCE and a loopback callback server. It requests Cloudflare's `offline_access` protocol scope so a client configured for the optional `refresh_token` grant can issue persistent owner access. The project client id is the default, and `--client-id` is only for alternate OAuth clients. The CLI refreshes the stored owner access token shortly before expiry, preserves a refresh token that Cloudflare does not rotate, persists rotated refresh tokens when it does, and retries one Cloudflare API authentication failure after refreshing. A browser login is required again only when no refresh token was issued, the authorization was revoked, or the refresh grant itself has expired.
 
 `vault create` chooses the Cloudflare account automatically when only one account is available. If multiple accounts are available it prompts in an interactive terminal, or accepts `--account-id` in non-interactive agent runs. It currently creates or finds:
 

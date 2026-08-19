@@ -18,10 +18,11 @@ import {
 	type BrowserSessionBundle,
 	type BrowserSessionInput,
 } from "@sickrat/browser-session";
-import { canonicalApprovalPayload, type ApprovalRequestCreate, type BrowserSessionGrant, type EncryptedGrant, type GrantPayload, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
+import { canonicalApprovalPayload, isOAuthReferenceSegment, type ApprovalRequestCreate, type BrowserSessionGrant, type EncryptedGrant, type GrantPayload, type OAuthProvider, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
 import { parseBrowserSessionReference, parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
 import QRCode from "qrcode";
 import { cloudflareProvisioningScopes } from "./cloudflare-scopes.js";
+import { formatOAuthProvider, parseConnectionReference, parseProviderCommand, providerListLine, providerSetupUrl } from "./oauth-management.js";
 
 type Config = {
 	workerUrl?: string;
@@ -178,7 +179,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.46";
+const cliVersion = "0.1.47";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 
 type OAuthConnection = {
@@ -378,8 +379,12 @@ Usage:
   sickrat self update [--yes]
   sickrat update [--yes]
   sickrat pair <worker-url> [--label <name>]
+  sickrat provider list [--json]
+  sickrat provider show <provider> [--json]
+  sickrat provider configure <provider> --client-id <id> [--json]
   sickrat connection list [--all] [--json]
   sickrat connection show <provider>/<name> [--json]
+  sickrat connection connect <provider>/<name>
   sickrat connection rename <provider>/<name> <new-name>
   sickrat connection disconnect <provider>/<name> [--yes]
   sickrat connection reauthorize <provider>/<name>
@@ -395,6 +400,9 @@ Examples:
   sickrat vault status personal
   sickrat vault update personal --dry-run
   sickrat pair https://sickrat-personal.<your-subdomain>.workers.dev
+  sickrat provider show x
+  sickrat provider configure x --client-id <public-client-id>
+  sickrat connection connect x/personal
   sickrat connection list
   sickrat connection disconnect cloudflare/default --yes
   sickrat run --env SERVICE_TOKEN=service/api-token -- npm test
@@ -458,19 +466,33 @@ Usage:
 
 Pairs this machine with an existing Sickrat vault after phone approval.
 `,
+		provider: `sickrat provider
+
+Usage:
+  sickrat provider list [--json]
+  sickrat provider show <provider> [--json]
+  sickrat provider configure <provider> --client-id <id> [--json]
+
+Lists the OAuth provider catalog and displays the same setup metadata as the PWA,
+including callback URL, public client ID, PKCE/persistent-access support, and scope
+risk classifications. Configure saves or replaces a public OAuth client ID; Sickrat's
+current providers are public PKCE clients and do not use client secrets.
+`,
 		connection: `sickrat connection
 
 Usage:
   sickrat connection list [--all] [--json]
   sickrat connection show <provider>/<name> [--json]
+  sickrat connection connect <provider>/<name>
   sickrat connection rename <provider>/<name> <new-name>
   sickrat connection disconnect <provider>/<name> [--yes]
   sickrat connection reauthorize <provider>/<name>
 
 Lists and manages the OAuth connections in the paired vault. Connection details include
 the provider, account identity, granted scopes, timestamps, and last-used time.
-Reauthorization opens the corresponding secure PWA flow because the refresh token stays
-encrypted under the vault key and is never available to the CLI.
+Connect and reauthorize open the corresponding secure PWA flow because OAuth consent and
+the refresh token stay protected by the passkey-unlocked vault key and are never available
+to the CLI.
 `,
 		run: `sickrat run
 
@@ -527,17 +549,45 @@ function formatConnectionTime(value: string | null) {
 	return value ?? "never";
 }
 
-function parseConnectionReference(value: string | undefined) {
-	if (!value) throw new Error("A connection reference in the form <provider>/<name> is required.");
-	const [providerId, connectionName, ...extra] = value.split("/");
-	if (extra.length || !providerId || !connectionName || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(providerId) || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(connectionName)) {
-		throw new Error(`Invalid connection reference: ${value}. Use <provider>/<name>, for example cloudflare/work.`);
-	}
-	return { providerId, connectionName };
-}
-
 function connectionReference(connection: OAuthConnection) {
 	return `${connection.providerId}/${connection.connectionName}`;
+}
+
+async function listOAuthProviders() {
+	const config = await readConfig();
+	if (!config.workerUrl) throw new Error("No paired Sickrat vault is configured. Run sickrat pair <worker-url> first.");
+	return (await api<{ providers: OAuthProvider[] }>(config.workerUrl, "/api/oauth/providers")).providers;
+}
+
+async function findOAuthProvider(providerId: string) {
+	const provider = (await listOAuthProviders()).find((item) => item.id === providerId);
+	if (!provider) throw new Error(`OAuth provider ${providerId} is not supported by this vault.`);
+	return provider;
+}
+
+async function providerCommand(args: string[]) {
+	if (!args[1]) commandHelp("provider");
+	const command = parseProviderCommand(args.slice(1));
+	if (command.action === "list") {
+		const providers = await listOAuthProviders();
+		if (command.json) console.log(JSON.stringify(providers, null, 2));
+		else for (const provider of providers) console.log(providerListLine(provider));
+		return;
+	}
+	if (command.action === "show") {
+		const provider = await findOAuthProvider(command.providerId);
+		if (command.json) console.log(JSON.stringify(provider, null, 2));
+		else console.log(formatOAuthProvider(provider));
+		return;
+	}
+	const config = await readConfig();
+	if (!config.workerUrl) throw new Error("No paired Sickrat vault is configured. Run sickrat pair <worker-url> first.");
+	const result = await api<{ provider: OAuthProvider }>(config.workerUrl, `/api/oauth/providers/${encodeURIComponent(command.providerId)}/config`, {
+		method: "PUT",
+		body: JSON.stringify({ clientId: command.clientId }),
+	});
+	if (command.json) console.log(JSON.stringify(result.provider, null, 2));
+	else console.log(`${result.provider.name} OAuth client configured. Callback URL: ${result.provider.redirectUri}`);
 }
 
 async function listOAuthConnections(includeRevoked: boolean) {
@@ -589,10 +639,20 @@ async function connectionCommand(args: string[]) {
 		if (args.includes("--json")) console.log(JSON.stringify(connection, null, 2)); else printOAuthConnection(connection);
 		return;
 	}
+	if (subcommand === "connect") {
+		if (!args[2] || args.length !== 3) commandHelp("connection");
+		const target = parseConnectionReference(args[2]);
+		await findOAuthProvider(target.providerId);
+		const config = await readConfig();
+		if (!config.workerUrl) throw new Error("No paired Sickrat vault is configured. Run sickrat pair <worker-url> first.");
+		console.log(`Opening the secure connection flow for ${args[2]}.`);
+		openBrowser(providerSetupUrl(config.workerUrl, target.providerId, target.connectionName));
+		return;
+	}
 	if (subcommand === "rename") {
 		const [reference, newName] = [args[2], args[3]];
 		if (!reference || !newName || args.length !== 4) commandHelp("connection");
-		if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(newName)) throw new Error("Connection names must use lowercase letters, numbers, and hyphens.");
+		if (!isOAuthReferenceSegment(newName)) throw new Error("Connection names must use lowercase letters, numbers, and hyphens.");
 		const connection = await findOAuthConnection(reference);
 		const config = await readConfig();
 		const result = await api<{ connection: OAuthConnection }>(config.workerUrl!, `/api/oauth/connections/${encodeURIComponent(connection.id)}/name`, { method: "POST", body: JSON.stringify({ connectionName: newName }) });
@@ -2689,7 +2749,8 @@ async function main() {
 			if (command === "login") commandHelp("login");
 			if (command === "vault" && args[1] === "create") commandHelp("vault create");
 			if (command === "vault" && args[1] === "status") commandHelp("vault status");
-		if (command === "vault" && args[1] === "update") commandHelp("vault update");
+			if (command === "vault" && args[1] === "update") commandHelp("vault update");
+			if (command === "provider") commandHelp("provider");
 			if (command === "connection") commandHelp("connection");
 			if (command === "self" && args[1] === "update") commandHelp("self update");
 			if (command === "update") commandHelp("update");
@@ -2707,6 +2768,7 @@ async function main() {
 		if (command === "self" && args[1] === "update") return await selfUpdate(args);
 		if (command === "update") return await updateAll(args);
 		if (command === "pair") return await pair(args);
+		if (command === "provider") return await providerCommand(args);
 		if (command === "connection") return await connectionCommand(args);
 		if (command === "run") return await runWithSecrets(args);
 		if (command === "browser-session") return await browserSessionCommand(args);

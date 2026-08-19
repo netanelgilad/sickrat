@@ -14,8 +14,13 @@ sickrat vault use <vault>
 sickrat self update [--yes]
 sickrat update [--yes]
 
+sickrat provider list [--json]
+sickrat provider show <provider> [--json]
+sickrat provider configure <provider> --client-id <id> [--json]
+
 sickrat connection list [--all] [--json]
 sickrat connection show <provider>/<name> [--json]
+sickrat connection connect <provider>/<name>
 sickrat connection rename <provider>/<name> <new-name>
 sickrat connection disconnect <provider>/<name> [--yes]
 sickrat connection reauthorize <provider>/<name>
@@ -59,7 +64,7 @@ The optional path after the provider is the connection name configured in the PW
 
 The CLI recognizes these descriptors in direct `--env` mappings and env files. It sends a signed typed request, waits for PWA approval, decrypts the sealed access-token grant, validates provider/scopes/expiry, and injects the token into the named environment variable. Refresh tokens never leave the encrypted vault connection.
 
-Cloudflare and X are supported providers. In the PWA, open **Connections**, choose the provider, configure its public OAuth client, and connect an account. Both clients use authorization code with PKCE (`S256`) and token endpoint authentication `none`; Cloudflare uses the `refresh_token` grant, while X uses `offline.access` to issue a refresh token. Register the exact provider-specific callback URL shown by the PWA.
+Cloudflare and X are supported providers. Use `sickrat provider show <provider>` to inspect the callback URL, setup documentation, PKCE/persistent-access support, and scope risk metadata. Save the public OAuth client ID with `sickrat provider configure <provider> --client-id <id>`, or configure the same field from **Connections** in the PWA. Both clients use authorization code with PKCE (`S256`) and token endpoint authentication `none`; Cloudflare uses the `refresh_token` grant, while X uses `offline.access` to issue a refresh token. Register the exact provider-specific callback URL shown by either interface.
 
 For an X personal-brand workflow, research and draft preparation need only `tweet.read` and `users.read`:
 
@@ -75,6 +80,19 @@ sickrat://oauth/x/personal?scope=tweet.read&scope=users.read&scope=tweet.write
 
 Before connecting X, create a Project and App in the X Developer Console, enable OAuth 2.0 user authentication, configure it as a public client, register the callback URL copied from Sickrat, and allow the read permissions. Enable write permission only if publishing is intended. Save the public Client ID in Sickrat; do not enter or store an X client secret.
 
+## `provider`
+
+`sickrat provider` inspects and configures the built-in OAuth provider catalog. Provider metadata and client IDs are non-secret, so list, show, and configure are available from both the CLI and PWA without unlocking the vault key.
+
+```sh
+sickrat provider list
+sickrat provider show x
+sickrat provider show cloudflare --json
+sickrat provider configure x --client-id <public-client-id>
+```
+
+`show` includes the callback URL, current configuration state, authorization endpoint, setup documentation, identity/persistence scopes, and every supported scope with its risk classification. `configure` saves or replaces the public client ID and returns the callback URL. Current providers are public PKCE clients; Sickrat does not accept or store a client secret for them. Provider definitions themselves remain part of the versioned Sickrat catalog rather than user-created runtime records.
+
 ## `connection`
 
 `sickrat connection` manages OAuth connections in the paired vault. `list` and `show` expose the same PWA data, including account identity, scopes, creation and update timestamps, and last-used time. Use `--json` for scriptable output and `--all` to include disconnected records.
@@ -82,11 +100,12 @@ Before connecting X, create a Project and App in the X Developer Console, enable
 ```sh
 sickrat connection list
 sickrat connection show cloudflare/work
+sickrat connection connect x/personal
 sickrat connection rename cloudflare/work production
 sickrat connection disconnect cloudflare/default --yes
 ```
 
-`reauthorize` opens the PWA detail flow. It remains browser-based because the refresh token is unlocked only with the vault key and is never supplied to the CLI.
+`connect` opens the PWA provider flow with the requested connection name prefilled. `reauthorize` opens the PWA detail flow. OAuth consent and both operations remain browser-based because only the PWA unlocks the vault key used to encrypt or replace the refresh token; the refresh token is never supplied to the CLI.
 
 For Atlas Status Cloudflare provisioning, request the narrow Worker and D1 write scopes (and replace the command after `--` with the actual setup command):
 

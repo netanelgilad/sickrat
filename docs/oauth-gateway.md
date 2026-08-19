@@ -208,7 +208,7 @@ The browser callback relay is separate from token exchange. Its D1 record expire
 
 Provider OAuth apps are a separate product concern from vault ownership.
 
-V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL from the PWA into that client, and stores the public client ID from the Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant. X requires OAuth 2.0 user authentication, a public client, the exact X callback URL shown by Sickrat, PKCE `S256`, and `offline.access` for refresh tokens. The X app needs read permission for drafting and should enable write permission only when the user intends to approve publishing requests.
+V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL shown by `sickrat provider show <provider>` or the PWA into that client, and stores the public client ID with `sickrat provider configure <provider> --client-id <id>` or the matching Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant. X requires OAuth 2.0 user authentication, a public client, the exact X callback URL shown by Sickrat, PKCE `S256`, and `offline.access` for refresh tokens. The X app needs read permission for drafting and should enable write permission only when the user intends to approve publishing requests.
 
 A proactive connection requests only the provider's minimum identity scopes. Operational scopes come from an agent request and are authorized just in time. If an existing connection does not cover the requested scopes, the approval flow performs step-up authorization and replaces the encrypted refresh credential with the newly granted scope set. The provider-side OAuth client must still allow every scope Sickrat may request; that allowlist defines the client's maximum capability, while each authorization request and user consent define the connection's actual capability.
 
@@ -261,18 +261,25 @@ The dashboard should include "Connections" next to Secrets, Grants, and Machines
 
 ## CLI UX
 
-Recommended commands:
+Provider and connection management commands:
 
 ```sh
-sickrat providers
-sickrat connections
+sickrat provider list [--json]
+sickrat provider show <provider> [--json]
+sickrat provider configure <provider> --client-id <id> [--json]
+sickrat connection list [--all] [--json]
+sickrat connection show <provider>/<name> [--json]
+sickrat connection connect <provider>/<name>
+sickrat connection rename <provider>/<name> <new-name>
+sickrat connection disconnect <provider>/<name> [--yes]
+sickrat connection reauthorize <provider>/<name>
 sickrat run --env ENV='sickrat://oauth/provider?scope=scope-a&scope=scope-b' -- <command...>
 sickrat run --env-file <file> -- <command...>
 ```
 
-`sickrat providers` can list catalog support and whether a connection exists without revealing token values.
+`sickrat provider list/show` expose the same non-secret catalog, callback, configuration, and scope-risk metadata as the PWA. `provider configure` saves or replaces only the public client ID; it does not accept a client secret.
 
-`sickrat connections` can show provider/account/scope metadata. It should not require vault unlock because the metadata is non-secret, but it should be clear that a listed connection does not imply access without approval.
+`sickrat connection list/show` expose provider/account/scope metadata. They do not require vault unlock because the metadata is non-secret, but a listed connection does not imply access without approval. `connection connect` and `connection reauthorize` hand off to the PWA because OAuth consent and refresh-token encryption require the passkey-unlocked vault key.
 
 Timed local grants should work like secret grants. The CLI may cache approved access tokens encrypted until either the approved access window or the provider token expiry, whichever comes first. It must not cache refresh tokens.
 

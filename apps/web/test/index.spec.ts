@@ -190,6 +190,17 @@ describe("OAuth gateway Worker API", () => {
 		expect(body.provider).toEqual(expect.objectContaining({ clientId: "gateway-client-id", configured: true }));
 	});
 
+	it("rejects invalid provider client IDs", async () => {
+		for (const clientId of ["", " leading-space", "trailing-space ", "x".repeat(513)]) {
+			const response = await request("/api/oauth/providers/x/config", {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ clientId }),
+			});
+			expect(response.status).toBe(400);
+		}
+	});
+
 	it("relays a browser callback to the PWA as a one-time encrypted handoff", async () => {
 		const handoffId = "handoff_abcdefghijklmnop";
 		const handoffKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);

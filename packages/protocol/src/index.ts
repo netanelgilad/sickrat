@@ -1,3 +1,34 @@
+export const oauthReferenceSegmentPattern = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+
+export function isOAuthReferenceSegment(value: string) {
+	return oauthReferenceSegmentPattern.test(value);
+}
+
+export type OAuthScopeRisk = "low" | "medium" | "high" | "sensitive";
+
+export type OAuthScopeDefinition = {
+	id: string;
+	label: string;
+	description: string;
+	risk: OAuthScopeRisk;
+};
+
+export type OAuthProvider = {
+	id: string;
+	name: string;
+	description: string;
+	authorizationEndpoint: string;
+	documentationUrl: string;
+	identityScopes: string[];
+	connectionScopes: string[];
+	scopes: OAuthScopeDefinition[];
+	supportsPkce: boolean;
+	supportsRefreshToken: boolean;
+	clientId: string | null;
+	configured: boolean;
+	redirectUri: string;
+};
+
 export type PairingCodeRequest = {
 	label: string;
 	publicKey: JsonWebKey;

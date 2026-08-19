@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { isOAuthReferenceSegment, type OAuthProvider } from "@sickrat/protocol";
 import { describeOAuthApprovalBlocker, matchingOAuthConnection as findMatchingOAuthConnection, matchingOAuthConnections as findMatchingOAuthConnections } from "./oauth-approval";
+import { oauthConnectionNameFromSearch, oauthScopeRiskLabel } from "./oauth-routing";
 import { createRoot } from "react-dom/client";
 import {
 	QueryClient,
@@ -53,7 +55,7 @@ import {
 	Sparkles,
 	Unplug,
 } from "lucide-react";
-import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { BrowserRouter, Link, Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useRegisterSW } from "virtual:pwa-register/react";
 import "./styles.css";
 
@@ -161,29 +163,6 @@ type SecretCiphertext = SecretMetadata & {
 	ciphertext: string;
 	iv: string;
 	salt: string;
-};
-
-type OAuthScopeDefinition = {
-	id: string;
-	label: string;
-	description: string;
-	risk: "low" | "medium" | "high" | "sensitive";
-};
-
-type OAuthProvider = {
-	id: string;
-	name: string;
-	description: string;
-	authorizationEndpoint: string;
-	documentationUrl: string;
-	identityScopes: string[];
-	connectionScopes: string[];
-	scopes: OAuthScopeDefinition[];
-	supportsPkce: boolean;
-	supportsRefreshToken: boolean;
-	clientId: string | null;
-	configured: boolean;
-	redirectUri: string;
 };
 
 type OAuthConnection = {
@@ -1512,7 +1491,14 @@ function ConnectionDetailRoute() {
 
 function ProviderSetupRoute() {
 	const params = useParams();
-	return <AppShell route="provider-setup" providerSetupId={params.providerId} />;
+	const [searchParams] = useSearchParams();
+	return (
+		<AppShell
+			route="provider-setup"
+			providerSetupId={params.providerId}
+			providerConnectionName={oauthConnectionNameFromSearch(searchParams)}
+		/>
+	);
 }
 
 function OAuthAuthorizationActions({
@@ -1546,6 +1532,7 @@ function AppShell({
 	callbackProviderId,
 	connectionId,
 	providerSetupId,
+	providerConnectionName,
 }: {
 	route: AppRoute;
 	requestId?: string;
@@ -1553,6 +1540,7 @@ function AppShell({
 	callbackProviderId?: string;
 	connectionId?: string;
 	providerSetupId?: string;
+	providerConnectionName?: string;
 }) {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -1560,7 +1548,7 @@ function AppShell({
 	const [subscription, setSubscription] = useState<PushRecord | null>(null);
 	const [approvalFilter, setApprovalFilter] = useState<ApprovalRequest["status"] | "all">("pending");
 	const [oauthClientIds, setOAuthClientIds] = useState<Record<string, string>>({});
-	const [oauthConnectionName, setOAuthConnectionName] = useState("");
+	const [oauthConnectionName, setOAuthConnectionName] = useState(providerConnectionName ?? "");
 	const [editedOAuthConnectionName, setEditedOAuthConnectionName] = useState("");
 	const [copiedOAuthCallbackProviderId, setCopiedOAuthCallbackProviderId] = useState<string | null>(null);
 	const [oauthAuthorization, setOAuthAuthorization] = useState<OAuthAuthorization | null>(null);
@@ -2303,7 +2291,7 @@ function AppShell({
 
 	async function connectOAuthProvider(providerId: string, connectionName: string, requestedScopes: string[], redirectTo = "/connections") {
 		const provider = oauthProviders.find((item) => item.id === providerId);
-		if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(connectionName)) {
+		if (!isOAuthReferenceSegment(connectionName)) {
 			setOAuthStatus("Connection names must use lowercase letters, numbers, and hyphens.");
 			return;
 		}
@@ -2387,7 +2375,7 @@ function AppShell({
 
 	async function renameOAuthConnection(connection: OAuthConnection) {
 		const connectionName = editedOAuthConnectionName.trim();
-		if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(connectionName)) {
+		if (!isOAuthReferenceSegment(connectionName)) {
 			setOAuthStatus("Connection names must use lowercase letters, numbers, and hyphens.");
 			return;
 		}
@@ -3694,6 +3682,17 @@ function AppShell({
 							<ListItem link title="OAuth client setup" subtitle="Authorization code, persistent access, PKCE, and the callback URL above" href={provider.documentationUrl} media={<BookOpen size={22} />} />
 						</List>
 						<Block inset><Button rounded outline disabled={busy} onClick={() => void configureOAuthProvider(provider)}>Save Client</Button></Block>
+						<BlockTitle>Available API Scopes</BlockTitle>
+						<List strong inset>
+							{provider.scopes.map((scope) => (
+								<ListItem
+									key={scope.id}
+									title={scope.label}
+									subtitle={`${scope.id} · ${scope.description}`}
+									after={oauthScopeRiskLabel(scope.risk)}
+								/>
+							))}
+						</List>
 						<BlockTitle>Connection</BlockTitle>
 						<List strong inset>
 							<ListInput

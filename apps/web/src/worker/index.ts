@@ -1,3 +1,4 @@
+import { isOAuthReferenceSegment } from "@sickrat/protocol";
 import {
 	exchangeOAuthAuthorizationCode,
 	getOAuthProvider,
@@ -1021,8 +1022,8 @@ function isValidResourceRequest(request: unknown): request is ApprovalResourceRe
 	return (
 		candidate.type === "oauth_token" &&
 		typeof candidate.providerId === "string" &&
-		/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(candidate.providerId) &&
-		(candidate.connectionName === undefined || (typeof candidate.connectionName === "string" && /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(candidate.connectionName))) &&
+		isOAuthReferenceSegment(candidate.providerId) &&
+		(candidate.connectionName === undefined || (typeof candidate.connectionName === "string" && isOAuthReferenceSegment(candidate.connectionName))) &&
 		typeof candidate.env === "string" &&
 		Array.isArray(candidate.scopes) &&
 		candidate.scopes.length > 0 &&
@@ -1174,7 +1175,7 @@ function isValidOAuthConnectionInput(input: OAuthConnectionInput) {
 		typeof input.providerId === "string" &&
 		Boolean(getOAuthProvider(input.providerId)) &&
 		typeof input.connectionName === "string" &&
-		/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(input.connectionName) &&
+		isOAuthReferenceSegment(input.connectionName) &&
 		typeof input.accountLabel === "string" &&
 		input.accountLabel.trim() === input.accountLabel &&
 		input.accountLabel.length > 0 &&
@@ -1687,7 +1688,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const id = decodeURIComponent(oauthConnectionMatch[1]);
 		const body = (await request.json()) as { connectionName?: string };
-		if (typeof body.connectionName !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(body.connectionName)) {
+		if (typeof body.connectionName !== "string" || !isOAuthReferenceSegment(body.connectionName)) {
 			return json({ error: "Connection names must use lowercase letters, numbers, and hyphens." }, { status: 400 });
 		}
 		const existing = await env.DB.prepare("SELECT provider_id FROM oauth_connections WHERE id = ? AND revoked_at IS NULL").bind(id).first<{ provider_id: string }>();

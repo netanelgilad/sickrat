@@ -185,6 +185,21 @@ sickrat run \
 
 Only update local config to the new ref after the provider confirms the password change succeeded.
 
+## Managing OAuth Providers
+
+Inspect and configure the same non-secret provider metadata available in the PWA:
+
+```sh
+sickrat provider list
+sickrat provider show x
+sickrat provider configure x --client-id <public-client-id>
+sickrat connection connect x/personal
+```
+
+`provider show` returns the callback URL, setup documentation, PKCE and persistent-access support, plus scope labels and risk classifications. `provider configure` saves or replaces only a public client ID. Cloudflare and X are public PKCE clients in Sickrat and do not use a client secret. Provider definitions remain in Sickrat's versioned catalog; these commands configure a catalog provider rather than creating arbitrary provider endpoints.
+
+`connection connect` opens the secure PWA flow with the connection name prefilled. Account connection and reauthorization intentionally remain PWA flows because only the passkey-unlocked PWA can encrypt or replace the refresh token with the vault key.
+
 ## Requesting OAuth Access
 
 Cloudflare and X are supported OAuth providers. Request an access token through the existing `sickrat run` environment flow with a `sickrat://oauth/<provider>/<connection-name>` descriptor and one or more explicit `scope` parameters:
@@ -216,7 +231,7 @@ sickrat run \
 
 Use CLI version `0.1.35` or newer for named OAuth connections. Keep non-sensitive values such as `CF_ACCOUNT_ID` in the normal process environment or env file.
 
-The user manages provider accounts from **Connections** in the installed PWA. It is valid to request Cloudflare or X access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
+The user manages provider accounts from **Connections** in the installed PWA or inspects/configures non-secret provider metadata with the CLI commands above. It is valid to request Cloudflare or X access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
 
 If the approval button is disabled for an OAuth request, read the blocker shown on the approval screen. It names missing canonical scope IDs or reports the provider connection error. Do not repeatedly request broader scopes to work around an OAuth client whose allowed-scope configuration is incomplete.
 

@@ -923,6 +923,44 @@ function getPasskeyVaultRecord() {
 	return stored ? (JSON.parse(stored) as PasskeyVaultRecord) : null;
 }
 
+function isBase64UrlText(value: unknown) {
+	return typeof value === "string" && value.length > 0 && /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+// Recovery records contain only non-secret material: the credential ID, the
+// public PRF salt, and the encrypted vault key. They are safe to display and
+// copy between a user's own devices; without a PRF ceremony they unlock nothing.
+function isPasskeyVaultRecord(value: unknown): value is PasskeyVaultRecord {
+	if (!value || typeof value !== "object") return false;
+	const record = value as Record<string, unknown>;
+	return (
+		isBase64UrlText(record.credentialId) &&
+		isBase64UrlText(record.salt) &&
+		isBase64UrlText(record.iv) &&
+		isBase64UrlText(record.wrappedKey)
+	);
+}
+
+function exportPasskeyVaultRecord() {
+	const record = getPasskeyVaultRecord();
+	return record && isPasskeyVaultRecord(record) ? JSON.stringify(record) : null;
+}
+
+function parsePasskeyVaultRecord(json: string) {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json.trim());
+	} catch {
+		throw new Error("That is not valid JSON. Paste the full recovery details object.");
+	}
+	if (!isPasskeyVaultRecord(parsed)) throw new Error("That object is not a vault recovery record (need credentialId, salt, iv, wrappedKey).");
+	return parsed;
+}
+
+function savePasskeyVaultRecord(record: PasskeyVaultRecord) {
+	localStorage.setItem(passkeyVaultStorageKey, JSON.stringify(record));
+}
+
 async function derivePasskeyWrappingKey(prfOutput: BufferSource) {
 	const baseKey = await crypto.subtle.importKey("raw", prfOutput, "HKDF", false, ["deriveKey"]);
 	return crypto.subtle.deriveKey(
@@ -1043,10 +1081,8 @@ async function createPasskeyWrappedVaultKey(existingKey?: CryptoKey | null) {
 	return vaultKey;
 }
 
-async function unlockPasskeyVaultKey() {
-	const record = getPasskeyVaultRecord();
-	if (!record) return null;
-
+async function unlockVaultKeyWithRecord(record: PasskeyVaultRecord) {
+	if (!isPasskeyVaultRecord(record)) throw new Error("That vault recovery record is malformed.");
 	const challenge = new Uint8Array(32);
 	crypto.getRandomValues(challenge);
 	const saltBytes = base64UrlToUint8Array(record.salt);
@@ -1120,6 +1156,19 @@ async function unlockPasskeyVaultKey() {
 	}
 	const wrappingKey = await derivePasskeyWrappingKey(prfOutput);
 	return unwrapVaultKey(record, wrappingKey);
+}
+
+async function unlockPasskeyVaultKey() {
+	const record = getPasskeyVaultRecord();
+	if (!record) return null;
+	return unlockVaultKeyWithRecord(record);
+}
+
+async function rewrapVaultKeyWithNewPasskey(vaultKey: CryptoKey) {
+	const newKey = await createPasskeyWrappedVaultKey(vaultKey);
+	const record = getPasskeyVaultRecord();
+	if (!record) throw new Error("The new passkey record was not saved on this device.");
+	return { key: newKey, record };
 }
 
 async function getVaultKeyFingerprint(key: CryptoKey) {
@@ -1569,6 +1618,137 @@ function ProviderSetupRoute() {
 	);
 }
 
+// Cross-device passkey migration. Runs entirely in the browser: paste the old
+// device's recovery record, unlock the existing vault key with the old
+// credential, then wrap the SAME key under a newly created credential (for
+// example an iCloud Keychain passkey that syncs to the locked device). The
+// vault key itself is never displayed. Deliberately reachable without the
+// installed-PWA gate (see the /recover route): recovery may need a desktop
+// browser, and WebAuthn ceremonies cannot run in the CLI, so no CLI parity
+// exists for this flow by platform constraint.
+function RecoverPage() {
+	const [recordText, setRecordText] = useState("");
+	const [recoveredKey, setRecoveredKey] = useState<CryptoKey | null>(null);
+	const [verifiedRefs, setVerifiedRefs] = useState<string | null>(null);
+	const [migratedRecordText, setMigratedRecordText] = useState("");
+	const [recoverStatus, setRecoverStatus] = useState(
+		"Paste the old device's vault recovery details, unlock with the old passkey, then wrap the same key under a new passkey.",
+	);
+	const [busyRecover, setBusyRecover] = useState(false);
+	const [copiedMigrated, setCopiedMigrated] = useState(false);
+
+	async function unlockOldKey() {
+		setBusyRecover(true);
+		setVerifiedRefs(null);
+		try {
+			const record = parsePasskeyVaultRecord(recordText);
+			setRecoverStatus("Requesting the old passkey (choose the provider that holds it)...");
+			const key = await unlockVaultKeyWithRecord(record);
+			setRecoveredKey(key);
+			setRecoverStatus("Old vault key recovered. Verifying against stored refs...");
+			try {
+				const refs = await api.listSecrets();
+				if (refs.length === 0) {
+					setVerifiedRefs("This vault holds no secret refs, so there was nothing to verify against. Approvals will confirm the migration.");
+				} else {
+					const first = refs[0];
+					const resolved = await api.resolveSecrets([first.ref]);
+					await decryptSecretValue(resolved[0], key);
+					setVerifiedRefs(`Verified: decrypted ${first.ref} plus ${refs.length - 1} more ref(s) readable with this key. Values never shown.`);
+				}
+			} catch (error) {
+				setVerifiedRefs(`Warning: could not verify against stored refs (${friendlyError(error, "verification failed")}). Do not migrate yet.`);
+			}
+			setRecoverStatus("Old vault key recovered in memory. Create the new passkey next.");
+		} catch (error) {
+			setRecoverStatus(friendlyError(error, "Could not unlock with the old record."));
+		} finally {
+			setBusyRecover(false);
+		}
+	}
+
+	async function createMigratedPasskey() {
+		if (!recoveredKey) {
+			setRecoverStatus("Recover the old vault key first.");
+			return;
+		}
+		setBusyRecover(true);
+		try {
+			setRecoverStatus("Creating the new passkey — choose the provider that syncs to the locked device (for example iCloud Keychain)...");
+			const { record } = await rewrapVaultKeyWithNewPasskey(recoveredKey);
+			setMigratedRecordText(JSON.stringify(record));
+			setRecoverStatus("Same vault key, new wrapping. Import the record below on the locked device, then unlock there with the new passkey.");
+		} catch (error) {
+			setRecoverStatus(friendlyError(error, "Could not create the migrated passkey."));
+		} finally {
+			setBusyRecover(false);
+		}
+	}
+
+	async function copyMigrated() {
+		try {
+			await navigator.clipboard.writeText(migratedRecordText);
+			setCopiedMigrated(true);
+			window.setTimeout(() => setCopiedMigrated(false), 2_000);
+		} catch {
+			setCopiedMigrated(false);
+		}
+	}
+
+	return (
+		<Page>
+			<Navbar title="Sickrat" subtitle="Passkey migration" />
+			<Block strong inset>
+				<h1 className="m-0 text-3xl font-bold leading-tight">Move the vault key to a new passkey.</h1>
+				<p className="mb-0 text-black/55 dark:text-white/55">
+					For when the old credential cannot return PRF on some device. The same key gets re-wrapped; secrets, connections, and sessions stay readable.
+				</p>
+			</Block>
+			<BlockTitle>1 · Recover the old key</BlockTitle>
+			<List strong inset>
+				<ListInput
+					label="Old recovery record"
+					type="textarea"
+					autoCapitalize="none"
+					autoComplete="off"
+					placeholder='{"credentialId":"...","salt":"...","iv":"...","wrappedKey":"..."}'
+					value={recordText}
+					onChange={(event) => setRecordText(event.target.value)}
+				/>
+			</List>
+			<Block inset>
+				<Button rounded type="button" disabled={busyRecover || !recordText.trim()} onClick={unlockOldKey}>
+					Unlock Old Key
+				</Button>
+			</Block>
+			<BlockTitle>2 · Wrap it under a new passkey</BlockTitle>
+			<Block inset>
+				<Button rounded type="button" disabled={busyRecover || !recoveredKey} onClick={createMigratedPasskey}>
+					Create New Passkey
+				</Button>
+				{verifiedRefs ? <p className="text-sm text-black/55 dark:text-white/55">{verifiedRefs}</p> : null}
+			</Block>
+			{migratedRecordText ? (
+				<>
+					<BlockTitle>3 · Import on the locked device</BlockTitle>
+					<List strong inset>
+						<ListInput label="Migrated record" type="textarea" readOnly value={migratedRecordText} />
+					</List>
+					<Block inset className="grid grid-cols-2 gap-3">
+						<Button rounded outline type="button" onClick={copyMigrated}>
+							{copiedMigrated ? "Copied" : "Copy Record"}
+						</Button>
+						<Button rounded outline component="a" href="/settings">
+							Open Settings
+						</Button>
+					</Block>
+				</>
+			) : null}
+			<Block inset className="text-center text-sm text-black/45 dark:text-white/45">{recoverStatus}</Block>
+		</Page>
+	);
+}
+
 function OAuthAuthorizationActions({
 	authorization,
 	providerName,
@@ -1649,6 +1829,10 @@ function AppShell({
 	const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [navigationOpen, setNavigationOpen] = useState(false);
+	const [showRecoveryDetails, setShowRecoveryDetails] = useState(false);
+	const [recoveryCopyStatus, setRecoveryCopyStatus] = useState("");
+	const [migrationImportText, setMigrationImportText] = useState("");
+	const [migrationImportStatus, setMigrationImportStatus] = useState("");
 	const edgeSwipeRef = useRef<{ x: number; y: number } | null>(null);
 	const oauthCallbackStartedRef = useRef(false);
 	const oauthEnabled = ["connections", "connection-add", "connection-detail", "provider-setup", "approval", "app"].includes(route);
@@ -2959,6 +3143,41 @@ function AppShell({
 		setSecretStatus("Vault key removed from this browser. Existing secrets cannot be decrypted here until recovery exists.");
 	}
 
+	async function copyRecoveryRecord() {
+		const exported = exportPasskeyVaultRecord();
+		if (!exported) {
+			setRecoveryCopyStatus("No passkey record on this device to export.");
+			return;
+		}
+		try {
+			await navigator.clipboard.writeText(exported);
+			setRecoveryCopyStatus("Recovery record copied. It holds no key material, only the wrapped key.");
+		} catch {
+			setRecoveryCopyStatus("Copy failed. Select the text manually.");
+		}
+	}
+
+	function importMigratedRecord() {
+		setMigrationImportStatus("");
+		let record: PasskeyVaultRecord;
+		try {
+			record = parsePasskeyVaultRecord(migrationImportText);
+		} catch (error) {
+			setMigrationImportStatus(friendlyError(error, "Import failed."));
+			return;
+		}
+		if (
+			getPasskeyVaultRecord() &&
+			!window.confirm("Replace this device's passkey record with the migrated one? The current record stops working here.")
+		) {
+			return;
+		}
+		savePasskeyVaultRecord(record);
+		setVaultKey(null);
+		setMigrationImportText("");
+		setMigrationImportStatus("Migrated record saved. Unlock with the new passkey.");
+	}
+
 	async function saveSecret(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!vaultKey) {
@@ -3388,23 +3607,66 @@ function AppShell({
 						media={<LockKeyhole size={22} />}
 					/>
 				</List>
-				<Block inset>
-					{vaultKey ? (
-						<Button rounded outline type="button" disabled={busy} onClick={resetVaultKey}>
-							Reset Key
+			<Block inset>
+				{vaultKey ? (
+					<Button rounded outline type="button" disabled={busy} onClick={resetVaultKey}>
+						Reset Key
+					</Button>
+				) : getPasskeyVaultRecord() ? (
+					<Button rounded type="button" disabled={busy} onClick={unlockVaultKey}>
+						Unlock
+					</Button>
+				) : (
+					<Button rounded type="button" disabled={busy} onClick={setupVaultKey}>
+						Create Passkey
+					</Button>
+				)}
+			</Block>
+			<BlockTitle>Passkey Migration</BlockTitle>
+			<List strong inset>
+				<ListItem
+					title="Recovery details"
+					subtitle="Credential ID, salt, and wrapped key. Safe to copy between your own devices; they unlock nothing without a passkey ceremony."
+					media={<KeyRound size={22} />}
+				/>
+			</List>
+			{getPasskeyVaultRecord() ? (
+				<>
+					{showRecoveryDetails && exportPasskeyVaultRecord() ? (
+						<List strong inset>
+							<ListInput label="Recovery record" type="textarea" readOnly value={exportPasskeyVaultRecord() ?? ""} />
+						</List>
+					) : null}
+					<Block inset className="grid grid-cols-2 gap-3">
+						<Button rounded outline type="button" onClick={() => setShowRecoveryDetails((current) => !current)}>
+							{showRecoveryDetails ? "Hide" : "Show"}
 						</Button>
-					) : getPasskeyVaultRecord() ? (
-						<Button rounded type="button" disabled={busy} onClick={unlockVaultKey}>
-							Unlock
+						<Button rounded outline type="button" onClick={copyRecoveryRecord}>
+							Copy Record
 						</Button>
-					) : (
-						<Button rounded type="button" disabled={busy} onClick={setupVaultKey}>
-							Create Passkey
-						</Button>
-					)}
-				</Block>
-			</>
-		);
+					</Block>
+					{recoveryCopyStatus ? <Block inset className="text-center text-sm text-black/45 dark:text-white/45">{recoveryCopyStatus}</Block> : null}
+				</>
+			) : null}
+			<List strong inset>
+				<ListInput
+					label="Migrated record"
+					type="textarea"
+					autoCapitalize="none"
+					autoComplete="off"
+					placeholder='Paste a record produced by /recover, then save it here.'
+					value={migrationImportText}
+					onChange={(event) => setMigrationImportText(event.target.value)}
+				/>
+			</List>
+			<Block inset>
+				<Button rounded outline type="button" disabled={busy || !migrationImportText.trim()} onClick={importMigratedRecord}>
+					Save Migrated Record
+				</Button>
+			</Block>
+			{migrationImportStatus ? <Block inset className="text-center text-sm text-black/45 dark:text-white/45">{migrationImportStatus}</Block> : null}
+		</>
+	);
 
 		const renderSecretForm = () => (
 			<form onSubmit={saveSecret}>
@@ -4063,9 +4325,16 @@ function App() {
 
 	return (
 		<KonstaApp theme="ios" safeAreas>
-			<InstalledPwaGate>
-				<PwaUpdatePrompt />
-				<Routes>
+			<Routes>
+				{/* Recovery must work in desktop browsers that are never installed,
+				so it renders outside the home-screen gate. See RecoverPage. */}
+				<Route path="/recover" element={<RecoverPage />} />
+				<Route
+					path="*"
+					element={
+						<InstalledPwaGate>
+							<PwaUpdatePrompt />
+							<Routes>
 					<Route path="/" element={<AppShell route="app" />} />
 					<Route path="/login" element={<AppShell route="login" />} />
 					<Route path="/vaults" element={<AppShell route="vaults" />} />
@@ -4093,8 +4362,11 @@ function App() {
 					<Route path="/app/settings" element={<Navigate to="/settings" replace />} />
 					<Route path="/pair" element={<Navigate to="/devices" replace />} />
 					<Route path="*" element={<Navigate to="/" replace />} />
-				</Routes>
-			</InstalledPwaGate>
+							</Routes>
+						</InstalledPwaGate>
+					}
+				/>
+			</Routes>
 		</KonstaApp>
 	);
 }

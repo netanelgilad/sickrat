@@ -923,7 +923,7 @@ function getPasskeyVaultRecord() {
 	return stored ? (JSON.parse(stored) as PasskeyVaultRecord) : null;
 }
 
-async function derivePasskeyWrappingKey(prfOutput: ArrayBuffer) {
+async function derivePasskeyWrappingKey(prfOutput: BufferSource) {
 	const baseKey = await crypto.subtle.importKey("raw", prfOutput, "HKDF", false, ["deriveKey"]);
 	return crypto.subtle.deriveKey(
 		{ name: "HKDF", hash: "SHA-256", salt: passkeyWrapSalt, info: passkeyWrapInfo },
@@ -939,11 +939,32 @@ function getPrfOutput(credential: PublicKeyCredential) {
 		prf?: {
 			enabled?: boolean;
 			results?: {
-				first?: ArrayBuffer;
+				first?: ArrayBuffer | Uint8Array | null;
 			};
 		};
 	};
-	return results.prf?.results?.first ?? null;
+	const first = results.prf?.results?.first ?? null;
+	if (!first) return null;
+	// Some browsers return a Uint8Array view instead of a bare ArrayBuffer.
+	// `crypto.subtle.importKey("raw", ...)` accepts any BufferSource.
+	// Copy views to a bare ArrayBuffer so detached/sliced buffers can't leak offsets.
+	if (first instanceof Uint8Array) return first.slice().buffer;
+	return first;
+}
+
+function describePrfResultsForError(credential: PublicKeyCredential) {
+	try {
+		const results = credential.getClientExtensionResults() as {
+			prf?: { enabled?: boolean; results?: { first?: unknown; second?: unknown } };
+		};
+		if (!results || typeof results !== "object") return "no extension results";
+		if (!("prf" in results) || results.prf == null) return "no prf key in extension results";
+		const prf = results.prf as { enabled?: unknown; results?: unknown };
+		const hasResults = prf.results != null && typeof prf.results === "object" && "first" in (prf.results as object);
+		return `prf present (enabled=${String(prf.enabled)}, hasResultsFirst=${hasResults})`;
+	} catch {
+		return "extension results unreadable";
+	}
 }
 
 async function wrapVaultKey(vaultKey: CryptoKey, wrappingKey: CryptoKey) {
@@ -1028,28 +1049,59 @@ async function unlockPasskeyVaultKey() {
 
 	const challenge = new Uint8Array(32);
 	crypto.getRandomValues(challenge);
-	const credential = (await navigator.credentials.get({
-		publicKey: {
-			challenge,
-			allowCredentials: [
-				{
-					type: "public-key",
-					id: base64UrlToUint8Array(record.credentialId),
-				},
-			],
-			userVerification: "required",
-			timeout: 60_000,
-			extensions: {
-				prf: {
-					eval: { first: base64UrlToUint8Array(record.salt) },
+	const saltBytes = base64UrlToUint8Array(record.salt);
+	const credentialIdBytes = base64UrlToUint8Array(record.credentialId);
+	// WebAuthn Level 3 (REC August 2026, Safari 26) prefers PRF inputs via
+	// `evalByCredential` keyed by credential ID during authentication, with
+	// `eval` kept as a fallback for older browsers. Send both in a single
+	// ceremony so old (eval-only) and new (evalByCredential-first) clients work.
+	const prfInputs: Record<string, unknown> = {
+		eval: { first: saltBytes },
+		evalByCredential: { [record.credentialId]: { first: saltBytes } },
+	};
+	async function requestAssertion(prf: Record<string, unknown>) {
+		return (await navigator.credentials.get({
+			publicKey: {
+				challenge,
+				allowCredentials: [
+					{
+						type: "public-key",
+						id: credentialIdBytes,
+					},
+				],
+				userVerification: "required",
+				timeout: 60_000,
+				extensions: {
+					prf,
 				},
 			},
-		},
-	} as CredentialRequestOptions)) as PublicKeyCredential | null;
+		} as CredentialRequestOptions)) as PublicKeyCredential | null;
+	}
+
+	let credential: PublicKeyCredential | null;
+	try {
+		credential = await requestAssertion(prfInputs);
+	} catch (error) {
+		// Pre-L3 browsers reject unknown `evalByCredential`. Retry eval-only
+		// rather than failing outright (costs a second passkey ceremony, but
+		// only on old browsers that would otherwise break).
+		if (error instanceof DOMException && error.name === "NotSupportedError") {
+			credential = await requestAssertion({ eval: { first: saltBytes } });
+		} else {
+			throw error;
+		}
+	}
 
 	if (!credential) throw new Error("Passkey unlock was cancelled.");
 	const prfOutput = getPrfOutput(credential);
-	if (!prfOutput) throw new Error("This browser did not return WebAuthn PRF output for unlock.");
+	if (!prfOutput) {
+		const detail = describePrfResultsForError(credential);
+		throw new Error(
+			`This browser approved the passkey but did not return WebAuthn PRF output for unlock (${detail}). ` +
+				"If this started after a browser update, retry once; if it persists, the stored passkey may predate PRF support — " +
+				"create a fresh passkey on this device (Settings keeps existing secrets readable when you re-wrap).",
+		);
+	}
 	const wrappingKey = await derivePasskeyWrappingKey(prfOutput);
 	return unwrapVaultKey(record, wrappingKey);
 }

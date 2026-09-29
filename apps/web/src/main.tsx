@@ -1093,13 +1093,29 @@ async function unlockPasskeyVaultKey() {
 	}
 
 	if (!credential) throw new Error("Passkey unlock was cancelled.");
-	const prfOutput = getPrfOutput(credential);
+	let prfOutput = getPrfOutput(credential);
+	if (!prfOutput) {
+		// Some Safari versions ignore the whole `prf` extension when the
+		// request contains the newer `evalByCredential` key they don't
+		// understand. Retry once with the legacy eval-only shape before
+		// giving up (one extra Face ID prompt, only on this failure path).
+		try {
+			const retry = await requestAssertion({ eval: { first: saltBytes } });
+			if (retry) {
+				credential = retry;
+				prfOutput = getPrfOutput(retry);
+			}
+		} catch {
+			// Fall through to the diagnostic error below.
+		}
+	}
 	if (!prfOutput) {
 		const detail = describePrfResultsForError(credential);
 		throw new Error(
 			`This browser approved the passkey but did not return WebAuthn PRF output for unlock (${detail}). ` +
-				"If this started after a browser update, retry once; if it persists, the stored passkey may predate PRF support — " +
-				"create a fresh passkey on this device (Settings keeps existing secrets readable when you re-wrap).",
+				"If this started after a browser update, retry once; if it persists, the stored passkey may lack PRF support — " +
+				"do not delete the vault key. Re-create the passkey only from a session where the vault is unlocked, " +
+				"otherwise existing secrets become unreadable.",
 		);
 	}
 	const wrappingKey = await derivePasskeyWrappingKey(prfOutput);

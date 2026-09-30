@@ -984,6 +984,10 @@ function prfFirstToArrayBuffer(first: unknown) {
 	if (tag === "[object ArrayBuffer]" || tag === "[object SharedArrayBuffer]") {
 		return new Uint8Array(first as ArrayBufferLike).slice().buffer;
 	}
+	if (Array.isArray(first) && first.every((entry) => Number.isInteger(entry) && (entry as number) >= 0 && (entry as number) <= 255)) {
+		// Bridges that JSON-serialize buffers often deliver a bare byte array.
+		return new Uint8Array(first as number[]).buffer;
+	}
 	if (typeof first === "object") {
 		// Extension bridges often JSON-serialize buffers as { type, data: [...] }.
 		const data = (first as { data?: unknown }).data;

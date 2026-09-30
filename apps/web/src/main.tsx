@@ -972,22 +972,52 @@ async function derivePasskeyWrappingKey(prfOutput: BufferSource) {
 	);
 }
 
+function prfFirstToArrayBuffer(first: unknown) {
+	if (!first) return null;
+	// Realm-safe: values may cross extension isolated worlds, so avoid
+	// `instanceof` (which fails cross-realm) in favor of structural checks.
+	if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(first)) {
+		const view = first as unknown as { buffer: ArrayBufferLike; byteOffset: number; byteLength: number };
+		return new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice().buffer;
+	}
+	const tag = Object.prototype.toString.call(first);
+	if (tag === "[object ArrayBuffer]" || tag === "[object SharedArrayBuffer]") {
+		return new Uint8Array(first as ArrayBufferLike).slice().buffer;
+	}
+	if (typeof first === "object") {
+		// Extension bridges often JSON-serialize buffers as { type, data: [...] }.
+		const data = (first as { data?: unknown }).data;
+		if (
+			Array.isArray(data) &&
+			data.every((entry) => Number.isInteger(entry) && (entry as number) >= 0 && (entry as number) <= 255)
+		) {
+			return new Uint8Array(data as number[]).buffer;
+		}
+	}
+	return null;
+}
+
 function getPrfOutput(credential: PublicKeyCredential) {
 	const results = credential.getClientExtensionResults() as {
 		prf?: {
 			enabled?: boolean;
 			results?: {
-				first?: ArrayBuffer | Uint8Array | null;
+				first?: unknown;
 			};
 		};
 	};
-	const first = results.prf?.results?.first ?? null;
-	if (!first) return null;
-	// Some browsers return a Uint8Array view instead of a bare ArrayBuffer.
-	// `crypto.subtle.importKey("raw", ...)` accepts any BufferSource.
-	// Copy views to a bare ArrayBuffer so detached/sliced buffers can't leak offsets.
-	if (first instanceof Uint8Array) return first.slice().buffer;
-	return first;
+	return prfFirstToArrayBuffer(results.prf?.results?.first ?? null);
+}
+
+function describePrfValueShape(first: unknown) {
+	if (first == null) return "missing";
+	if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(first)) return `view(${(first as { constructor?: { name?: string } }).constructor?.name ?? "?"})`;
+	const tag = Object.prototype.toString.call(first);
+	if (tag === "[object Object]") {
+		const keys = Object.keys(first as Record<string, unknown>);
+		return `object(keys=${keys.join(",") || "none"})`;
+	}
+	return tag.replace(/^\[object |\]$/g, "").toLowerCase();
 }
 
 function describePrfResultsForError(credential: PublicKeyCredential) {
@@ -997,9 +1027,10 @@ function describePrfResultsForError(credential: PublicKeyCredential) {
 		};
 		if (!results || typeof results !== "object") return "no extension results";
 		if (!("prf" in results) || results.prf == null) return "no prf key in extension results";
-		const prf = results.prf as { enabled?: unknown; results?: unknown };
+		const prf = results.prf as { enabled?: unknown; results?: { first?: unknown } | null };
 		const hasResults = prf.results != null && typeof prf.results === "object" && "first" in (prf.results as object);
-		return `prf present (enabled=${String(prf.enabled)}, hasResultsFirst=${hasResults})`;
+		const shape = hasResults ? describePrfValueShape((prf.results as { first?: unknown }).first) : "n/a";
+		return `prf present (enabled=${String(prf.enabled)}, hasResultsFirst=${hasResults}, firstShape=${shape})`;
 	} catch {
 		return "extension results unreadable";
 	}

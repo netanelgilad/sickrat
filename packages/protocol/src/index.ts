@@ -1,5 +1,7 @@
 export const oauthReferenceSegmentPattern = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
+export { validateGrantReuse, type GrantReusePolicy, type GrantReuseStatus, type GrantReuseDecision } from "./grant-policy.ts";
+
 export function isOAuthReferenceSegment(value: string) {
 	return oauthReferenceSegmentPattern.test(value);
 }

@@ -2306,6 +2306,23 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		return json({ approval: mapApproval(approval) });
 	}
 
+	const reuseStatusMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/reuse-status$/);
+	if (reuseStatusMatch && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = decodeURIComponent(reuseStatusMatch[1]);
+		const body = await request.json() as Parameters<typeof verifyDeviceSignature>[1];
+		const device = await env.DB.prepare("SELECT id, label, public_key, created_at, revoked_at FROM devices WHERE id = ?")
+			.bind(body.deviceId ?? "").first<DeviceRecord>();
+		if (!device || body.command !== `sickrat grant-status ${id}` || !(await verifyDeviceSignature(device, body))) {
+			return json({ error: "Invalid device signature." }, { status: 403 });
+		}
+		const approval = await env.DB.prepare(`${approvalSelect} WHERE id = ?`).bind(id).first<ApprovalRequestRecord>();
+		if (!approval || approval.device_id !== device.id) return json({ error: "Approval request not found." }, { status: 404 });
+		const now = Date.now();
+		const active = !device.revoked_at && approval.status === "approved" && Date.parse(approval.access_expires_at ?? "") > now;
+		return json({ workerUrl: url.origin, deviceId: device.id, requestId: id, state: active ? "active" : "revoked", checkedAt: new Date(now).toISOString() }, { headers: { "cache-control": "no-store" } });
+	}
+
 	const approvalGrantMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/grant$/);
 	if (approvalGrantMatch && request.method === "GET") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });

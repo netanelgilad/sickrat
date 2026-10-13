@@ -18,7 +18,7 @@ import {
 	type BrowserSessionBundle,
 	type BrowserSessionInput,
 } from "@sickrat/browser-session";
-import { canonicalApprovalPayload, isOAuthReferenceSegment, validateGrantReuse, type GrantReusePolicy, type GrantReuseStatus, type ApprovalRequestCreate, type BrowserSessionGrant, type EncryptedGrant, type GrantPayload, type OAuthProvider, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
+import { canonicalApprovalPayload, isOAuthReferenceSegment, type ApprovalRequestCreate, type BrowserSessionGrant, type EncryptedGrant, type GrantPayload, type OAuthProvider, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
 import { parseBrowserSessionReference, parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
 import QRCode from "qrcode";
 import { cloudflareProvisioningScopes } from "./cloudflare-scopes.js";
@@ -55,7 +55,6 @@ type GrantCache = {
 };
 
 type GrantCacheEntry = {
-	requestId?: string;
 	workerUrl: string;
 	deviceId: string;
 	resourceKeys: string[];
@@ -173,7 +172,7 @@ const sourcePath = fileURLToPath(import.meta.url);
 const grantWrapInfo = textEncoder.encode("sickrat:cli-grant:v1");
 const grantWrapSalt = textEncoder.encode("sickrat:grant-ecdh:v1");
 const defaultCloudflareClientId = "768469d277d474beaedd85115b63a81d";
-const cliVersion = "0.1.54";
+const cliVersion = "0.1.48";
 const releaseBaseUrl = "https://github.com/netanelgilad/sickrat/releases/download";
 let cloudflareRefreshPromise: Promise<string> | null = null;
 
@@ -497,14 +496,12 @@ Usage:
 Requests phone approval for referenced secrets, injects approved values into the child process environment, and never prints secret values.
 Use --access-for, for example 15m or 1h, to ask the user for a timed local grant that can be reused by later sickrat run calls until it expires.
 Use --approval-timeout, for example 10m or 1h, when the CLI should wait longer for you to approve the current request.
-Use --reuse-policy <metadata.json> to require an existing identifiable timed grant and a fresh authenticated worker status check. Rejection never requests replacement approval. This opt-in check does not create scheduled permissions.
 
 Examples:
   sickrat run --env SERVICE_USERNAME=service/username --env SERVICE_PASSWORD=service/password -- npm run sync:service
   sickrat run --env SERVICE_TOKEN=service/api-token --access-for 30m -- npm run sync:service
   sickrat run --env SERVICE_TOKEN=service/api-token --approval-timeout 15m -- npm run sync:service
   sickrat run --env-file .env.sickrat -- npm run sync:service
-  sickrat run --reuse-policy policy.json --env ITEM=synthetic/item-a -- node use-item.mjs
 `,
 		"browser-session": `sickrat browser-session
 
@@ -838,7 +835,7 @@ async function deriveGrantCacheKey(config: Config) {
 	return crypto.subtle.importKey("raw", digest, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 
-async function encryptCachedGrant(grant: GrantPayload & { requestId?: string }, key: CryptoKey) {
+async function encryptCachedGrant(grant: GrantPayload, key: CryptoKey) {
 	const iv = crypto.getRandomValues(new Uint8Array(12));
 	const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, textEncoder.encode(JSON.stringify(grant)));
 	return {
@@ -853,7 +850,7 @@ async function decryptCachedGrant(entry: GrantCacheEntry, key: CryptoKey) {
 		key,
 		base64UrlToBytes(entry.grantCiphertext),
 	);
-	return JSON.parse(textDecoder.decode(plaintext)) as GrantPayload & { requestId?: string };
+	return JSON.parse(textDecoder.decode(plaintext)) as GrantPayload;
 }
 
 function cacheResourceKeys(refs: string[], resourceRequests?: ApprovalRequestCreate["resourceRequests"]) {
@@ -2215,7 +2212,7 @@ function uniqueRefs(refs: string[], allowEmpty = false) {
 	return unique;
 }
 
-async function requestGrant(input: { refs: string[]; resourceRequests?: ApprovalRequestCreate["resourceRequests"]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean; reusePolicy?: GrantReusePolicy }) {
+async function requestGrant(input: { refs: string[]; resourceRequests?: ApprovalRequestCreate["resourceRequests"]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean }) {
 	validateRequestMessage(input.message);
 	const hasNonSecretRequests = input.resourceRequests?.some((request) => request.type !== "secret") ?? false;
 	const refs = uniqueRefs(input.refs, hasNonSecretRequests);
@@ -2223,30 +2220,6 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 	const config = await readConfig();
 	if (!config.workerUrl || !config.deviceId) {
 		throw new Error("No paired device config found. Run sickrat pair <worker-url> first.");
-	}
-	if (input.reusePolicy) {
-		if (input.reusePolicy.enabled !== true) throw new Error("Grant reuse policy is disabled; no approval or child process was started.");
-		const cached = await findCachedGrant({ workerUrl: config.workerUrl, deviceId: config.deviceId, refs, resourceRequests: input.resourceRequests, config });
-		if (!cached?.entry.requestId) throw new Error("Grant reuse policy requires an identifiable active cached grant; no new approval was requested.");
-		const requestId = cached.entry.requestId;
-		if (cached.grant.requestId !== requestId) throw new Error("Grant reuse policy requires authenticated cache request identity; no new approval was requested.");
-		const unsigned = {
-			deviceId: config.deviceId, command: `sickrat grant-status ${requestId}`, secretRefs: [],
-			ephemeralPublicKey: config.signingPublicKey!, timestamp: new Date().toISOString(), nonce: crypto.randomUUID(),
-		};
-		let status: GrantReuseStatus;
-		try {
-			status = await api<GrantReuseStatus>(config.workerUrl, `/api/approvals/${encodeURIComponent(requestId)}/reuse-status`, {
-				method: "POST", body: JSON.stringify({ ...unsigned, signature: await signRequest(config, unsigned) }),
-			});
-		} catch {
-			throw new Error("Grant reuse status unavailable (control-plane failure); no approval or child process was started.");
-		}
-		const decision = validateGrantReuse({ policy: input.reusePolicy, workerUrl: config.workerUrl, deviceId: config.deviceId, requestId,
-			resources: input.resourceRequests ?? refs.map(ref => ({ type: "secret" as const, ref })), grant: cached.grant, status, now: Date.now() });
-		if (decision !== "allowed") throw new Error(`Grant reuse policy rejected: ${decision}; no approval or child process was started.`);
-		console.error("Grant reuse policy validated against current worker status.");
-		return cached.grant;
 	}
 	if (input.allowCache !== false) {
 		const cached = await findCachedGrant({ workerUrl: config.workerUrl, deviceId: config.deviceId, refs, resourceRequests: input.resourceRequests, config });
@@ -2332,9 +2305,8 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 					.filter(Number.isFinite);
 				const cacheExpiresAt = new Date(Math.min(Date.parse(grant.accessExpiresAt), ...providerExpiries)).toISOString();
 				const cacheKey = await deriveGrantCacheKey(config);
-				const encrypted = await encryptCachedGrant({ ...grant, requestId: created.requestId }, cacheKey);
+				const encrypted = await encryptCachedGrant(grant, cacheKey);
 				await saveCachedGrant({
-					requestId: created.requestId,
 					workerUrl: config.workerUrl,
 					deviceId: config.deviceId,
 					resourceKeys: cacheResourceKeys(refs, input.resourceRequests),
@@ -2441,14 +2413,11 @@ async function runWithSecrets(args: string[]) {
 	const message = getAnyArgValue(beforeCommand, ["--message", "-m"]) ?? undefined;
 	const accessDurationSeconds = parseAccessDuration(getAnyArgValue(beforeCommand, ["--access-for"]) ?? undefined);
 	const approvalWaitSeconds = parseApprovalTimeout(getAnyArgValue(beforeCommand, ["--approval-timeout"]) ?? undefined);
-	const reusePolicyPath = getAnyArgValue(beforeCommand, ["--reuse-policy"]);
-	const reusePolicy = reusePolicyPath ? JSON.parse(await readFile(reusePolicyPath, "utf8")) as GrantReusePolicy : undefined;
-	if (reusePolicyPath && (!reusePolicy || typeof reusePolicy !== "object")) throw new Error("Invalid grant reuse policy.");
 	validateRequestMessage(message);
 
 	for (let index = 0; index < beforeCommand.length; index += 1) {
 		const arg = beforeCommand[index];
-		if (arg === "--env" || arg === "--env-file" || arg === "--message" || arg === "-m" || arg === "--access-for" || arg === "--approval-timeout" || arg === "--reuse-policy") {
+		if (arg === "--env" || arg === "--env-file" || arg === "--message" || arg === "-m" || arg === "--access-for" || arg === "--approval-timeout") {
 			index += 1;
 			continue;
 		}
@@ -2503,7 +2472,6 @@ async function runWithSecrets(args: string[]) {
 		accessDurationSeconds,
 		approvalWaitSeconds,
 		command: `sickrat run -- ${formatCommand(commandArgs)}`,
-		reusePolicy,
 	});
 	for (const [key, ref] of refByKey) {
 		const value = grant.secrets?.[ref];

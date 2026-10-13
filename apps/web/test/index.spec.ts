@@ -132,26 +132,6 @@ describe("OAuth gateway Worker API", () => {
 		fetchMock.assertNoPendingInterceptors();
 	});
 
-	it("authenticates reusable-grant status and reports local device revocation without ciphertext", async () => {
-		const device = await createPairedDevice("synthetic-device");
-		const unsigned = { deviceId: device.deviceId, command: "synthetic operation", secretRefs: ["synthetic/item-a"], accessDurationSeconds: 60,
-			ephemeralPublicKey: await crypto.subtle.exportKey("jwk", device.signingKeys.publicKey), timestamp: new Date().toISOString(), nonce: crypto.randomUUID() };
-		const signed = async (value: typeof unsigned) => ({ ...value, signature: bytesToBase64Url(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, device.signingKeys.privateKey, new TextEncoder().encode(canonicalApprovalPayload(value)))) });
-		const created = await request("/api/approval-requests", { method: "POST", body: JSON.stringify(await signed(unsigned)) });
-		expect(created.status).toBe(200);
-		const { requestId } = await created.json() as { requestId: string };
-		expect((await request(`/api/approvals/${requestId}/grant`, { method: "POST", body: JSON.stringify({ grantCiphertext: { synthetic: "opaque" } }) })).status).toBe(200);
-		const check = async (command = `sickrat grant-status ${requestId}`) => request(`/api/approvals/${requestId}/reuse-status`, { method: "POST", body: JSON.stringify(await signed({ ...unsigned, command })) });
-		expect((await check("wrong-command")).status).toBe(403);
-		const active = await check();
-		expect(active.status).toBe(200);
-		const metadata = await active.json() as Record<string, unknown>;
-		expect(metadata).toMatchObject({ state: "active", deviceId: device.deviceId, requestId });
-		expect(metadata).not.toHaveProperty("grantCiphertext");
-		await request(`/api/devices/${device.deviceId}/revoke`, { method: "POST" });
-		expect(await (await check()).json()).toMatchObject({ state: "revoked" });
-	});
-
 	it("publishes a generic Cloudflare provider descriptor", async () => {
 		const response = await request("/api/oauth/providers");
 		expect(response.status).toBe(200);

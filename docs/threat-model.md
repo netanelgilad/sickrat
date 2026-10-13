@@ -72,12 +72,6 @@ They should not be able to decrypt vault secrets without the mobile-held vault k
 
 ## Device Revocation
 
-Opt-in `sickrat run --reuse-policy` checks the current device and approval status
-through a device-signed worker request before encrypted-cache reuse. Failure
-halts without replacement approval. Default reuse remains unchanged; this is
-not continuous revocation enforcement and cannot retract an injected value or
-stop an already running child. See [grant reuse policy](grant-reuse-policy.md).
-
 Revoking a CLI device should:
 
 - mark the device revoked in D1

@@ -1,0 +1,430 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		092420B2074938E7372E8BAC /* OAuthConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C46B1A5F3215C2A4798F9C /* OAuthConnect.swift */; };
+		0A625F146587829603DA198A /* CryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86DC2ACF1922A4836DBB272C /* CryptoTests.swift */; };
+		35BDC96301EFF6F474F3702A /* ResourceGrants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9785DE960740A3E5F7D61E /* ResourceGrants.swift */; };
+		46C6C34E2FC2F9B31890A88F /* VaultModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A042CE43F774D4578C8B9BA /* VaultModel.swift */; };
+		5E12B344762347841B59960C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB318A0C3BB83C47D9513FFF /* Assets.xcassets */; };
+		7B763C8A2D7072FC228E907B /* Crypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = D192336E401D78094EC26F17 /* Crypto.swift */; };
+		97976C66AA3433D1513D77D5 /* SickratApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 983BB7CEFDAB19BAFBB0749F /* SickratApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		65716704CFD522662EEAAE6A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5B61A753F798288C4E92A767 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 860756AA34AC747CAFC05AC7;
+			remoteInfo = Sickrat;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0E9785DE960740A3E5F7D61E /* ResourceGrants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceGrants.swift; sourceTree = "<group>"; };
+		2A042CE43F774D4578C8B9BA /* VaultModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultModel.swift; sourceTree = "<group>"; };
+		84755FECE0051DD933EDF106 /* SickratTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SickratTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		86DC2ACF1922A4836DBB272C /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
+		983BB7CEFDAB19BAFBB0749F /* SickratApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SickratApp.swift; sourceTree = "<group>"; };
+		BB318A0C3BB83C47D9513FFF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D192336E401D78094EC26F17 /* Crypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Crypto.swift; sourceTree = "<group>"; };
+		D53F6776D98A6D5FA5774057 /* Sickrat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Sickrat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DBFF43E685FA0047BF0E148B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E5C46B1A5F3215C2A4798F9C /* OAuthConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthConnect.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		0532A3DA11E8650941B5053E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D53F6776D98A6D5FA5774057 /* Sickrat.app */,
+				84755FECE0051DD933EDF106 /* SickratTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		07200ED1B75714DEECF54595 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				86DC2ACF1922A4836DBB272C /* CryptoTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		270789573C5C7A617A5BD53B = {
+			isa = PBXGroup;
+			children = (
+				6D9B5599F39D60CD2CBB369F /* Sickrat */,
+				07200ED1B75714DEECF54595 /* Tests */,
+				0532A3DA11E8650941B5053E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6D9B5599F39D60CD2CBB369F /* Sickrat */ = {
+			isa = PBXGroup;
+			children = (
+				BB318A0C3BB83C47D9513FFF /* Assets.xcassets */,
+				D192336E401D78094EC26F17 /* Crypto.swift */,
+				DBFF43E685FA0047BF0E148B /* Info.plist */,
+				E5C46B1A5F3215C2A4798F9C /* OAuthConnect.swift */,
+				0E9785DE960740A3E5F7D61E /* ResourceGrants.swift */,
+				983BB7CEFDAB19BAFBB0749F /* SickratApp.swift */,
+				2A042CE43F774D4578C8B9BA /* VaultModel.swift */,
+			);
+			path = Sickrat;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		860756AA34AC747CAFC05AC7 /* Sickrat */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D43F5223C50D16A4C3A15925 /* Build configuration list for PBXNativeTarget "Sickrat" */;
+			buildPhases = (
+				38A240CF27DBABE37B4EEB71 /* Sources */,
+				AA56BC5AE8BAF901B93A2F9A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Sickrat;
+			packageProductDependencies = (
+			);
+			productName = Sickrat;
+			productReference = D53F6776D98A6D5FA5774057 /* Sickrat.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AE58E3D19F098542B38FBCF7 /* SickratTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3F9E4B413277B70424D47E89 /* Build configuration list for PBXNativeTarget "SickratTests" */;
+			buildPhases = (
+				157CE25005357EA357636D24 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				90ACAE5003A46396264A8185 /* PBXTargetDependency */,
+			);
+			name = SickratTests;
+			packageProductDependencies = (
+			);
+			productName = SickratTests;
+			productReference = 84755FECE0051DD933EDF106 /* SickratTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5B61A753F798288C4E92A767 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					860756AA34AC747CAFC05AC7 = {
+						DevelopmentTeam = "";
+					};
+					AE58E3D19F098542B38FBCF7 = {
+						DevelopmentTeam = "";
+					};
+				};
+			};
+			buildConfigurationList = 43D0C0086AEAA78C7EB98D2E /* Build configuration list for PBXProject "Sickrat" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 270789573C5C7A617A5BD53B;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 0532A3DA11E8650941B5053E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				860756AA34AC747CAFC05AC7 /* Sickrat */,
+				AE58E3D19F098542B38FBCF7 /* SickratTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA56BC5AE8BAF901B93A2F9A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5E12B344762347841B59960C /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		157CE25005357EA357636D24 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0A625F146587829603DA198A /* CryptoTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		38A240CF27DBABE37B4EEB71 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7B763C8A2D7072FC228E907B /* Crypto.swift in Sources */,
+				092420B2074938E7372E8BAC /* OAuthConnect.swift in Sources */,
+				35BDC96301EFF6F474F3702A /* ResourceGrants.swift in Sources */,
+				97976C66AA3433D1513D77D5 /* SickratApp.swift in Sources */,
+				46C6C34E2FC2F9B31890A88F /* VaultModel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		90ACAE5003A46396264A8185 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 860756AA34AC747CAFC05AC7 /* Sickrat */;
+			targetProxy = 65716704CFD522662EEAAE6A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		3ACF40AF0A8D73465CC01578 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.netanelgilad.SickratTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Sickrat.app/Sickrat";
+			};
+			name = Release;
+		};
+		4ACE909950937E34E690762C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		8B9468C872D5E87100053FF0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		97D8133E6FCF56359F53CBB6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sickrat/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.netanelgilad.sickrat;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		ADEEA1968B45BB5CB0723BB0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sickrat/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.netanelgilad.sickrat;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B938BC0D03B5B2CAE12248A0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGNING_ALLOWED = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.netanelgilad.SickratTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Sickrat.app/Sickrat";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3F9E4B413277B70424D47E89 /* Build configuration list for PBXNativeTarget "SickratTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B938BC0D03B5B2CAE12248A0 /* Debug */,
+				3ACF40AF0A8D73465CC01578 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		43D0C0086AEAA78C7EB98D2E /* Build configuration list for PBXProject "Sickrat" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4ACE909950937E34E690762C /* Debug */,
+				8B9468C872D5E87100053FF0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D43F5223C50D16A4C3A15925 /* Build configuration list for PBXNativeTarget "Sickrat" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ADEEA1968B45BB5CB0723BB0 /* Debug */,
+				97D8133E6FCF56359F53CBB6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 5B61A753F798288C4E92A767 /* Project object */;
+}

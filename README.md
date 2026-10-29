@@ -8,6 +8,7 @@ Sickrat is not a hosted multi-tenant secrets service. It provisions and talks to
 
 The active code in this repo currently includes:
 
+- `apps/ios`: native SwiftUI iOS development preview; see [setup and migration status](apps/ios/README.md)
 - `apps/cli`: a Bun/TypeScript CLI named `sickrat`
 - `apps/site`: an Astro public product site deployed to `sickrat.dev`
 - `apps/web`: a React/Vite PWA console and Cloudflare Worker artifact deployed into each user's Cloudflare account by the CLI

@@ -1,0 +1,40 @@
+name: Sickrat
+options:
+  bundleIdPrefix: com.netanelgilad
+  deploymentTarget:
+    iOS: '18.0'
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+    DEVELOPMENT_TEAM: ''
+targets:
+  Sickrat:
+    type: application
+    platform: iOS
+    sources: [Sickrat]
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        PRODUCT_BUNDLE_IDENTIFIER: com.netanelgilad.sickrat
+        INFOPLIST_FILE: Sickrat/Info.plist
+        TARGETED_DEVICE_FAMILY: '1,2'
+        CODE_SIGNING_ALLOWED: NO
+  SickratTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: Sickrat
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  Sickrat:
+    build:
+      targets:
+        Sickrat: all
+    test:
+      targets: [SickratTests]

@@ -1,3 +1,4 @@
+import { createIOSTransfer } from "./ios-transfer";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { isOAuthReferenceSegment, type OAuthProvider } from "@sickrat/protocol";
 import { describeOAuthApprovalBlocker, matchingOAuthConnection as findMatchingOAuthConnection, matchingOAuthConnections as findMatchingOAuthConnections } from "./oauth-approval";
@@ -1866,6 +1867,7 @@ function AppShell({
 	const [navigationOpen, setNavigationOpen] = useState(false);
 	const [showRecoveryDetails, setShowRecoveryDetails] = useState(false);
 	const [recoveryCopyStatus, setRecoveryCopyStatus] = useState("");
+	const [iosTransferRequest, setIOSTransferRequest] = useState("");
 	const [migrationImportText, setMigrationImportText] = useState("");
 	const [migrationImportStatus, setMigrationImportStatus] = useState("");
 	const edgeSwipeRef = useRef<{ x: number; y: number } | null>(null);
@@ -3178,6 +3180,26 @@ function AppShell({
 		setSecretStatus("Vault key removed from this browser. Existing secrets cannot be decrypted here until recovery exists.");
 	}
 
+	async function exportNativeTransfer() {
+        setBusy(true);
+        try {
+            // Require a fresh passkey ceremony for root-key export.
+            const key = await unlockPasskeyVaultKey();
+            if (!key) throw new Error("Unlock the existing vault before transferring it.");
+            const transfer = await createIOSTransfer(iosTransferRequest, key, window.location.origin);
+            const blob = new Blob([JSON.stringify(transfer)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = "sickrat-ios-transfer.json";
+            anchor.click();
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+            setIOSTransferRequest("");
+            setRecoveryCopyStatus("Encrypted transfer saved. Import it on the requesting iPhone within 10 minutes.");
+        } catch (error) { setRecoveryCopyStatus(friendlyError(error, "Transfer failed.")); }
+        finally { setBusy(false); }
+    }
+
 	async function copyRecoveryRecord() {
 		const exported = exportPasskeyVaultRecord();
 		if (!exported) {
@@ -3657,6 +3679,12 @@ function AppShell({
 					</Button>
 				)}
 			</Block>
+            <BlockTitle>Native iOS transfer</BlockTitle>
+            <List strong inset>
+                <ListInput label="Transfer request from your iPhone" type="textarea" value={iosTransferRequest} onInput={(event) => setIOSTransferRequest(event.currentTarget.value)} />
+                <ListItem title="Transfer only to your own iPhone" subtitle="Generate the request in the native app. A fresh passkey unlock seals the vault key to that device; the server never receives it." />
+            </List>
+            <Block inset><Button rounded disabled={busy || !iosTransferRequest} onClick={exportNativeTransfer}>Unlock and export encrypted transfer</Button></Block>
 			<BlockTitle>Passkey Migration</BlockTitle>
 			<List strong inset>
 				<ListItem

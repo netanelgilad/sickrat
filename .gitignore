@@ -12,3 +12,7 @@ target/
 .expo/
 coverage/
 experiments/**/artifacts/
+# Xcode user state and local preview deploy entrypoint
+apps/ios/**/xcuserdata/
+apps/ios/build-device/
+apps/cli/src/.ios-preview-deploy.ts

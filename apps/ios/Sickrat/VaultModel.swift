@@ -1,0 +1,282 @@
+import CryptoKit
+import Foundation
+import Observation
+
+struct PublicJWK: Decodable {
+  let kty: String
+  let crv: String
+  let x: String
+  let y: String
+  var fields: [String: String] { ["kty": kty, "crv": crv, "x": x, "y": y] }
+}
+
+struct Approval: Decodable, Identifiable {
+  let id: String
+  let device: String
+  let command: String
+  let message: String?
+  let secretRefs: [String]
+  let resourceRequests: [Resource]
+  let accessDurationSeconds: Int?
+  let status: String
+  let expiresAt: String
+  let expired: Bool
+  let ephemeralPublicKey: PublicJWK?
+  struct Resource: Decodable {
+    let type: String
+    let ref: String?
+    let providerId: String?
+    let connectionName: String?
+    let scopes: [String]?
+    let env: String?
+    let resourceRef: String?
+    let access: String?
+  }
+  var pending: Bool { status == "pending" && !expired }
+}
+struct Secret: Decodable, Identifiable {
+  let id: String
+  let ref: String
+  let label: String
+  let updatedAt: String
+}
+struct Device: Decodable, Identifiable {
+  let id: String
+  let label: String
+  let revokedAt: String?
+}
+struct Connection: Decodable, Identifiable {
+  let id: String
+  let providerId: String
+  let connectionName: String
+  let accountLabel: String
+  let grantedScopes: [String]
+  let revokedAt: String?
+}
+struct BrowserSession: Decodable, Identifiable {
+  let id: String
+  let resourceRef: String
+  let state: String
+}
+
+final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+    completionHandler: @escaping @Sendable (URLRequest?) -> Void
+  ) {
+    completionHandler(nil)
+  }
+}
+
+@MainActor @Observable final class VaultModel {
+  var endpoint = UserDefaults.standard.string(forKey: "vault.endpoint") ?? ""
+  var vaultName = "Sickrat"
+  var key: SymmetricKey?
+  var approvals: [Approval] = []
+  var secrets: [Secret] = []
+  var devices: [Device] = []
+  var connections: [Connection] = []
+  var sessions: [BrowserSession] = []
+  var error: String?
+  var busy = false
+  var lastRefresh: Date?
+  var transferKey: P256.KeyAgreement.PrivateKey?
+  private let session: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 25
+    configuration.urlCache = nil
+    return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+  }()
+  var configured: Bool { !endpoint.isEmpty }
+  var pending: [Approval] { approvals.filter(\.pending) }
+  func canonicalEndpoint(_ value: String) throws -> String {
+    guard let url = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+      url.scheme == "https", url.host != nil, url.user == nil, url.password == nil,
+      url.query == nil, url.fragment == nil, url.path == "" || url.path == "/"
+    else { throw VaultError("Enter your vault’s HTTPS origin, without a path or credentials.") }
+    return url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+  }
+  func request(
+    _ path: String, method: String = "GET", body: [String: Any]? = nil, origin: String? = nil
+  ) async throws -> [String: Any] {
+    let root = try canonicalEndpoint(origin ?? endpoint)
+    guard let url = URL(string: root + "/api/" + path) else {
+      throw VaultError("Invalid vault address.")
+    }
+    var request = URLRequest(url: url)
+    request.httpMethod = method
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    if let body {
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.httpBody = try JSONSerialization.data(withJSONObject: body)
+    }
+    let (data, response) = try await session.data(for: request)
+    guard let response = response as? HTTPURLResponse, response.url?.host == url.host,
+      (200..<300).contains(response.statusCode)
+    else {
+      throw VaultError(
+        "The vault request failed. Check the address, connection, and whether this request is still pending."
+      )
+    }
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      throw VaultError(
+        "The vault returned an unexpected response. A Cloudflare Access sign-in may be required.")
+    }
+    return object
+  }
+  func decode<T: Decodable>(_ object: [String: Any], _ field: String, as: T.Type) throws -> T {
+    guard let value = object[field] else { throw VaultError("Missing \(field) in vault response.") }
+    return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: value))
+  }
+  func connect(_ value: String) async throws {
+    let origin = try canonicalEndpoint(value)
+    let response = try await request("capabilities", origin: origin)
+    guard let vault = response["vault"] as? [String: Any], let name = vault["name"] as? String
+    else { throw VaultError("This address is not a Sickrat vault.") }
+    lock()
+    endpoint = origin
+    vaultName = name
+    UserDefaults.standard.set(origin, forKey: "vault.endpoint")
+    approvals = []
+    secrets = []
+    devices = []
+    connections = []
+    sessions = []
+    try await refresh()
+  }
+  func refresh() async throws {
+    let approvalsResponse = try await request("approvals")
+    let secretsResponse = try await request("secrets")
+    let devicesResponse = try await request("devices")
+    let connectionsResponse = try await request("oauth/connections")
+    let sessionsResponse = try await request("browser-sessions")
+    approvals = try decode(approvalsResponse, "approvals", as: [Approval].self)
+    secrets = try decode(secretsResponse, "secrets", as: [Secret].self)
+    devices = try decode(devicesResponse, "devices", as: [Device].self)
+    connections = try decode(connectionsResponse, "connections", as: [Connection].self)
+    sessions = try decode(sessionsResponse, "browserSessions", as: [BrowserSession].self)
+    lastRefresh = Date()
+  }
+  func run(_ work: () async throws -> Void) async {
+    guard !busy else { return }
+    busy = true
+    defer { busy = false }
+    do { try await work() } catch is CancellationError {} catch {
+      self.error = error.localizedDescription
+    }
+  }
+  func lock() { key = nil }
+  func unlock() throws { key = SymmetricKey(data: try KeyStore.read(endpoint)) }
+  func startTransfer() throws -> String {
+    let pair = P256.KeyAgreement.PrivateKey()
+    transferKey = pair
+    let value: [String: Any] = [
+      "type": "sickrat-ios-transfer-request", "version": 1, "origin": endpoint,
+      "publicKey": VaultCrypto.publicJWK(pair.publicKey),
+    ]
+    return String(
+      decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+      as: UTF8.self)
+  }
+  func importTransfer(_ data: Data) throws {
+    guard data.count < 16_384, let pair = transferKey,
+      let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+      object["type"] as? String == "sickrat-ios-transfer", object["version"] as? Int == 1,
+      let ephemeral = VaultCrypto.jwkFields(object["ephemeralPublicKey"]),
+      let ciphertext = object["ciphertext"] as? String, let iv = object["iv"] as? String
+    else { throw VaultError("Start a transfer on this device, then import its encrypted file.") }
+    let wrapping = try VaultCrypto.agreement(
+      pair, publicKey: VaultCrypto.publicKey(ephemeral), transfer: true)
+    let plaintext = try VaultCrypto.open(["ciphertext": ciphertext, "iv": iv], key: wrapping)
+    guard let payload = try JSONSerialization.jsonObject(with: plaintext) as? [String: String],
+      payload["origin"] == endpoint,
+      let encoded = payload["key"], let expiry = payload["expiresAt"],
+      let date = ISO8601DateFormatter().date(from: expiry), date > Date(),
+      date < Date().addingTimeInterval(660)
+    else { throw VaultError("This transfer expired or belongs to a different vault.") }
+    let raw = try Data(base64URL: encoded)
+    guard raw.count == 32 else { throw VaultError("Invalid vault key.") }
+    try KeyStore.save(raw, account: endpoint)
+    key = SymmetricKey(data: raw)
+    transferKey = nil
+  }
+  func saveSecret(ref: String, label: String, value: String) async throws {
+    guard let key else { throw VaultError("Unlock your vault first.") }
+    guard !ref.isEmpty, ref.count <= 512,
+      ref == ref.trimmingCharacters(in: .whitespacesAndNewlines),
+      !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !value.isEmpty
+    else { throw VaultError("Use a reference such as openai/api-key and enter a name and value.") }
+    var record = try VaultCrypto.secret(value, key: key)
+    record["ref"] = ref
+    record["label"] = label
+    _ = try await request("secrets", method: "POST", body: record)
+    try await refresh()
+  }
+  func value(for ref: String) async throws -> String {
+    guard let key else { throw VaultError("Unlock your vault first.") }
+    let result = try await request("secrets/resolve", method: "POST", body: ["refs": [ref]])
+    guard let records = result["secrets"] as? [[String: Any]], let record = records.first,
+      record["ref"] as? String == ref, record["kdf"] as? String == VaultCrypto.format,
+      let ciphertext = record["ciphertext"] as? String, let iv = record["iv"] as? String
+    else { throw VaultError("The secret is missing or uses unsupported encryption.") }
+    let data = try VaultCrypto.open(["ciphertext": ciphertext, "iv": iv], key: key)
+    guard let text = String(data: data, encoding: .utf8) else {
+      throw VaultError("Invalid secret encoding.")
+    }
+    return text
+  }
+  func approve(_ approval: Approval, missingValues: [String: String] = [:]) async throws {
+    guard key != nil else { throw VaultError("Unlock your vault first.") }
+    let result = try await request("approvals/\(approval.id)")
+    let fresh = try decode(result, "approval", as: Approval.self)
+    guard fresh.pending,
+      fresh.resourceRequests.allSatisfy({
+        ["secret", "oauth_token", "browser_session"].contains($0.type)
+      }), let publicKey = fresh.ephemeralPublicKey
+    else {
+      throw VaultError(
+        "This request expired, was already decided, or uses an unsupported resource.")
+    }
+    var values: [String: String] = [:]
+    var created: [[String: String]] = []
+    for ref in fresh.secretRefs {
+      if secrets.contains(where: { $0.ref == ref }) {
+        values[ref] = try await value(for: ref)
+      } else {
+        guard let value = missingValues[ref], !value.isEmpty, let key else {
+          throw VaultError("Enter a value for \(ref) before approving.")
+        }
+        var encrypted = try VaultCrypto.secret(value, key: key)
+        encrypted["ref"] = ref
+        encrypted["label"] = ref
+        created.append(encrypted)
+        values[ref] = value
+      }
+    }
+    let now = Date()
+    var payload: [String: Any] = [
+      "secrets": values, "approvedAt": ISO8601DateFormatter().string(from: now),
+    ]
+    if let seconds = fresh.accessDurationSeconds {
+      payload["accessExpiresAt"] = ISO8601DateFormatter().string(
+        from: now.addingTimeInterval(Double(seconds)))
+    }
+    payload["oauthTokens"] = try await oauthGrants(fresh)
+    let browser = try await browserGrant(fresh)
+    if let browser { payload["browserSession"] = browser.grant }
+    let grant = try VaultCrypto.grant(payload, recipient: publicKey.fields)
+    var body: [String: Any] = ["grantCiphertext": grant, "createdSecrets": created]
+    if let browser { body["browserSessionAuthorization"] = browser.authorization }
+    guard key != nil else {
+      throw VaultError(
+        "The vault locked before approval completed. Unlock and review the request again.")
+    }
+    _ = try await request("approvals/\(fresh.id)/grant", method: "POST", body: body)
+    try await refresh()
+  }
+  func revoke(_ path: String) async throws {
+    _ = try await request(path, method: "POST")
+    try await refresh()
+  }
+}

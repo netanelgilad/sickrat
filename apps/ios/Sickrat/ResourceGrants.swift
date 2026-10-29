@@ -16,11 +16,7 @@ extension VaultModel {
     var refreshed: [String: [String: Any]] = [:]
     for resource in approval.resourceRequests where resource.type == "oauth_token" {
       let scopes = resource.scopes ?? []
-      let matches = connections.filter {
-        $0.revokedAt == nil && $0.providerId == resource.providerId
-          && (resource.connectionName == nil || resource.connectionName == $0.connectionName)
-          && Set(scopes).isSubset(of: Set($0.grantedScopes))
-      }
+      let matches = OAuthPolicy.matches(resource, connections)
       guard matches.count == 1, let connection = matches.first, let env = resource.env else {
         throw VaultError(
           "Select a named connected account with the requested scopes in the CLI request.")
@@ -32,17 +28,27 @@ extension VaultModel {
           throw VaultError("Connection is unavailable.")
         }
         let refreshToken = try decryptRecord(record, prefix: "refreshToken")
-        let result = try await request(
-          "oauth/token", method: "POST",
-          body: [
-            "action": "refresh_token", "providerId": connection.providerId,
-            "refreshToken": refreshToken, "scopes": connection.grantedScopes,
-            "connectionId": connection.id,
-          ])
+        let result: [String: Any]
+        do {
+          result = try await request(
+            "oauth/token", method: "POST",
+            body: [
+              "action": "refresh_token", "providerId": connection.providerId,
+              "refreshToken": refreshToken, "scopes": connection.grantedScopes,
+              "connectionId": connection.id,
+            ])
+        } catch {
+          if Self.isExpectedCancellation(error) { throw error }
+          throw VaultError(
+            "Couldn’t refresh \(connection.connectionName). Check your connection, or reconnect the account from this request’s Access section and try again."
+          )
+        }
         guard let granted = result["scopes"] as? [String],
           Set(connection.grantedScopes).isSubset(of: Set(granted))
         else {
-          throw VaultError("The refreshed token has fewer scopes. Reauthorize in the web console.")
+          throw VaultError(
+            "The refreshed token has fewer scopes. Reconnect this account from the request’s Access section."
+          )
         }
         if let rotated = result["refreshToken"] as? String {
           let encrypted = try VaultCrypto.secret(rotated, key: key)

@@ -12,7 +12,7 @@ xcodebuild -project Sickrat.xcodeproj -scheme Sickrat -destination 'platform=iOS
 ./scripts/build-ipa.sh
 ```
 
-The unsigned development IPA is `build/Sickrat-0.1.2-3.ipa`. AltStore Classic signs it with the installing user's identity. No associated-domain, APNs, or shared-Keychain entitlements are requested. The app needs a device passcode for key storage.
+The unsigned development IPA is `build/Sickrat-0.1.3-4.ipa`. AltStore Classic signs it with the installing user's identity. No associated-domain, APNs, or shared-Keychain entitlements are requested. The app needs a device passcode for key storage.
 
 This branch's private AltStore installation is a development preview, not a tagged release. Production releases must still originate from `origin/main`. No release tags or release workflow guards are changed.
 
@@ -42,7 +42,6 @@ Keep the existing PWA passkey recovery record. The native app deliberately does 
 
 - **Background push:** existing PWA push remains available. This preview polls only while active. Native APNs requires a suitable provisioning identity/entitlement and a Worker APNs delivery path; do not represent foreground polling or local notifications as background delivery.
 - **Provisioning and deployment:** use the CLI/web console to create/update Cloudflare infrastructure. This preview connects to existing vaults.
-- **OAuth rename/reauthorization/provider configuration editing:** existing CLI/PWA flows remain available; native initial connection and missing-client-ID setup work, but those management screens still need migration.
 - **Cloudflare Access:** redirects are intentionally rejected. Interactive Access-protected endpoints need a separate native authentication design; do not paste Access tokens into the app.
 - **Recovery/export:** existing PWA retains recovery duties. Native key removal and key replacement are intentionally absent from the preview to avoid stranding existing encrypted records.
 - **CLI root-key parity exception:** CLI devices must never receive a vault root key. Root-key transfer is available only in unlocked owner clients; ordinary CLI resource management and grant envelopes remain unchanged.
@@ -75,3 +74,11 @@ Loading follows Apple’s [loading guidance](https://developer.apple.com/design/
 Automatic refresh preserves content and scroll geometry without a banner. Pull-to-refresh owns the sole refresh indicator. First load shows content-shaped placeholders, and mutation feedback lives beside the relevant action. Requests with recent history use a compact “No pending requests” row rather than a full-screen empty state. These are native presentation changes; PWA/CLI capabilities are unchanged.
 
 DEBUG-only synthetic fixtures support screenshot review and UI tests for initial load, automatic refresh and unlock feedback. Pull-to-refresh is verified visually during a delayed synthetic response; XCTest waits for the native refresh animation to finish before querying it. Release builds exclude the fixtures.
+
+## Preview 0.1.3 (build 4)
+
+Native account details now support renaming, revocation, reauthorization, changing scopes and shared provider client-ID editing. Approval rows distinguish missing accounts, missing permissions and ambiguous unnamed requests. Repairs open a prefilled sheet over the original request; saving updates account metadata immediately, and only explicit approval grants access. Required request scopes stay selected. Existing active connections retain their ID during reauthorization.
+
+Naming and account selection match CLI/PWA rules. Intentional native protection: reconnecting an existing connection requires the same provider subject; use a separate connection for another account. This prevents accidental identity replacement beneath a name already used by commands. Provider configuration changes apply to every connection for that service. No Worker deployment or protocol changes are required.
+
+Tests cover naming boundaries, revoked/ambiguous accounts, scope matching, identity binding, and cancellation of a repair sheet back to its original request. Native provider consent, refresh-token renewal and a repaired real CLI approval still need an on-device check with the account owner. Existing PWA recovery and notification exceptions remain.

@@ -166,6 +166,11 @@ struct RequestDetail: View {
   @State private var confirm = false
   @State private var missingValues: [String: String] = [:]
   @Environment(\.scenePhase) private var phase
+  private var oauthBlocked: Bool {
+    current.resourceRequests.filter { $0.type == "oauth_token" }.contains {
+      OAuthPolicy.matches($0, model.connections).count != 1
+    }
+  }
   var current: Approval { model.approvals.first { $0.id == request.id } ?? request }
   var body: some View {
     Form {
@@ -177,12 +182,16 @@ struct RequestDetail: View {
       Section("Access") {
         ForEach(current.secretRefs, id: \.self) { Text($0) }
         ForEach(
-          Array(current.resourceRequests.filter { $0.type != "secret" }.enumerated()), id: \.offset
-        ) { _, resource in
-          VStack(alignment: .leading) {
-            Text(resource.resourceRef ?? resource.providerId ?? resource.type)
-            Text(resource.scopes?.joined(separator: ", ") ?? resource.access ?? "").font(.caption)
-              .foregroundStyle(.secondary)
+          current.resourceRequests.filter { $0.type != "secret" }
+        ) { resource in
+          if resource.type == "oauth_token", current.pending {
+            OAuthAccessRow(resource: resource)
+          } else {
+            VStack(alignment: .leading) {
+              Text(resource.resourceRef ?? resource.providerId ?? resource.type)
+              Text(resource.scopes?.joined(separator: ", ") ?? resource.access ?? "").font(.caption)
+                .foregroundStyle(.secondary)
+            }
           }
         }
         LabeledContent(
@@ -209,7 +218,7 @@ struct RequestDetail: View {
             OperationLabel(
               title: "Approve access", systemImage: "checkmark.shield",
               operations: ["Approving access…"])
-          }.disabled(model.busy)
+          }.disabled(model.busy || oauthBlocked)
           Button(role: .destructive) {
             Task {
               await model.run("Denying request…") {
@@ -553,7 +562,8 @@ struct DevicesView: View {
             }
           }
         } label: {
-          OperationLabel(title: "Review device", operations: ["Looking up device…", "Pairing device…"])
+          OperationLabel(
+            title: "Review device", operations: ["Looking up device…", "Pairing device…"])
         }
       }
       Section("Devices") {
@@ -566,9 +576,10 @@ struct DevicesView: View {
             }
             Spacer()
             if device.revokedAt == nil {
-              Button(role: .destructive) { revoke = device } label: {
-                if revokingID == device.id { ProgressView("Revoking…") }
-                else { Text("Revoke") }
+              Button(role: .destructive) {
+                revoke = device
+              } label: {
+                if revokingID == device.id { ProgressView("Revoking…") } else { Text("Revoke") }
               }
             }
           }
@@ -613,24 +624,18 @@ struct DevicesView: View {
 }
 struct ConnectionsView: View {
   @Environment(VaultModel.self) private var model
-  @State private var selected: Connection?
-  @State private var revokingID: String?
   @State private var connecting = false
   var body: some View {
     List {
       ForEach(model.connections) { connection in
-        VStack(alignment: .leading, spacing: 6) {
-          Text(connection.accountLabel).font(.headline)
-          Text("\(connection.providerId) · \(connection.connectionName)")
-          Text(connection.grantedScopes.joined(separator: ", ")).font(.caption).foregroundStyle(
-            .secondary)
-          if connection.revokedAt == nil {
-            Button(role: .destructive) { selected = connection } label: {
-              if revokingID == connection.id { ProgressView("Revoking connection…") }
-              else { Text("Revoke connection") }
-            }
-          } else {
-            Text("Revoked").foregroundStyle(.secondary)
+        NavigationLink {
+          ConnectionDetail(connection: connection)
+        } label: {
+          VStack(alignment: .leading, spacing: 5) {
+            Text(connection.connectionName).font(.headline)
+            Text(connection.accountLabel).font(.subheadline).foregroundStyle(.secondary)
+            Text(connection.revokedAt == nil ? connection.providerId : "Revoked").font(.caption)
+              .foregroundStyle(.secondary)
           }
         }
       }
@@ -639,27 +644,10 @@ struct ConnectionsView: View {
           "No connected accounts", systemImage: "person.crop.circle",
           description: Text("Connect a service to approve short-lived access tokens."))
       }
-    }.vaultActivity()
-      .navigationTitle("Accounts")
-      .toolbar { Button("Connect account", systemImage: "plus") { connecting = true } }
-      .sheet(isPresented: $connecting) { ConnectAccountView() }
-      .confirmationDialog(
-        "Revoke this connection?",
-        isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } }),
-        titleVisibility: .visible
-      ) {
-        if let connection = selected {
-          Button("Revoke", role: .destructive) {
-            Task {
-              revokingID = connection.id
-              defer { revokingID = nil }
-              await model.run("Revoking account…") {
-                try await model.revoke("oauth/connections/\(connection.id)/revoke")
-              }
-            }
-          }
-        }
-      }
+    }
+    .navigationTitle("Accounts")
+    .toolbar { Button("Connect account", systemImage: "plus") { connecting = true } }
+    .sheet(isPresented: $connecting) { ConnectAccountView() }
   }
 }
 struct SessionsView: View {
@@ -673,9 +661,14 @@ struct SessionsView: View {
           Text(session.resourceRef)
           Text(session.state).font(.caption).foregroundStyle(.secondary)
           if session.state != "revoked" {
-            Button(role: .destructive) { selected = session } label: {
-              if revokingID == session.id { ProgressView("Revoking session…") }
-              else { Text("Revoke session") }
+            Button(role: .destructive) {
+              selected = session
+            } label: {
+              if revokingID == session.id {
+                ProgressView("Revoking session…")
+              } else {
+                Text("Revoke session")
+              }
             }
           }
         }

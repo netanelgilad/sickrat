@@ -23,7 +23,13 @@ struct Approval: Decodable, Identifiable {
   let expiresAt: String
   let expired: Bool
   let ephemeralPublicKey: PublicJWK?
-  struct Resource: Decodable {
+  struct Resource: Decodable, Identifiable {
+    var id: String {
+      [
+        type, ref ?? "", providerId ?? "", connectionName ?? "", env ?? "", resourceRef ?? "",
+        access ?? "",
+      ].joined(separator: "|")
+    }
     let type: String
     let ref: String?
     let providerId: String?
@@ -51,6 +57,7 @@ struct Connection: Decodable, Identifiable {
   let providerId: String
   let connectionName: String
   let accountLabel: String
+  var accountSubject: String? = nil
   let grantedScopes: [String]
   let revokedAt: String?
 }
@@ -109,6 +116,9 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   func request(
     _ path: String, method: String = "GET", body: [String: Any]? = nil, origin: String? = nil
   ) async throws -> [String: Any] {
+    #if DEBUG
+      if DesignFixture.enabled { throw VaultError("Sample previews do not contact a vault.") }
+    #endif
     let root = try canonicalEndpoint(origin ?? endpoint)
     guard let url = URL(string: root + "/api/" + path) else {
       throw VaultError("Invalid vault address.")

@@ -47,6 +47,10 @@ final class SystemAuthentication: NSObject, ASWebAuthenticationPresentationConte
 struct ConnectAccountView: View {
   @Environment(VaultModel.self) private var model
   @Environment(\.dismiss) private var dismiss
+  let flow: AccountFlow
+  @State private var failure: String?
+  @State private var loading = true
+  @State private var progress = "Waiting for authorization…"
   @State private var providers: [Provider] = []
   @State private var providerID = ""
   @State private var name = "personal"
@@ -55,39 +59,62 @@ struct ConnectAccountView: View {
   @State private var connecting = false
   @State private var auth = SystemAuthentication()
   @State private var task: Task<Void, Never>?
+  init(flow: AccountFlow = AccountFlow()) {
+    self.flow = flow
+    _providerID = State(initialValue: flow.providerID)
+    _name = State(initialValue: flow.name)
+    _scopes = State(
+      initialValue: Set(flow.requiredScopes).union(flow.connection?.grantedScopes ?? []))
+  }
   var provider: Provider? { providers.first { $0.id == providerID } }
   var body: some View {
     NavigationStack {
       Form {
         Section {
-          if model.activity == "Loading services…" { ProgressView("Loading services…") }
+          if loading { ProgressView("Loading services…") }
           Picker("Service", selection: $providerID) {
             Text("Choose a service").tag("")
             ForEach(providers) { Text($0.name).tag($0.id) }
-          }
+          }.disabled(!flow.providerID.isEmpty || connecting)
           TextField("Connection name", text: $name).textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
+            .autocorrectionDisabled().disabled(
+              flow.connection != nil || flow.fixedName || connecting)
+          if let account = flow.connection {
+            Text("Sign in as \(account.accountLabel).").font(.subheadline).foregroundStyle(
+              .secondary)
+          }
+        }
+        if let failure {
+          Section { Text(failure).foregroundStyle(.red) }
         }
         if let provider {
-          if provider.clientId == nil {
-            Section("Provider setup") {
+          Section {
+            DisclosureGroup("Service settings") {
               TextField("Public OAuth client ID", text: $clientID).textInputAutocapitalization(
                 .never
               ).autocorrectionDisabled()
+              Text("Changes apply to every connection for this service.").font(.footnote)
+                .foregroundStyle(.secondary)
               Text("Register this callback with your provider:").font(.footnote)
               Text(provider.redirectUri).font(.caption).textSelection(.enabled)
               Button {
                 Task {
                   await model.run("Saving provider settings…") {
-                    _ = try await model.request(
-                      "oauth/providers/\(provider.id)/config", method: "PUT",
-                      body: ["clientId": clientID])
-                    try await loadProviders()
+                    do {
+                      _ = try await model.request(
+                        "oauth/providers/\(provider.id)/config", method: "PUT",
+                        body: ["clientId": clientID.trimmingCharacters(in: .whitespacesAndNewlines)]
+                      )
+                      try await loadProviders()
+                      failure = nil
+                    } catch { failure = "Couldn’t save service settings. Please try again." }
                   }
                 }
               } label: {
                 OperationLabel(title: "Save client ID", operations: ["Saving provider settings…"])
-              }
+              }.disabled(
+                connecting || clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  || clientID == provider.clientId)
             }
           }
           Section("Allow access to") {
@@ -108,12 +135,40 @@ struct ConnectAccountView: View {
                 }
               }.disabled(
                 provider.identityScopes.contains(scope.id)
-                  || provider.connectionScopes.contains(scope.id))
+                  || provider.connectionScopes.contains(scope.id)
+                  || flow.requiredScopes.contains(scope.id) || connecting)
+            }
+          }
+          let otherScopes = scopes.subtracting(provider.scopes.map(\.id)).subtracting(
+            provider.identityScopes
+          ).subtracting(provider.connectionScopes).sorted()
+          if !otherScopes.isEmpty {
+            Section("Additional permissions") {
+              ForEach(otherScopes, id: \.self) { scope in
+                Toggle(
+                  scope,
+                  isOn: Binding(
+                    get: { scopes.contains(scope) },
+                    set: { if $0 { scopes.insert(scope) } else { scopes.remove(scope) } })
+                )
+                .disabled(flow.requiredScopes.contains(scope) || connecting)
+              }
+            }
+          }
+          if !flow.requiredScopes.isEmpty {
+            Section("Required by this request") {
+              ForEach(Array(Set(flow.requiredScopes)).sorted(), id: \.self) {
+                Text($0).font(.caption)
+              }
             }
           }
           Section {
-            if connecting { ProgressView("Waiting for authorization…") }
-            Button(connecting ? "Authorization in progress" : "Connect securely") {
+            if connecting { ProgressView(progress) }
+            Button(
+              connecting
+                ? "Authorization in progress"
+                : (flow.connection == nil ? "Connect securely" : "Reconnect securely")
+            ) {
               task = Task { await connect(provider) }
             }.disabled(connecting || provider.clientId == nil || model.busy)
           } footer: {
@@ -123,7 +178,8 @@ struct ConnectAccountView: View {
           }
         }
       }.vaultActivity()
-        .navigationTitle("Connect account").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(flow.connection == nil ? "Connect account" : "Reconnect account")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
             Button("Cancel") {
@@ -133,8 +189,17 @@ struct ConnectAccountView: View {
             }
           }
         }
-        .task { await model.run("Loading services…") { try await loadProviders() } }
-        .onChange(of: providerID) { _, _ in scopes = [] }
+        .task {
+          do { try await loadProviders() } catch {
+            failure = "Couldn’t load services. Close this sheet and try again."
+          }
+          loading = false
+        }
+        .onChange(of: providerID) { _, _ in
+          scopes = Set(flow.requiredScopes).union(flow.connection?.grantedScopes ?? [])
+          clientID = provider?.clientId ?? ""
+        }
+        .interactiveDismissDisabled(connecting)
         .onDisappear {
           task?.cancel()
           auth.close()
@@ -142,26 +207,49 @@ struct ConnectAccountView: View {
     }
   }
   private func loadProviders() async throws {
+    #if DEBUG
+      if DesignFixture.enabled {
+        providers = [DesignFixture.provider]
+        clientID = provider?.clientId ?? ""
+        return
+      }
+    #endif
     providers = try model.decode(
       try await model.request("oauth/providers"), "providers", as: [Provider].self)
+    clientID = provider?.clientId ?? ""
   }
   private func connect(_ provider: Provider) async {
     connecting = true
+    failure = nil
+    progress = "Waiting for authorization…"
     defer {
       connecting = false
       auth.close()
     }
     do {
+      #if DEBUG
+        if DesignFixture.enabled { throw VaultError("Authorization is disabled for sample accounts.") }
+      #endif
       guard
-        name.range(of: "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$", options: .regularExpression) != nil
+        OAuthPolicy.validName(name)
       else {
         throw VaultError("Use lowercase letters, numbers, and hyphens for the connection name.")
       }
       guard
         !model.connections.contains(where: {
           $0.revokedAt == nil && $0.providerId == provider.id && $0.connectionName == name
+            && $0.id != flow.connection?.id
         })
       else { throw VaultError("That connection name already exists.") }
+      if let existing = flow.connection {
+        guard
+          model.connections.contains(where: {
+            $0.id == existing.id && $0.revokedAt == nil && $0.connectionName == name
+          })
+        else {
+          throw VaultError("This connection changed. Close this sheet and open it again.")
+        }
+      }
       if model.key == nil { try await model.unlock() }
       let pair = P256.KeyAgreement.PrivateKey()
       let random = { SymmetricKey(size: .bits256).withUnsafeBytes { Data($0).base64URL } }
@@ -207,6 +295,7 @@ struct ConnectAccountView: View {
           let code = payload["code"] as? String
         else { throw VaultError("Authorization was denied or the response did not match.") }
         auth.close()
+        progress = "Verifying account…"
         let token = try await model.request(
           "oauth/token", method: "POST",
           body: [
@@ -226,12 +315,29 @@ struct ConnectAccountView: View {
           throw VaultError("Invalid provider identity response.")
         }
         if model.key == nil { try await model.unlock() }
-        guard let key = model.key, let subject = identity["subject"] as? String,
+        guard let subject = identity["subject"] as? String,
           let label = identity["label"] as? String
         else { throw VaultError("Could not verify account identity.") }
+        try OAuthPolicy.validateIdentity(existing: flow.connection, subject: subject)
+        try Task.checkCancellation()
+        if let existing = flow.connection {
+          let response = try await model.request("oauth/connections/\(existing.id)/resolve")
+          guard let live = response["connection"] as? [String: Any],
+            live["connectionName"] as? String == name,
+            live["accountSubject"] as? String == subject
+          else { throw VaultError("This connection changed. Close this sheet and try again.") }
+        }
+        try Task.checkCancellation()
+        if model.key == nil { try await model.unlock() }
+        try Task.checkCancellation()
+        guard let key = model.key else {
+          throw VaultError("Unlock your vault to save this connection.")
+        }
+        progress = "Saving encrypted connection…"
         let encrypted = try VaultCrypto.secret(refresh, key: key)
         var record: [String: Any] = [
-          "id": UUID().uuidString.lowercased(), "providerId": provider.id, "connectionName": name,
+          "id": flow.connection?.id ?? UUID().uuidString.lowercased(), "providerId": provider.id,
+          "connectionName": name,
           "accountSubject": subject, "accountLabel": label, "grantedScopes": granted,
           "tokenType": token["tokenType"] as? String ?? "Bearer",
           "refreshTokenCiphertext": encrypted["ciphertext"]!, "refreshTokenIv": encrypted["iv"]!,
@@ -241,13 +347,23 @@ struct ConnectAccountView: View {
           record["accessTokenExpiresAt"] = ISO8601DateFormatter().string(
             from: Date().addingTimeInterval(seconds))
         }
-        _ = try await model.request("oauth/connections", method: "POST", body: record)
-        _ = try await model.request("oauth/handoffs/\(id)", method: "DELETE")
-        try await model.refresh()
+        let saved = try await model.request("oauth/connections", method: "POST", body: record)
+        if let object = saved["connection"] {
+          let updated = try JSONDecoder().decode(
+            Connection.self, from: JSONSerialization.data(withJSONObject: object))
+          if let index = model.connections.firstIndex(where: { $0.id == updated.id }) {
+            model.connections[index] = updated
+          } else {
+            model.connections.append(updated)
+          }
+        }
+        _ = try? await model.request("oauth/handoffs/\(id)", method: "DELETE")
         dismiss()
         return
       }
       throw VaultError("Authorization expired. Please try again.")
-    } catch is CancellationError {} catch { model.error = error.localizedDescription }
+    } catch {
+      if !VaultModel.isExpectedCancellation(error) { failure = error.localizedDescription }
+    }
   }
 }

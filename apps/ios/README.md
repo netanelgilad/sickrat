@@ -12,7 +12,7 @@ xcodebuild -project Sickrat.xcodeproj -scheme Sickrat -destination 'platform=iOS
 ./scripts/build-ipa.sh
 ```
 
-The unsigned development IPA is `build/Sickrat-0.1.1-2.ipa`. AltStore Classic signs it with the installing user's identity. No associated-domain, APNs, or shared-Keychain entitlements are requested. The app needs a device passcode for key storage.
+The unsigned development IPA is `build/Sickrat-0.1.2-3.ipa`. AltStore Classic signs it with the installing user's identity. No associated-domain, APNs, or shared-Keychain entitlements are requested. The app needs a device passcode for key storage.
 
 This branch's private AltStore installation is a development preview, not a tagged release. Production releases must still originate from `origin/main`. No release tags or release workflow guards are changed.
 
@@ -67,3 +67,11 @@ The publisher backs up and atomically replaces `source.json`, preserves other ap
 ## Preview 0.1.1 (build 2)
 
 Expected URLSession, task and system-authentication cancellations are silent. Refresh failures appear inline with Retry; real action errors still appear as alerts. Initial load, ongoing refresh and foreground actions show progress. Refreshes no longer occupy the action lock. Keychain unlock runs off the main actor so the UI stays responsive; background locking invalidates an in-flight unlock or reveal before it can repopulate sensitive state.
+
+## Preview 0.1.2 (build 3)
+
+Loading follows Apple’s [loading guidance](https://developer.apple.com/design/human-interface-guidelines/loading) and [progress indicator guidance](https://developer.apple.com/design/human-interface-guidelines/progress-indicators). The compact list hierarchy takes inspiration from Apple Passwords and Things, while retaining standard SwiftUI navigation, lists, typography and tab bars. The installed [SwiftUI Expert skill](https://github.com/AvdLee/SwiftUI-Agent-Skill) and local AGENTS.md guide future native UI changes.
+
+Automatic refresh preserves content and scroll geometry without a banner. Pull-to-refresh owns the sole refresh indicator. First load shows content-shaped placeholders, and mutation feedback lives beside the relevant action. Requests with recent history use a compact “No pending requests” row rather than a full-screen empty state. These are native presentation changes; PWA/CLI capabilities are unchanged.
+
+DEBUG-only synthetic fixtures support screenshot review and UI tests for initial load, automatic refresh and unlock feedback. Pull-to-refresh is verified visually during a delayed synthetic response; XCTest waits for the native refresh animation to finish before querying it. Release builds exclude the fixtures.

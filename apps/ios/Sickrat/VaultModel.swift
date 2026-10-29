@@ -171,6 +171,12 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     }
   }
   func reload() async {
+    #if DEBUG
+      if DesignFixture.enabled {
+        try? await Task.sleep(for: .seconds(20))
+        return
+      }
+    #endif
     do { try await refresh() } catch { /* Refresh errors are inline, never modal. */  }
   }
   private func fetchSnapshot() async throws {

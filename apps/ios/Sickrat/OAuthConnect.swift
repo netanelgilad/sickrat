@@ -60,6 +60,7 @@ struct ConnectAccountView: View {
     NavigationStack {
       Form {
         Section {
+          if model.activity == "Loading services…" { ProgressView("Loading services…") }
           Picker("Service", selection: $providerID) {
             Text("Choose a service").tag("")
             ForEach(providers) { Text($0.name).tag($0.id) }
@@ -75,7 +76,7 @@ struct ConnectAccountView: View {
               ).autocorrectionDisabled()
               Text("Register this callback with your provider:").font(.footnote)
               Text(provider.redirectUri).font(.caption).textSelection(.enabled)
-              Button("Save client ID") {
+              Button {
                 Task {
                   await model.run("Saving provider settings…") {
                     _ = try await model.request(
@@ -84,6 +85,8 @@ struct ConnectAccountView: View {
                     try await loadProviders()
                   }
                 }
+              } label: {
+                OperationLabel(title: "Save client ID", operations: ["Saving provider settings…"])
               }
             }
           }

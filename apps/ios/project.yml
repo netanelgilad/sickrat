@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '6.0'
-    MARKETING_VERSION: '0.1.1'
-    CURRENT_PROJECT_VERSION: '2'
+    MARKETING_VERSION: '0.1.2'
+    CURRENT_PROJECT_VERSION: '3'
     DEVELOPMENT_TEAM: ''
 targets:
   Sickrat:
@@ -31,10 +31,20 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
+  SickratUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: Sickrat
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
 schemes:
   Sickrat:
     build:
       targets:
         Sickrat: all
     test:
-      targets: [SickratTests]
+      targets: [SickratTests, SickratUITests]

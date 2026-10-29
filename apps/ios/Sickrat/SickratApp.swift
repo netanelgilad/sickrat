@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @main struct SickratApp: App {
-  @State private var model = VaultModel()
+  @State private var model = VaultModel.appModel()
   @Environment(\.scenePhase) private var phase
   var body: some Scene {
     WindowGroup {
@@ -46,6 +46,9 @@ struct RootView: View {
     }
     .task(id: "\(phase)-\(model.endpoint)") {
       guard phase == .active, model.configured else { return }
+      #if DEBUG
+        if DesignFixture.enabled { return }
+      #endif
       while !Task.isCancelled {
         await model.reload()
         do { try await Task.sleep(for: .seconds(15)) } catch { return }
@@ -93,16 +96,15 @@ struct WelcomeView: View {
 }
 struct RequestsView: View {
   @Environment(VaultModel.self) private var model
+  @State private var pulling = false
   var body: some View {
     NavigationStack {
       List {
+        RefreshErrorRow()
         if model.lastRefresh == nil {
-          InitialVaultState()
+          if model.refreshError == nil { InitialVaultState(showProgress: !pulling) }
         } else if model.pending.isEmpty {
-          ContentUnavailableView(
-            "All clear", systemImage: "checkmark.shield",
-            description: Text("New access requests appear here while the app is open.")
-          ).listRowBackground(Color.clear)
+          Section { RequestsClearRow() }
         } else {
           Section("Needs your approval") {
             ForEach(model.pending) { request in
@@ -128,21 +130,33 @@ struct RequestsView: View {
         }
       }.vaultActivity()
         .navigationTitle("Requests")
-        .refreshable { await model.reload() }
+        .refreshable {
+          pulling = true
+          defer { pulling = false }
+          await model.reload()
+        }
         .toolbar { UnlockButton() }
     }
   }
 }
 struct RequestRow: View {
   let request: Approval
+  private var status: String { request.expired ? "Expired" : request.status.capitalized }
+  private var symbol: String {
+    if request.pending { return "clock" }
+    if request.expired { return "clock.badge.xmark" }
+    return request.status == "approved" ? "checkmark.circle" : "xmark.circle"
+  }
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      Text(request.device).font(.headline)
+    VStack(alignment: .leading, spacing: 6) {
+      Text(request.device).font(.body.weight(.semibold)).lineLimit(1)
       Text(request.message ?? request.command).font(.subheadline).foregroundStyle(.secondary)
         .lineLimit(2)
-      Text(request.expired ? "Expired" : request.status.capitalized).font(.caption).foregroundStyle(
-        request.pending ? .orange : .secondary)
-    }.padding(.vertical, 4)
+      Label(status, systemImage: symbol).font(.caption)
+        .foregroundStyle(request.pending ? Color.orange : Color.secondary)
+    }
+    .padding(.vertical, 3)
+    .accessibilityElement(children: .combine)
   }
 }
 struct RequestDetail: View {
@@ -189,15 +203,23 @@ struct RequestDetail: View {
           }
         }
         Section {
-          Button("Approve access", systemImage: "checkmark.shield") { confirm = true }.disabled(
-            model.busy)
-          Button("Deny request", role: .destructive) {
+          Button {
+            confirm = true
+          } label: {
+            OperationLabel(
+              title: "Approve access", systemImage: "checkmark.shield",
+              operations: ["Approving access…"])
+          }.disabled(model.busy)
+          Button(role: .destructive) {
             Task {
               await model.run("Denying request…") {
                 try await model.revoke("approvals/\(current.id)/deny")
                 dismiss()
               }
             }
+          } label: {
+            OperationLabel(
+              title: "Deny request", systemImage: "xmark", operations: ["Denying request…"])
           }.disabled(model.busy)
         } footer: {
           Text("Only the requesting device can decrypt an approved grant.")
@@ -225,30 +247,45 @@ struct RequestDetail: View {
 }
 struct UnlockButton: ToolbarContent {
   @Environment(VaultModel.self) private var model
+  private var unlocking: Bool { model.activity == "Unlocking vault…" }
   var body: some ToolbarContent {
     ToolbarItem(placement: .topBarTrailing) {
-      Button(
-        model.key == nil ? "Unlock" : "Lock", systemImage: model.key == nil ? "lock" : "lock.open"
-      ) {
+      Button {
         Task {
           await model.run(model.key == nil ? "Unlocking vault…" : "Locking vault…") {
             if model.key == nil { try await model.unlock() } else { model.lock() }
           }
         }
-      }.disabled(model.busy)
+      } label: {
+        ZStack {
+          if unlocking {
+            ProgressView().controlSize(.small)
+          } else {
+            Image(systemName: model.key == nil ? "lock" : "lock.open")
+          }
+        }.frame(width: 24, height: 24)
+      }
+      .accessibilityLabel(
+        unlocking ? "Unlocking vault" : (model.key == nil ? "Unlock vault" : "Lock vault")
+      )
+      .disabled(model.busy)
     }
   }
 }
 struct VaultView: View {
   @Environment(VaultModel.self) private var model
+  @State private var pulling = false
   @State private var search = ""
   @State private var adding = false
   var body: some View {
     NavigationStack {
       List {
+        RefreshErrorRow()
         Section("Secrets") {
           if model.lastRefresh == nil {
-            InitialVaultState()
+            if model.refreshError == nil {
+              InitialVaultState(showProgress: !pulling, title: "Fetching secrets…")
+            }
           } else if model.secrets.isEmpty {
             ContentUnavailableView(
               "A place for your secrets", systemImage: "key.horizontal",
@@ -284,7 +321,11 @@ struct VaultView: View {
         }
       }.vaultActivity()
         .navigationTitle("Vault").searchable(text: $search, prompt: "Find a secret")
-        .refreshable { await model.reload() }
+        .refreshable {
+          pulling = true
+          defer { pulling = false }
+          await model.reload()
+        }
         .toolbar {
           ToolbarItem(placement: .topBarTrailing) {
             Button("Add secret", systemImage: "plus") { adding = true }
@@ -312,14 +353,17 @@ struct SecretDetail: View {
           Text(value).font(.system(.body, design: .monospaced)).privacySensitive()
           Button("Hide value") { self.value = nil }
         } else {
-          Button("Reveal value", systemImage: "eye") {
+          Button {
             Task {
               await model.run("Revealing secret…") {
                 if model.key == nil { try await model.unlock() }
                 value = try await model.value(for: secret.ref)
               }
             }
-          }
+          } label: {
+            OperationLabel(
+              title: "Reveal value", systemImage: "eye", operations: ["Revealing secret…"])
+          }.disabled(model.busy)
         }
       }
       Section { Button("Edit secret") { editing = true } }
@@ -364,7 +408,7 @@ struct SecretEditor: View {
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
           ToolbarItem(placement: .confirmationAction) {
-            Button("Save") {
+            Button {
               Task {
                 await model.run("Saving secret…") {
                   if model.key == nil { try await model.unlock() }
@@ -373,6 +417,8 @@ struct SecretEditor: View {
                   dismiss()
                 }
               }
+            } label: {
+              OperationLabel(title: "Save", operations: ["Saving secret…"])
             }.disabled(model.busy || ref.isEmpty || name.isEmpty || value.isEmpty)
           }
         }.onAppear {
@@ -402,12 +448,16 @@ struct SettingsView: View {
           }
         }
         Section("Security") {
-          Button(model.key == nil ? "Unlock vault" : "Lock vault", systemImage: "faceid") {
+          Button {
             Task {
               await model.run(model.key == nil ? "Unlocking vault…" : "Locking vault…") {
                 if model.key == nil { try await model.unlock() } else { model.lock() }
               }
             }
+          } label: {
+            OperationLabel(
+              title: model.key == nil ? "Unlock vault" : "Lock vault", systemImage: "faceid",
+              operations: ["Unlocking vault…", "Locking vault…"])
           }
           Text(
             "Your key stays in this device’s Keychain, protected by Face ID or your passcode. The vault locks when the app enters the background."
@@ -484,12 +534,13 @@ struct DevicesView: View {
   @State private var code = ""
   @State private var pairLabel: String?
   @State private var revoke: Device?
+  @State private var revokingID: String?
   var body: some View {
     Form {
       Section("Pair a device") {
         TextField("Pairing code", text: $code).textInputAutocapitalization(.never)
           .autocorrectionDisabled()
-        Button("Review device") {
+        Button {
           Task {
             await model.run("Looking up device…") {
               let result = try await model.request(
@@ -501,6 +552,8 @@ struct DevicesView: View {
               pairLabel = label
             }
           }
+        } label: {
+          OperationLabel(title: "Review device", operations: ["Looking up device…", "Pairing device…"])
         }
       }
       Section("Devices") {
@@ -512,7 +565,12 @@ struct DevicesView: View {
                 .secondary)
             }
             Spacer()
-            if device.revokedAt == nil { Button("Revoke", role: .destructive) { revoke = device } }
+            if device.revokedAt == nil {
+              Button(role: .destructive) { revoke = device } label: {
+                if revokingID == device.id { ProgressView("Revoking…") }
+                else { Text("Revoke") }
+              }
+            }
           }
         }
       }
@@ -542,6 +600,8 @@ struct DevicesView: View {
         if let device = revoke {
           Button("Revoke device", role: .destructive) {
             Task {
+              revokingID = device.id
+              defer { revokingID = nil }
               await model.run("Revoking device…") {
                 try await model.revoke("devices/\(device.id)/revoke")
               }
@@ -554,6 +614,7 @@ struct DevicesView: View {
 struct ConnectionsView: View {
   @Environment(VaultModel.self) private var model
   @State private var selected: Connection?
+  @State private var revokingID: String?
   @State private var connecting = false
   var body: some View {
     List {
@@ -564,7 +625,10 @@ struct ConnectionsView: View {
           Text(connection.grantedScopes.joined(separator: ", ")).font(.caption).foregroundStyle(
             .secondary)
           if connection.revokedAt == nil {
-            Button("Revoke connection", role: .destructive) { selected = connection }
+            Button(role: .destructive) { selected = connection } label: {
+              if revokingID == connection.id { ProgressView("Revoking connection…") }
+              else { Text("Revoke connection") }
+            }
           } else {
             Text("Revoked").foregroundStyle(.secondary)
           }
@@ -587,6 +651,8 @@ struct ConnectionsView: View {
         if let connection = selected {
           Button("Revoke", role: .destructive) {
             Task {
+              revokingID = connection.id
+              defer { revokingID = nil }
               await model.run("Revoking account…") {
                 try await model.revoke("oauth/connections/\(connection.id)/revoke")
               }
@@ -599,6 +665,7 @@ struct ConnectionsView: View {
 struct SessionsView: View {
   @Environment(VaultModel.self) private var model
   @State private var selected: BrowserSession?
+  @State private var revokingID: String?
   var body: some View {
     List {
       ForEach(model.sessions) { session in
@@ -606,7 +673,10 @@ struct SessionsView: View {
           Text(session.resourceRef)
           Text(session.state).font(.caption).foregroundStyle(.secondary)
           if session.state != "revoked" {
-            Button("Revoke session", role: .destructive) { selected = session }
+            Button(role: .destructive) { selected = session } label: {
+              if revokingID == session.id { ProgressView("Revoking session…") }
+              else { Text("Revoke session") }
+            }
           }
         }
       }
@@ -623,6 +693,8 @@ struct SessionsView: View {
         if let session = selected {
           Button("Revoke", role: .destructive) {
             Task {
+              revokingID = session.id
+              defer { revokingID = nil }
               await model.run("Revoking session…") {
                 try await model.revoke("browser-sessions/\(session.id)/revoke")
               }

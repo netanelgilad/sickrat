@@ -50,6 +50,17 @@
                ReferencedContainer = "container:Sickrat.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "0EADFF58938378F62991E76F"
+               BuildableName = "SickratUITests.xctest"
+               BlueprintName = "SickratUITests"
+               ReferencedContainer = "container:Sickrat.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

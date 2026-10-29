@@ -113,8 +113,12 @@ enum KeyStore {
     item[kSecUseAuthenticationContext as String] = context
     var result: CFTypeRef?
     let status = SecItemCopyMatching(item as CFDictionary, &result)
+    if status == errSecUserCanceled || status == errSecInteractionNotAllowed {
+      throw CancellationError()
+    }
     guard status == errSecSuccess, let data = result as? Data else {
-      throw VaultError("Vault unlock was cancelled or the key is unavailable.")
+      throw VaultError(
+        "The vault key is unavailable. Transfer your existing vault key in Settings.")
     }
     return data
   }

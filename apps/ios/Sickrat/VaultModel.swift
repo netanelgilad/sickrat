@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import LocalAuthentication
 import Observation
 
 struct PublicJWK: Decodable {
@@ -79,15 +80,23 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   var connections: [Connection] = []
   var sessions: [BrowserSession] = []
   var error: String?
-  var busy = false
+  var activity: String?
+  var busy: Bool { activity != nil }
+  var refreshing = false
+  var refreshError: String?
+  private var lockGeneration = 0
   var lastRefresh: Date?
   var transferKey: P256.KeyAgreement.PrivateKey?
-  private let session: URLSession = {
+  private let session: URLSession
+  init(session: URLSession? = nil) {
+    self.session = session ?? Self.makeSession()
+  }
+  private static func makeSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.timeoutIntervalForRequest = 25
     configuration.urlCache = nil
     return URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-  }()
+  }
   var configured: Bool { !endpoint.isEmpty }
   var pending: [Approval] { approvals.filter(\.pending) }
   func canonicalEndpoint(_ value: String) throws -> String {
@@ -138,6 +147,8 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     endpoint = origin
     vaultName = name
     UserDefaults.standard.set(origin, forKey: "vault.endpoint")
+    lastRefresh = nil
+    refreshError = nil
     approvals = []
     secrets = []
     devices = []
@@ -146,28 +157,75 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     try await refresh()
   }
   func refresh() async throws {
+    guard !refreshing else { return }
+    refreshing = true
+    defer { refreshing = false }
+    do {
+      try await fetchSnapshot()
+      refreshError = nil
+    } catch {
+      if !Self.isExpectedCancellation(error) && !Task.isCancelled {
+        refreshError = "Couldn’t refresh. Pull to try again."
+      }
+      throw error
+    }
+  }
+  func reload() async {
+    do { try await refresh() } catch { /* Refresh errors are inline, never modal. */  }
+  }
+  private func fetchSnapshot() async throws {
     let approvalsResponse = try await request("approvals")
     let secretsResponse = try await request("secrets")
     let devicesResponse = try await request("devices")
     let connectionsResponse = try await request("oauth/connections")
     let sessionsResponse = try await request("browser-sessions")
-    approvals = try decode(approvalsResponse, "approvals", as: [Approval].self)
-    secrets = try decode(secretsResponse, "secrets", as: [Secret].self)
-    devices = try decode(devicesResponse, "devices", as: [Device].self)
-    connections = try decode(connectionsResponse, "connections", as: [Connection].self)
-    sessions = try decode(sessionsResponse, "browserSessions", as: [BrowserSession].self)
+    try Task.checkCancellation()
+    let nextApprovals = try decode(approvalsResponse, "approvals", as: [Approval].self)
+    let nextSecrets = try decode(secretsResponse, "secrets", as: [Secret].self)
+    let nextDevices = try decode(devicesResponse, "devices", as: [Device].self)
+    let nextConnections = try decode(connectionsResponse, "connections", as: [Connection].self)
+    let nextSessions = try decode(sessionsResponse, "browserSessions", as: [BrowserSession].self)
+    approvals = nextApprovals
+    secrets = nextSecrets
+    devices = nextDevices
+    connections = nextConnections
+    sessions = nextSessions
     lastRefresh = Date()
   }
-  func run(_ work: () async throws -> Void) async {
+  static func isExpectedCancellation(_ error: Error) -> Bool {
+    if error is CancellationError { return true }
+    let nsError = error as NSError
+    if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return true }
+    if nsError.domain == LAError.errorDomain {
+      return [
+        LAError.userCancel.rawValue, LAError.systemCancel.rawValue, LAError.appCancel.rawValue,
+      ].contains(nsError.code)
+    }
+    return nsError.domain == NSOSStatusErrorDomain && nsError.code == Int(errSecUserCanceled)
+  }
+  func run(_ label: String = "Working…", _ work: () async throws -> Void) async {
     guard !busy else { return }
-    busy = true
-    defer { busy = false }
-    do { try await work() } catch is CancellationError {} catch {
-      self.error = error.localizedDescription
+    activity = label
+    defer { activity = nil }
+    do { try await work() } catch {
+      if !Self.isExpectedCancellation(error) && !Task.isCancelled {
+        self.error = error.localizedDescription
+      }
     }
   }
-  func lock() { key = nil }
-  func unlock() throws { key = SymmetricKey(data: try KeyStore.read(endpoint)) }
+  func lock() {
+    lockGeneration += 1
+    key = nil
+  }
+  func unlock() async throws {
+    let account = endpoint
+    let generation = lockGeneration
+    let data = try await Task.detached(priority: .userInitiated) { try KeyStore.read(account) }
+      .value
+    try Task.checkCancellation()
+    guard generation == lockGeneration, account == endpoint else { throw CancellationError() }
+    key = SymmetricKey(data: data)
+  }
   func startTransfer() throws -> String {
     let pair = P256.KeyAgreement.PrivateKey()
     transferKey = pair
@@ -214,6 +272,7 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     try await refresh()
   }
   func value(for ref: String) async throws -> String {
+    let generation = lockGeneration
     guard let key else { throw VaultError("Unlock your vault first.") }
     let result = try await request("secrets/resolve", method: "POST", body: ["refs": [ref]])
     guard let records = result["secrets"] as? [[String: Any]], let record = records.first,
@@ -224,6 +283,8 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     guard let text = String(data: data, encoding: .utf8) else {
       throw VaultError("Invalid secret encoding.")
     }
+    try Task.checkCancellation()
+    guard generation == lockGeneration else { throw CancellationError() }
     return text
   }
   func approve(_ approval: Approval, missingValues: [String: String] = [:]) async throws {

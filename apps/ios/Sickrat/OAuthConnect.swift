@@ -77,7 +77,7 @@ struct ConnectAccountView: View {
               Text(provider.redirectUri).font(.caption).textSelection(.enabled)
               Button("Save client ID") {
                 Task {
-                  await model.run {
+                  await model.run("Saving provider settings…") {
                     _ = try await model.request(
                       "oauth/providers/\(provider.id)/config", method: "PUT",
                       body: ["clientId": clientID])
@@ -109,7 +109,8 @@ struct ConnectAccountView: View {
             }
           }
           Section {
-            Button(connecting ? "Waiting for authorization…" : "Connect securely") {
+            if connecting { ProgressView("Waiting for authorization…") }
+            Button(connecting ? "Authorization in progress" : "Connect securely") {
               task = Task { await connect(provider) }
             }.disabled(connecting || provider.clientId == nil || model.busy)
           } footer: {
@@ -118,7 +119,8 @@ struct ConnectAccountView: View {
             )
           }
         }
-      }.navigationTitle("Connect account").navigationBarTitleDisplayMode(.inline)
+      }.vaultActivity()
+        .navigationTitle("Connect account").navigationBarTitleDisplayMode(.inline)
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
             Button("Cancel") {
@@ -128,7 +130,7 @@ struct ConnectAccountView: View {
             }
           }
         }
-        .task { await model.run { try await loadProviders() } }
+        .task { await model.run("Loading services…") { try await loadProviders() } }
         .onChange(of: providerID) { _, _ in scopes = [] }
         .onDisappear {
           task?.cancel()
@@ -157,7 +159,7 @@ struct ConnectAccountView: View {
           $0.revokedAt == nil && $0.providerId == provider.id && $0.connectionName == name
         })
       else { throw VaultError("That connection name already exists.") }
-      if model.key == nil { try model.unlock() }
+      if model.key == nil { try await model.unlock() }
       let pair = P256.KeyAgreement.PrivateKey()
       let random = { SymmetricKey(size: .bits256).withUnsafeBytes { Data($0).base64URL } }
       let id = random()
@@ -220,7 +222,7 @@ struct ConnectAccountView: View {
         guard let identity = identityResponse["identity"] as? [String: Any] else {
           throw VaultError("Invalid provider identity response.")
         }
-        if model.key == nil { try model.unlock() }
+        if model.key == nil { try await model.unlock() }
         guard let key = model.key, let subject = identity["subject"] as? String,
           let label = identity["label"] as? String
         else { throw VaultError("Could not verify account identity.") }

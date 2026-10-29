@@ -12,7 +12,7 @@ xcodebuild -project Sickrat.xcodeproj -scheme Sickrat -destination 'platform=iOS
 ./scripts/build-ipa.sh
 ```
 
-The unsigned development IPA is `build/Sickrat-0.1.0-1.ipa`. AltStore Classic signs it with the installing user's identity. No associated-domain, APNs, or shared-Keychain entitlements are requested. The app needs a device passcode for key storage.
+The unsigned development IPA is `build/Sickrat-0.1.1-2.ipa`. AltStore Classic signs it with the installing user's identity. No associated-domain, APNs, or shared-Keychain entitlements are requested. The app needs a device passcode for key storage.
 
 This branch's private AltStore installation is a development preview, not a tagged release. Production releases must still originate from `origin/main`. No release tags or release workflow guards are changed.
 
@@ -62,4 +62,8 @@ After building and committing a preview, publish it to an existing private sourc
 node scripts/publish-preview.mjs /path/to/existing/altstore https://your-private-server/altstore
 ```
 
-The publisher backs up and atomically replaces `source.json`, preserves other apps, verifies built bundle metadata, includes a checksum and source commit, and refuses to overwrite an existing app version. Increment `CURRENT_PROJECT_VERSION` and the IPA build script filename for the next preview.
+The publisher backs up and atomically replaces `source.json`, preserves other apps, verifies built bundle metadata, includes a checksum and source commit, and refuses to overwrite an existing app version. Increment `CURRENT_PROJECT_VERSION` for the next preview; the package filename is derived from the built app metadata.
+
+## Preview 0.1.1 (build 2)
+
+Expected URLSession, task and system-authentication cancellations are silent. Refresh failures appear inline with Retry; real action errors still appear as alerts. Initial load, ongoing refresh and foreground actions show progress. Refreshes no longer occupy the action lock. Keychain unlock runs off the main actor so the UI stays responsive; background locking invalidates an in-flight unlock or reveal before it can repopulate sensitive state.

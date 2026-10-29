@@ -27,7 +27,7 @@ const app = {
   name: 'Sickrat Preview', bundleIdentifier, developerName: 'Netanel Gilad',
   localizedDescription: 'Native SwiftUI development preview. Approve CLI requests, manage encrypted secrets, connect accounts and transfer your existing vault key. Foreground refresh; background push and some management flows are still being migrated.',
   iconURL: url(icon), tintColor: '5856D6', category: 'utilities',
-  versions: [{version, buildVersion: build, date: new Date().toISOString(), localizedDescription: 'First native iOS development preview. Requires iOS 18 and a device passcode. Use Settings → Transfer vault key to connect your existing PWA vault.', downloadURL: url(file), size: (await stat(ipa)).size, sha256: digest, minOSVersion: info.MinimumOSVersion, commit}, ...(old?.versions ?? [])],
+  versions: [{version, buildVersion: build, date: new Date().toISOString(), localizedDescription: 'Clear progress indicators for vault loading and actions. Switching apps and cancelling authentication no longer show cancellation alerts. Unlocking stays responsive. Requires iOS 18 and a device passcode.', downloadURL: url(file), size: (await stat(ipa)).size, sha256: digest, minOSVersion: info.MinimumOSVersion, commit}, ...(old?.versions ?? [])],
   appPermissions: {entitlements: [], privacy: {NSFaceIDUsageDescription: info.NSFaceIDUsageDescription}},
 };
 await copyFile(ipa, join(directory, file), constants.COPYFILE_EXCL);

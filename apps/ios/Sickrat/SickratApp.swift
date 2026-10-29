@@ -44,10 +44,10 @@ struct RootView: View {
     } message: {
       Text(model.error ?? "")
     }
-    .task(id: phase) {
+    .task(id: "\(phase)-\(model.endpoint)") {
       guard phase == .active, model.configured else { return }
       while !Task.isCancelled {
-        await model.run { try await model.refresh() }
+        await model.reload()
         do { try await Task.sleep(for: .seconds(15)) } catch { return }
       }
     }
@@ -72,7 +72,7 @@ struct WelcomeView: View {
           TextField("https://your-vault.workers.dev", text: $address).textContentType(.URL)
             .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
           Button {
-            Task { await model.run { try await model.connect(address) } }
+            Task { await model.run("Connecting to vault…") { try await model.connect(address) } }
           } label: {
             HStack {
               Text("Continue")
@@ -86,7 +86,8 @@ struct WelcomeView: View {
             "Use the address of your existing Sickrat vault. You’ll transfer its key securely from the PWA, then unlock with Face ID or your device passcode."
           ).font(.footnote).foregroundStyle(.secondary)
         }
-      }.navigationTitle("Sickrat").navigationBarTitleDisplayMode(.inline)
+      }.vaultActivity()
+        .navigationTitle("Sickrat").navigationBarTitleDisplayMode(.inline)
     }
   }
 }
@@ -95,7 +96,9 @@ struct RequestsView: View {
   var body: some View {
     NavigationStack {
       List {
-        if model.pending.isEmpty {
+        if model.lastRefresh == nil {
+          InitialVaultState()
+        } else if model.pending.isEmpty {
           ContentUnavailableView(
             "All clear", systemImage: "checkmark.shield",
             description: Text("New access requests appear here while the app is open.")
@@ -123,8 +126,9 @@ struct RequestsView: View {
             }
           }
         }
-      }.navigationTitle("Requests")
-        .refreshable { await model.run { try await model.refresh() } }
+      }.vaultActivity()
+        .navigationTitle("Requests")
+        .refreshable { await model.reload() }
         .toolbar { UnlockButton() }
     }
   }
@@ -189,7 +193,7 @@ struct RequestDetail: View {
             model.busy)
           Button("Deny request", role: .destructive) {
             Task {
-              await model.run {
+              await model.run("Denying request…") {
                 try await model.revoke("approvals/\(current.id)/deny")
                 dismiss()
               }
@@ -199,7 +203,8 @@ struct RequestDetail: View {
           Text("Only the requesting device can decrypt an approved grant.")
         }
       }
-    }.navigationTitle("Review request").navigationBarTitleDisplayMode(.inline)
+    }.vaultActivity()
+      .navigationTitle("Review request").navigationBarTitleDisplayMode(.inline)
       .onChange(of: phase) { _, phase in if phase == .background { missingValues = [:] } }
       .confirmationDialog(
         "Allow \(current.device) to access these resources?", isPresented: $confirm,
@@ -207,8 +212,8 @@ struct RequestDetail: View {
       ) {
         Button("Approve access") {
           Task {
-            await model.run {
-              if model.key == nil { try model.unlock() }
+            await model.run("Approving access…") {
+              if model.key == nil { try await model.unlock() }
               try await model.approve(current, missingValues: missingValues)
               missingValues = [:]
               dismiss()
@@ -226,7 +231,9 @@ struct UnlockButton: ToolbarContent {
         model.key == nil ? "Unlock" : "Lock", systemImage: model.key == nil ? "lock" : "lock.open"
       ) {
         Task {
-          await model.run { if model.key == nil { try model.unlock() } else { model.lock() } }
+          await model.run(model.key == nil ? "Unlocking vault…" : "Locking vault…") {
+            if model.key == nil { try await model.unlock() } else { model.lock() }
+          }
         }
       }.disabled(model.busy)
     }
@@ -240,7 +247,9 @@ struct VaultView: View {
     NavigationStack {
       List {
         Section("Secrets") {
-          if model.secrets.isEmpty {
+          if model.lastRefresh == nil {
+            InitialVaultState()
+          } else if model.secrets.isEmpty {
             ContentUnavailableView(
               "A place for your secrets", systemImage: "key.horizontal",
               description: Text("Add a secret to share it through approved requests."))
@@ -273,8 +282,9 @@ struct VaultView: View {
             Label("Browser sessions", systemImage: "globe")
           }
         }
-      }.navigationTitle("Vault").searchable(text: $search, prompt: "Find a secret")
-        .refreshable { await model.run { try await model.refresh() } }
+      }.vaultActivity()
+        .navigationTitle("Vault").searchable(text: $search, prompt: "Find a secret")
+        .refreshable { await model.reload() }
         .toolbar {
           ToolbarItem(placement: .topBarTrailing) {
             Button("Add secret", systemImage: "plus") { adding = true }
@@ -304,8 +314,8 @@ struct SecretDetail: View {
         } else {
           Button("Reveal value", systemImage: "eye") {
             Task {
-              await model.run {
-                if model.key == nil { try model.unlock() }
+              await model.run("Revealing secret…") {
+                if model.key == nil { try await model.unlock() }
                 value = try await model.value(for: secret.ref)
               }
             }
@@ -313,7 +323,8 @@ struct SecretDetail: View {
         }
       }
       Section { Button("Edit secret") { editing = true } }
-    }.navigationTitle(secret.label).navigationBarTitleDisplayMode(.inline)
+    }.vaultActivity()
+      .navigationTitle(secret.label).navigationBarTitleDisplayMode(.inline)
       .sheet(isPresented: $editing) { SecretEditor(secret: secret) }
       .onDisappear { value = nil }
       .onChange(of: phase) { _, phase in if phase != .active { value = nil } }
@@ -345,28 +356,30 @@ struct SecretEditor: View {
         } footer: {
           Text("Encrypted on this device before it leaves the app.")
         }
-      }.navigationTitle(secret == nil ? "New secret" : "Edit secret").navigationBarTitleDisplayMode(
-        .inline
-      )
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Save") {
-            Task {
-              await model.run {
-                if model.key == nil { try model.unlock() }
-                try await model.saveSecret(ref: ref, label: name, value: value)
-                value = ""
-                dismiss()
+      }.vaultActivity()
+        .navigationTitle(secret == nil ? "New secret" : "Edit secret")
+        .navigationBarTitleDisplayMode(
+          .inline
+        )
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Save") {
+              Task {
+                await model.run("Saving secret…") {
+                  if model.key == nil { try await model.unlock() }
+                  try await model.saveSecret(ref: ref, label: name, value: value)
+                  value = ""
+                  dismiss()
+                }
               }
-            }
-          }.disabled(model.busy || ref.isEmpty || name.isEmpty || value.isEmpty)
+            }.disabled(model.busy || ref.isEmpty || name.isEmpty || value.isEmpty)
+          }
+        }.onAppear {
+          ref = secret?.ref ?? ""
+          name = secret?.label ?? ""
         }
-      }.onAppear {
-        ref = secret?.ref ?? ""
-        name = secret?.label ?? ""
-      }
-      .onChange(of: phase) { _, phase in if phase == .background { value = "" } }
+        .onChange(of: phase) { _, phase in if phase == .background { value = "" } }
     }
   }
 }
@@ -391,7 +404,9 @@ struct SettingsView: View {
         Section("Security") {
           Button(model.key == nil ? "Unlock vault" : "Lock vault", systemImage: "faceid") {
             Task {
-              await model.run { if model.key == nil { try model.unlock() } else { model.lock() } }
+              await model.run(model.key == nil ? "Unlocking vault…" : "Locking vault…") {
+                if model.key == nil { try await model.unlock() } else { model.lock() }
+              }
             }
           }
           Text(
@@ -399,13 +414,16 @@ struct SettingsView: View {
           ).font(.footnote).foregroundStyle(.secondary)
         }
         Section("Development preview") {
-          Text("0.1.0 · Native SwiftUI")
+          Text(
+            "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")"
+          )
           Text(
             "Requests refresh while the app is open. Background push and vault provisioning are still being migrated."
           ).font(.footnote).foregroundStyle(.secondary)
           if let url = URL(string: model.endpoint) { Link("Open web console", destination: url) }
         }
-      }.navigationTitle("Settings")
+      }.vaultActivity()
+        .navigationTitle("Settings")
     }
   }
 }
@@ -447,7 +465,8 @@ struct TransferView: View {
           "The request contains only a public key. Only this app can decrypt the transfer. Keep this screen’s transfer active until import completes."
         )
       }
-    }.navigationTitle("Transfer key").navigationBarTitleDisplayMode(.inline)
+    }.vaultActivity()
+      .navigationTitle("Transfer key").navigationBarTitleDisplayMode(.inline)
       .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
         do {
           let url = try result.get()
@@ -472,7 +491,7 @@ struct DevicesView: View {
           .autocorrectionDisabled()
         Button("Review device") {
           Task {
-            await model.run {
+            await model.run("Looking up device…") {
               let result = try await model.request(
                 "devices/pairing-codes/\(code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")"
               )
@@ -497,7 +516,8 @@ struct DevicesView: View {
           }
         }
       }
-    }.navigationTitle("Devices")
+    }.vaultActivity()
+      .navigationTitle("Devices")
       .confirmationDialog(
         "Pair \(pairLabel ?? "device")?",
         isPresented: Binding(get: { pairLabel != nil }, set: { if !$0 { pairLabel = nil } }),
@@ -505,7 +525,7 @@ struct DevicesView: View {
       ) {
         Button("Pair device") {
           Task {
-            await model.run {
+            await model.run("Pairing device…") {
               try await model.revoke(
                 "devices/pairing-codes/\(code.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")/approve"
               )
@@ -521,7 +541,11 @@ struct DevicesView: View {
       ) {
         if let device = revoke {
           Button("Revoke device", role: .destructive) {
-            Task { await model.run { try await model.revoke("devices/\(device.id)/revoke") } }
+            Task {
+              await model.run("Revoking device…") {
+                try await model.revoke("devices/\(device.id)/revoke")
+              }
+            }
           }
         }
       }
@@ -551,7 +575,8 @@ struct ConnectionsView: View {
           "No connected accounts", systemImage: "person.crop.circle",
           description: Text("Connect a service to approve short-lived access tokens."))
       }
-    }.navigationTitle("Accounts")
+    }.vaultActivity()
+      .navigationTitle("Accounts")
       .toolbar { Button("Connect account", systemImage: "plus") { connecting = true } }
       .sheet(isPresented: $connecting) { ConnectAccountView() }
       .confirmationDialog(
@@ -562,7 +587,7 @@ struct ConnectionsView: View {
         if let connection = selected {
           Button("Revoke", role: .destructive) {
             Task {
-              await model.run {
+              await model.run("Revoking account…") {
                 try await model.revoke("oauth/connections/\(connection.id)/revoke")
               }
             }
@@ -588,7 +613,8 @@ struct SessionsView: View {
       if model.sessions.isEmpty {
         ContentUnavailableView("No browser sessions", systemImage: "globe")
       }
-    }.navigationTitle("Browser sessions")
+    }.vaultActivity()
+      .navigationTitle("Browser sessions")
       .confirmationDialog(
         "Revoke this browser session?",
         isPresented: Binding(get: { selected != nil }, set: { if !$0 { selected = nil } }),
@@ -597,7 +623,9 @@ struct SessionsView: View {
         if let session = selected {
           Button("Revoke", role: .destructive) {
             Task {
-              await model.run { try await model.revoke("browser-sessions/\(session.id)/revoke") }
+              await model.run("Revoking session…") {
+                try await model.revoke("browser-sessions/\(session.id)/revoke")
+              }
             }
           }
         }

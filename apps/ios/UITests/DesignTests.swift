@@ -55,6 +55,21 @@ import XCTest
     for _ in 0..<5 where !app.buttons["Approve access"].exists { app.swipeUp() }
     XCTAssertFalse(app.buttons["Approve access"].isEnabled)
   }
+  func testTransferScreenExplainsAccessAndRequiresRequest() {
+    let app = launch("idle")
+    app.tabBars.buttons["Settings"].tap()
+    app.buttons["Transfer vault key"].tap()
+    for _ in 0..<6 where !app.buttons["Send to another iPhone"].isHittable { app.swipeUp() }
+    app.buttons["Send to another iPhone"].tap()
+    XCTAssertTrue(app.navigationBars["Send to another iPhone"].waitForExistence(timeout: 3))
+    for _ in 0..<6 where !app.buttons["Authenticate and save transfer"].exists { app.swipeUp() }
+    XCTAssertFalse(app.buttons["Authenticate and save transfer"].isEnabled)
+    XCTAssertTrue(app.staticTexts["Only use a request from a device you own. Transferring the key gives that device full access to this vault."].exists)
+    let shot = XCTAttachment(screenshot: app.screenshot())
+    shot.name = "Native key transfer"
+    shot.lifetime = .keepAlways
+    add(shot)
+  }
   func testUnlockProgressStaysInToolbar() {
     let app = launch("unlock")
     XCTAssertEqual(

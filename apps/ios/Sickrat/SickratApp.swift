@@ -496,7 +496,7 @@ struct TransferView: View {
       Section {
         Text("Bring your existing key").font(.title2.bold())
         Text(
-          "Start here, then paste the transfer request into Settings → Native iOS transfer in your unlocked web console. Save the encrypted file and import it here within 10 minutes."
+          "Start here, then use the request on your other iPhone or in Settings → Native iOS transfer in your web console. Import the encrypted file here within 10 minutes."
         )
       }
       Section {
@@ -523,6 +523,11 @@ struct TransferView: View {
         Text(
           "The request contains only a public key. Only this app can decrypt the transfer. Keep this screen’s transfer active until import completes."
         )
+      }
+      Section {
+        NavigationLink("Send to another iPhone") { SendKeyView() }
+      } footer: {
+        Text("Already have your key on this iPhone? Transfer it directly to another iPhone.")
       }
     }.vaultActivity()
       .navigationTitle("Transfer key").navigationBarTitleDisplayMode(.inline)

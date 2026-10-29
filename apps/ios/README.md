@@ -82,3 +82,11 @@ Native account details now support renaming, revocation, reauthorization, changi
 Naming and account selection match CLI/PWA rules. Intentional native protection: reconnecting an existing connection requires the same provider subject; use a separate connection for another account. This prevents accidental identity replacement beneath a name already used by commands. Provider configuration changes apply to every connection for that service. No Worker deployment or protocol changes are required.
 
 Tests cover naming boundaries, revoked/ambiguous accounts, scope matching, identity binding, and cancellation of a repair sheet back to its original request. Native provider consent, refresh-token renewal and a repaired real CLI approval still need an on-device check with the account owner. Existing PWA recovery and notification exceptions remain.
+
+## Preview 0.1.4 (build 5)
+
+Settings → Transfer vault key → Send to another iPhone now exports the existing PWA-compatible encrypted transfer envelope. Start a transfer on the destination iPhone, paste its request on the source iPhone, authenticate again with Face ID/passcode, and save the encrypted JSON with the system Files exporter. Send that file to the destination and import it within ten minutes. A transfer grants full vault access to the recipient; it is not a durable backup and does not revoke the source phone.
+
+The sender validates the request type, version, size, origin and P-256 key before authentication. Changing vaults discards the old incoming transfer key. Exports require fresh Keychain authentication even when already unlocked. The app never exports a plaintext key or sends the root key to a server. The PWA already supports the same owner export; CLI root-key access remains intentionally excluded. PWA passkey recovery is still required for durable recovery. No Worker deployment is needed.
+
+Protocol tests verify the envelope's origin, key and expiry, wrong-recipient rejection and invalid request rejection. UI tests verify the access explanation and disabled export without a request. Actual Keychain authentication, Files handoff and import on a second physical phone require on-device verification.

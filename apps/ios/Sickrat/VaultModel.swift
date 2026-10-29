@@ -154,6 +154,7 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     guard let vault = response["vault"] as? [String: Any], let name = vault["name"] as? String
     else { throw VaultError("This address is not a Sickrat vault.") }
     lock()
+    transferKey = nil
     endpoint = origin
     vaultName = name
     UserDefaults.standard.set(origin, forKey: "vault.endpoint")

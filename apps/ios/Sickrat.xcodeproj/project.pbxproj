@@ -19,7 +19,9 @@
 		918FAED120C955CCAF3F29CB /* OAuthManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C8D1A3D39140BD0B25CF654 /* OAuthManagement.swift */; };
 		97976C66AA3433D1513D77D5 /* SickratApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 983BB7CEFDAB19BAFBB0749F /* SickratApp.swift */; };
 		BA202FC9765F28867B19A908 /* ActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D1A90A87C73A5CC08D0DB3 /* ActivityViews.swift */; };
+		BCE02A14B40A61E5AB408420 /* KeyTransferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E99AA5E49F43AC1228E2BEE /* KeyTransferTests.swift */; };
 		C308ED34B48848F7F1EA518E /* DesignTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92AB1D866F504C8DED76607 /* DesignTests.swift */; };
+		D7828FC8360729B66B97A494 /* KeyTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F4F2B1C8E09CB0BAC0A4CD4 /* KeyTransfer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,8 +50,10 @@
 		8058D70B71512FC80A7F1A35 /* SickratUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SickratUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		84755FECE0051DD933EDF106 /* SickratTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SickratTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		86DC2ACF1922A4836DBB272C /* CryptoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoTests.swift; sourceTree = "<group>"; };
+		8F4F2B1C8E09CB0BAC0A4CD4 /* KeyTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTransfer.swift; sourceTree = "<group>"; };
 		983BB7CEFDAB19BAFBB0749F /* SickratApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SickratApp.swift; sourceTree = "<group>"; };
 		98D1A90A87C73A5CC08D0DB3 /* ActivityViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityViews.swift; sourceTree = "<group>"; };
+		9E99AA5E49F43AC1228E2BEE /* KeyTransferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyTransferTests.swift; sourceTree = "<group>"; };
 		BB318A0C3BB83C47D9513FFF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D192336E401D78094EC26F17 /* Crypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Crypto.swift; sourceTree = "<group>"; };
 		D53F6776D98A6D5FA5774057 /* Sickrat.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Sickrat.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -75,6 +79,7 @@
 			children = (
 				DDA307657AB4E8644C9B2510 /* ActivityTests.swift */,
 				86DC2ACF1922A4836DBB272C /* CryptoTests.swift */,
+				9E99AA5E49F43AC1228E2BEE /* KeyTransferTests.swift */,
 				3AFFDAC5A2D3DF3A9992F9F9 /* OAuthPolicyTests.swift */,
 			);
 			path = Tests;
@@ -98,6 +103,7 @@
 				D192336E401D78094EC26F17 /* Crypto.swift */,
 				425B5E4F0B151441D10D9FD3 /* DesignFixture.swift */,
 				DBFF43E685FA0047BF0E148B /* Info.plist */,
+				8F4F2B1C8E09CB0BAC0A4CD4 /* KeyTransfer.swift */,
 				E5C46B1A5F3215C2A4798F9C /* OAuthConnect.swift */,
 				4C8D1A3D39140BD0B25CF654 /* OAuthManagement.swift */,
 				0E9785DE960740A3E5F7D61E /* ResourceGrants.swift */,
@@ -232,6 +238,7 @@
 			files = (
 				28EC715E2C770A49D347E7CD /* ActivityTests.swift in Sources */,
 				0A625F146587829603DA198A /* CryptoTests.swift in Sources */,
+				BCE02A14B40A61E5AB408420 /* KeyTransferTests.swift in Sources */,
 				608C9D0D1E68EFD032B60B22 /* OAuthPolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -243,6 +250,7 @@
 				BA202FC9765F28867B19A908 /* ActivityViews.swift in Sources */,
 				7B763C8A2D7072FC228E907B /* Crypto.swift in Sources */,
 				19C37679076387653CBC3D80 /* DesignFixture.swift in Sources */,
+				D7828FC8360729B66B97A494 /* KeyTransfer.swift in Sources */,
 				092420B2074938E7372E8BAC /* OAuthConnect.swift in Sources */,
 				918FAED120C955CCAF3F29CB /* OAuthManagement.swift in Sources */,
 				35BDC96301EFF6F474F3702A /* ResourceGrants.swift in Sources */,
@@ -327,7 +335,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -347,7 +355,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.3;
+				MARKETING_VERSION = 0.1.4;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -429,7 +437,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -443,7 +451,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.3;
+				MARKETING_VERSION = 0.1.4;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

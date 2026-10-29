@@ -114,7 +114,8 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     return url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
   }
   func request(
-    _ path: String, method: String = "GET", body: [String: Any]? = nil, origin: String? = nil
+    _ path: String, method: String = "GET", body: [String: Any]? = nil, origin: String? = nil,
+    bearer: String? = nil
   ) async throws -> [String: Any] {
     #if DEBUG
       if DesignFixture.enabled { throw VaultError("Sample previews do not contact a vault.") }
@@ -126,6 +127,7 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     var request = URLRequest(url: url)
     request.httpMethod = method
     request.setValue("application/json", forHTTPHeaderField: "Accept")
+    if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
     if let body {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -212,6 +214,7 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   static func isExpectedCancellation(_ error: Error) -> Bool {
     if error is CancellationError { return true }
     let nsError = error as NSError
+    if nsError.domain == NSCocoaErrorDomain && nsError.code == NSUserCancelledError { return true }
     if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled { return true }
     if nsError.domain == LAError.errorDomain {
       return [

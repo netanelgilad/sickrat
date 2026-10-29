@@ -1855,6 +1855,7 @@ function AppShell({
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
 	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown in your terminal.");
 	const [pushSubscriptionChecked, setPushSubscriptionChecked] = useState(false);
+	const [nativePushSecret, setNativePushSecret] = useState<string | null>(null);
 	const [cloudflareToken, setCloudflareToken] = useState<string | null>(() => localStorage.getItem("sickrat.cf.accessToken"));
 	const [selectedAccountId, setSelectedAccountId] = useState("");
 	const [provisioning, setProvisioning] = useState<CloudflareProvisioning | null>(null);
@@ -1880,6 +1881,14 @@ function AppShell({
 	const browserSessionsQuery = useQuery({ ...vaultQueries.browserSessions(), enabled: route === "sessions" || route === "app" });
 	const approvalsQuery = useQuery({ ...vaultQueries.approvals(approvalFilter), enabled: route === "approvals" || route === "app" });
 	const devicesQuery = useQuery({ ...vaultQueries.devices(), enabled: route === "devices" || route === "app" });
+	const nativePushQuery = useQuery({
+		queryKey: ["native-push", "devices"], enabled: route === "devices" && nativePushSecret !== null,
+		queryFn: async () => {
+			const response = await fetch("/api/native-push/devices", {headers: {authorization: `Bearer ${nativePushSecret}`}});
+			if (!response.ok) throw new Error("Could not load notification devices.");
+			return ((await response.json()) as {devices: Array<{id: string; createdAt: string; updatedAt: string}>}).devices;
+		},
+	});
 	const approvalQuery = useQuery({ ...vaultQueries.approval(requestId ?? ""), enabled: Boolean(requestId) });
 	const latestReleaseQuery = useQuery(vaultQueries.latestRelease());
 	const cloudflareConfigQuery = useQuery(vaultQueries.cloudflareConfig());
@@ -3282,6 +3291,18 @@ function AppShell({
 		}
 	}
 
+	async function removeNativePushDevice(id: string) {
+		if (!window.confirm("Stop notifications on this iPhone?")) return;
+		setBusy(true);
+		try {
+			const response = await fetch(`/api/native-push/devices/${encodeURIComponent(id)}/revoke`, {method: "POST", headers: {authorization: `Bearer ${nativePushSecret}`}});
+			if (!response.ok) throw new Error("Could not remove notification device.");
+			await queryClient.invalidateQueries({queryKey: ["native-push", "devices"]});
+			setPairingStatus("iPhone notifications removed.");
+		} catch (error) { setPairingStatus(friendlyError(error, "Could not remove notification device.")); }
+		finally { setBusy(false); }
+	}
+
 	async function revokeBrowserSession(session: BrowserSessionMetadata) {
 		if (!window.confirm(`Revoke ${session.resourceRef}? Its encrypted current artifact will be deleted.`)) return;
 		setBusy(true);
@@ -4258,6 +4279,28 @@ function AppShell({
 							<ListItem title="No paired devices yet" />
 						)}
 					</List>
+					<BlockTitle>iPhone Notifications</BlockTitle>
+					{!nativePushSecret && <Block strong inset>
+						<p>Choose the private notification setup file to manage iPhone notifications.</p>
+						<input aria-label="Notification setup file" type="file" accept="application/json,.json" onChange={async event => {
+							try {
+								const file = event.currentTarget.files?.[0];
+								if (!file || file.size > 4096) throw new Error("Choose a valid setup file.");
+								const setup = JSON.parse(await file.text());
+								if (setup.type !== "sickrat-native-push-setup" || setup.version !== 1 || setup.origin !== window.location.origin || typeof setup.secret !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(setup.secret)) throw new Error("This setup file doesn’t match this vault.");
+								setNativePushSecret(setup.secret);
+							} catch (error) { setPairingStatus(friendlyError(error, "Couldn’t read setup file.")); }
+						}} />
+					</Block>}
+					{nativePushSecret && <List strong inset>
+						{nativePushQuery.isPending ? <ListItem title="Loading notification devices…" /> :
+						 nativePushQuery.isError ? <ListItem title="Couldn’t load notification devices" /> :
+						 nativePushQuery.data?.length ? nativePushQuery.data.map(device =>
+							<ListItem key={device.id} title="iPhone" subtitle={device.id}
+								footer={`Updated ${new Date(device.updatedAt).toLocaleString()}`}
+								after={<Button small rounded outline disabled={busy} onClick={() => removeNativePushDevice(device.id)}>Remove</Button>} />)
+						 : <ListItem title="No iPhone notifications enabled" />}
+					</List>}
 				</>
 			);
 		} else {

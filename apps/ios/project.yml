@@ -6,8 +6,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: '6.0'
-    MARKETING_VERSION: '0.1.4'
-    CURRENT_PROJECT_VERSION: '5'
+    MARKETING_VERSION: '0.1.5'
+    CURRENT_PROJECT_VERSION: '6'
     DEVELOPMENT_TEAM: ''
 targets:
   Sickrat:
@@ -19,6 +19,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.netanelgilad.sickrat
         INFOPLIST_FILE: Sickrat/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sickrat/Sickrat.entitlements
         TARGETED_DEVICE_FAMILY: '1,2'
         CODE_SIGNING_ALLOWED: NO
   SickratTests:

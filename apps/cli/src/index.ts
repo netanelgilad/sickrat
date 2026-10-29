@@ -382,6 +382,8 @@ Usage:
   sickrat connection rename <provider>/<name> <new-name>
   sickrat connection disconnect <provider>/<name> [--yes]
   sickrat connection reauthorize <provider>/<name>
+  sickrat notifications list --setup-file <path> [--json]
+  sickrat notifications remove <id> --setup-file <path> --yes
   sickrat run [--env KEY=ref] [--env-file <path>] [--message <why>] [--access-for <duration>] [--approval-timeout <duration>] -- <command...>
   sickrat browser-session create <ref> [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <producer...>
   sickrat browser-session run <ref> [--read-only] [--message <why>] [--approval-timeout <duration>] [--transaction-timeout <duration>] -- <consumer...>
@@ -1674,6 +1676,12 @@ async function uploadVaultWorker(input: {
 	const workerPath = join(input.workerDir, "index.js");
 	const workerSource = await readFile(workerPath);
 	const migrationTag = await readWorkerMigrationTag(input.accountId, input.accessToken, input.scriptName);
+	// Preserve optional APNs secrets without reading their values. Existing
+	// secrets are inherited explicitly; a first deployment has none to inherit.
+	const existingSecrets = migrationTag ? await readCloudflareApi<Array<{name:string}>>(
+		`/accounts/${input.accountId}/workers/scripts/${input.scriptName}/secrets`, input.accessToken,
+	) : [];
+	const apnsNames = new Set(["APNS_TEAM_ID", "APNS_KEY_ID", "APNS_PRIVATE_KEY", "APNS_TOPIC", "APNS_ENVIRONMENT", "APNS_ENROLLMENT_SECRET"]);
 	const metadata = {
 		main_module: "index.js",
 		compatibility_date: "2026-06-06",
@@ -1692,6 +1700,7 @@ async function uploadVaultWorker(input: {
 			{ name: "APPROVAL_HUB", type: "durable_object_namespace", class_name: "ApprovalHub" },
 			{ name: "VAPID_PUBLIC_KEY", type: "plain_text", text: input.vapidPublicKey },
 			{ name: "VAPID_PRIVATE_KEY", type: "secret_text", text: input.vapidPrivateKey },
+			...existingSecrets.filter(secret => apnsNames.has(secret.name)).map(secret => ({name: secret.name, type: "inherit"})),
 			{ name: "SICKRAT_VAULT_NAME", type: "plain_text", text: input.vaultName },
 			{ name: "SICKRAT_DEPLOYED_BY", type: "plain_text", text: "sickrat-cli" },
 			{ name: "SICKRAT_VERSION", type: "plain_text", text: input.sickratVersion },
@@ -2771,6 +2780,30 @@ async function browserSessionCommand(args: string[]) {
 	}
 }
 
+async function notificationsCommand(args: string[]) {
+  const action = args[1];
+  const config = await readConfig();
+  if (!config.workerUrl) throw new Error("No paired Sickrat vault is configured.");
+  const setupPath = getArgValue(args, "--setup-file");
+  if (!setupPath) throw new Error("Provide --setup-file with your private notification setup file.");
+  const setup = JSON.parse(await readFile(resolve(setupPath), "utf8")) as {type?:string;version?:number;origin?:string;secret?:string};
+  if (setup.type !== "sickrat-native-push-setup" || setup.version !== 1 || setup.origin !== config.workerUrl.replace(/\/$/, "") || !setup.secret || !/^[A-Za-z0-9_-]{43}$/.test(setup.secret)) throw new Error("Notification setup file does not match this vault.");
+  const headers = {authorization: `Bearer ${setup.secret}`};
+  if (action === "list") {
+    const result = await api<{devices: Array<{id:string;createdAt:string;updatedAt:string}>}>(config.workerUrl, "/api/native-push/devices", {headers});
+    if (args.includes("--json")) console.log(JSON.stringify(result.devices, null, 2));
+    else if (!result.devices.length) console.log("No iPhone notification devices.");
+    else for (const device of result.devices) console.log(`${device.id}\t${device.createdAt}\t${device.updatedAt}`);
+    return;
+  }
+  if (action === "remove" && args[2] && args.includes("--yes")) {
+    await api(config.workerUrl, `/api/native-push/devices/${encodeURIComponent(args[2])}/revoke`, {method:"POST", headers});
+    console.log("iPhone notification device removed.");
+    return;
+  }
+  throw new Error("Usage: sickrat notifications list --setup-file <path> [--json] | sickrat notifications remove <id> --setup-file <path> --yes");
+}
+
 async function main() {
 	const args = process.argv.slice(2);
 	const command = args[0];
@@ -2803,6 +2836,7 @@ async function main() {
 		if (command === "self" && args[1] === "update") return await selfUpdate(args);
 		if (command === "update") return await updateAll(args);
 		if (command === "pair") return await pair(args);
+		if (command === "notifications") return await notificationsCommand(args);
 		if (command === "provider") return await providerCommand(args);
 		if (command === "connection") return await connectionCommand(args);
 		if (command === "run") return await runWithSecrets(args);

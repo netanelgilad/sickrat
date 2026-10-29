@@ -37,6 +37,11 @@ extension VaultModel {
         return model
       }
       model.lastRefresh = Date()
+      if scenario == "notification" {
+        model.approvals = [Approval(id: "550e8400-e29b-41d4-a716-446655440000", device: "Test Mac", command: "Test request", message: nil, secretRefs: [], resourceRequests: [], accessDurationSeconds: nil, status: "pending", expiresAt: "2099-01-01T00:00:00Z", expired: false, ephemeralPublicKey: nil)]
+        PushCoordinator.shared.requestID = "550e8400-e29b-41d4-a716-446655440000"
+        return model
+      }
       if scenario == "oauth" {
         model.connections = [
           Connection(

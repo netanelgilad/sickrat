@@ -25,10 +25,10 @@ const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ios, encoding: 
 const url = name => baseURL.replace(/\/$/, '') + '/' + name;
 const app = {
   name: 'Sickrat Preview', bundleIdentifier, developerName: 'Netanel Gilad',
-  localizedDescription: 'Native SwiftUI development preview. Approve CLI requests, manage encrypted secrets, connect accounts and transfer your existing vault key. Foreground refresh; background push and some management flows are still being migrated.',
+  localizedDescription: 'Native SwiftUI development preview. Approve CLI requests, manage encrypted secrets, connect accounts and transfer your existing vault key. Native approval notifications and foreground refresh; some management flows are still being migrated.',
   iconURL: url(icon), tintColor: '5856D6', category: 'utilities',
-  versions: [{version, buildVersion: build, date: new Date().toISOString(), localizedDescription: 'Transfer your vault key directly between iPhones with fresh device authentication and an encrypted, recipient-bound file. Existing web-console transfers remain supported. Requires iOS 18 and a device passcode.', downloadURL: url(file), size: (await stat(ipa)).size, sha256: digest, minOSVersion: info.MinimumOSVersion, commit}, ...(old?.versions ?? [])],
-  appPermissions: {entitlements: [], privacy: {NSFaceIDUsageDescription: info.NSFaceIDUsageDescription}},
+  versions: [{version, buildVersion: build, date: new Date().toISOString(), localizedDescription: 'Native approval notifications, with a tap opening the request. Import the private setup file, then enable notifications in Sickrat settings. Requires iOS 18, a device passcode, and the matching vault update.', downloadURL: url(file), size: (await stat(ipa)).size, sha256: digest, minOSVersion: info.MinimumOSVersion, commit}, ...(old?.versions ?? [])],
+  appPermissions: {entitlements: ['aps-environment'], privacy: {NSFaceIDUsageDescription: info.NSFaceIDUsageDescription}},
 };
 await copyFile(ipa, join(directory, file), constants.COPYFILE_EXCL);
 await copyFile(join(ios, 'Sickrat/Assets.xcassets/AppIcon.appiconset/AppIcon.png'), join(directory, icon), constants.COPYFILE_EXCL);

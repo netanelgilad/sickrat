@@ -1,0 +1,211 @@
+import SwiftUI
+import UIKit
+import UserNotifications
+import Observation
+import Security
+import UniformTypeIdentifiers
+
+enum NotificationCredential {
+  static func query(_ origin: String) -> [String: Any] {
+    [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.sickrat.notifications", kSecAttrAccount as String: origin]
+  }
+  static func read(_ origin: String) -> String? {
+    var item = query(origin)
+    item[kSecReturnData as String] = true
+    var value: CFTypeRef?
+    guard SecItemCopyMatching(item as CFDictionary, &value) == errSecSuccess, let data = value as? Data else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+  static func save(_ secret: String, origin: String) throws {
+    let q = query(origin)
+    let data = Data(secret.utf8)
+    let status = SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+    if status == errSecItemNotFound {
+      var item = q
+      item[kSecValueData as String] = data
+      item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+      guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw VaultError("Couldn’t save notification setup securely.") }
+    } else if status != errSecSuccess { throw VaultError("Couldn’t save notification setup securely.") }
+  }
+}
+
+@MainActor @Observable final class PushCoordinator {
+  static let shared = PushCoordinator()
+  var model: VaultModel?
+  var requestID: String?
+  var status = "Not enabled"
+  var setupReady = false
+  private var attempt = 0
+  var enabled: Bool { UserDefaults.standard.bool(forKey: "nativePush.enabled") }
+  private var token: String? { UserDefaults.standard.string(forKey: "nativePush.token") }
+  private var registeredOrigin: String? { UserDefaults.standard.string(forKey: "nativePush.origin") }
+
+  func start(_ model: VaultModel) async {
+    self.model = model
+    setupReady = NotificationCredential.read(model.endpoint) != nil
+    #if DEBUG
+      if DesignFixture.enabled { return }
+    #endif
+    guard enabled, model.configured, setupReady else { return }
+    let settings = await UNUserNotificationCenter.current().notificationSettings()
+    guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+      status = "Notifications are off in iOS Settings"
+      return
+    }
+    registerWithApple()
+  }
+
+  func importSetup(_ data: Data) throws {
+    guard data.count < 4096, let model,
+      let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+      object["type"] as? String == "sickrat-native-push-setup", object["version"] as? Int == 1,
+      object["origin"] as? String == model.endpoint, let secret = object["secret"] as? String,
+      secret.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil
+    else { throw VaultError("This setup file doesn’t match your vault.") }
+    try NotificationCredential.save(secret, origin: model.endpoint)
+    setupReady = true
+    status = "Ready to enable"
+  }
+
+  func enable() async throws {
+    guard let model, model.configured else { throw VaultError("Connect a vault first.") }
+    guard NotificationCredential.read(model.endpoint) != nil else { throw VaultError("Import the notification setup file first.") }
+    let capabilities = try await model.request("capabilities")
+    guard let native = capabilities["nativePush"] as? [String: Any], native["configured"] as? Bool == true else {
+      throw VaultError("Native notifications are not configured for this vault yet.")
+    }
+    let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+    guard allowed else { throw VaultError("Allow notifications for Sickrat in iOS Settings.") }
+    UserDefaults.standard.set(true, forKey: "nativePush.enabled")
+    registerWithApple()
+  }
+
+  private func registerWithApple() {
+    attempt += 1
+    let current = attempt
+    status = "Connecting…"
+    UIApplication.shared.registerForRemoteNotifications()
+    Task {
+      try? await Task.sleep(for: .seconds(20))
+      if attempt == current && status == "Connecting…" {
+        status = "Couldn’t connect. Try reconnecting."
+      }
+    }
+  }
+
+  func didRegister(_ data: Data) {
+    let value = data.map { String(format: "%02x", $0) }.joined()
+    UserDefaults.standard.set(value, forKey: "nativePush.token")
+    Task { await synchronize() }
+  }
+
+  func synchronize() async {
+    guard enabled, let model, model.configured, let token else { return }
+    let origin = model.endpoint
+    guard let secret = NotificationCredential.read(origin) else { status = "Import the setup file again."; return }
+    do {
+      var registrationID = UserDefaults.standard.string(forKey: "nativePush.id")
+      var registeredToken = UserDefaults.standard.string(forKey: "nativePush.registeredToken")
+      if let previous = registeredOrigin, previous != origin, let previousToken = registeredToken {
+        _ = try await model.request("native-push/unregister", method: "POST", body: ["token": previousToken], origin: previous, bearer: NotificationCredential.read(previous))
+        registrationID = nil
+        registeredToken = nil
+        UserDefaults.standard.removeObject(forKey: "nativePush.id")
+        UserDefaults.standard.removeObject(forKey: "nativePush.registeredToken")
+        UserDefaults.standard.removeObject(forKey: "nativePush.origin")
+      }
+      var body: [String: Any] = ["token": token]
+      if let registrationID, let registeredToken {
+        body["id"] = registrationID
+        body["previousToken"] = registeredToken
+      }
+      let response = try await model.request("native-push/register", method: "POST", body: body, origin: origin, bearer: secret)
+      guard let id = response["id"] as? String else { throw VaultError("Invalid notification response.") }
+      guard enabled, model.endpoint == origin else {
+        _ = try await model.request("native-push/unregister", method: "POST", body: ["token": token], origin: origin, bearer: secret)
+        return
+      }
+      UserDefaults.standard.set(id, forKey: "nativePush.id")
+      UserDefaults.standard.set(token, forKey: "nativePush.registeredToken")
+      UserDefaults.standard.set(origin, forKey: "nativePush.origin")
+      status = "On"
+    } catch {
+      status = "Couldn’t connect. Turn notifications off and enable them again."
+    }
+  }
+
+  func disable() async throws {
+    UserDefaults.standard.set(false, forKey: "nativePush.enabled")
+    attempt += 1
+    do {
+      if let registeredToken = UserDefaults.standard.string(forKey: "nativePush.registeredToken"),
+         let origin = registeredOrigin, let model {
+        _ = try await model.request("native-push/unregister", method: "POST", body: ["token": registeredToken], origin: origin, bearer: NotificationCredential.read(origin))
+      }
+    } catch {
+      UserDefaults.standard.set(true, forKey: "nativePush.enabled")
+      throw error
+    }
+    UserDefaults.standard.removeObject(forKey: "nativePush.origin")
+    UserDefaults.standard.removeObject(forKey: "nativePush.id")
+    UserDefaults.standard.removeObject(forKey: "nativePush.registeredToken")
+    UIApplication.shared.unregisterForRemoteNotifications()
+    status = "Not enabled"
+  }
+}
+
+final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+  func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+    UNUserNotificationCenter.current().delegate = self
+    return true
+  }
+  func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    PushCoordinator.shared.didRegister(deviceToken)
+  }
+  func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    PushCoordinator.shared.status = "Couldn’t register. Check the app’s signing and try again."
+  }
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+    [.banner, .sound]
+  }
+  nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    guard let id = response.notification.request.content.userInfo["requestId"] as? String,
+          UUID(uuidString: id) != nil else { return }
+    await MainActor.run { PushCoordinator.shared.requestID = id }
+  }
+}
+
+struct NotificationSettingsView: View {
+  @Environment(VaultModel.self) private var model
+  @State private var push = PushCoordinator.shared
+  @State private var importing = false
+  var body: some View {
+    Form {
+      Section {
+        LabeledContent("Status", value: push.status)
+        if push.enabled {
+          Button {
+            Task { await model.run("Connecting notifications…") { await push.start(model) } }
+          } label: { OperationLabel(title: "Reconnect", systemImage: "arrow.clockwise", operations: ["Connecting notifications…"]) }
+          Button("Turn off notifications", role: .destructive) {
+            Task { await model.run("Turning off notifications…") { try await push.disable() } }
+          }
+        } else if !push.setupReady {
+          Button("Import setup file", systemImage: "doc.badge.arrow.up") { importing = true }
+        } else {
+          Button {
+            Task { await model.run("Enabling notifications…") { try await push.enable() } }
+          } label: { OperationLabel(title: "Enable notifications", systemImage: "bell", operations: ["Enabling notifications…"]) }
+        }
+      } footer: { Text("Import your private setup file, then enable alerts for access requests. Open Sickrat to approve or deny them.") }
+    }.vaultActivity().navigationTitle("Notifications").navigationBarTitleDisplayMode(.inline)
+      .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+        do {
+          let url = try result.get()
+          let access = url.startAccessingSecurityScopedResource()
+          defer { if access { url.stopAccessingSecurityScopedResource() } }
+          try push.importSetup(Data(contentsOf: url))
+        } catch { if !VaultModel.isExpectedCancellation(error) { model.error = error.localizedDescription } }
+      }
+  }
+}

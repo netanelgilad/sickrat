@@ -12,7 +12,7 @@ xcodebuild -project Sickrat.xcodeproj -scheme Sickrat -destination 'platform=iOS
 ./scripts/build-ipa.sh
 ```
 
-The unsigned development IPA is `build/Sickrat-0.1.3-4.ipa`. AltStore Classic signs it with the installing user's identity. No associated-domain, APNs, or shared-Keychain entitlements are requested. The app needs a device passcode for key storage.
+The unsigned development IPA is `build/Sickrat-0.1.3-4.ipa`. AltStore Classic signs it with the installing user's identity. The current preview requests the development APNs entitlement; associated-domain and shared-Keychain entitlements are not requested. The app needs a device passcode for key storage.
 
 This branch's private AltStore installation is a development preview, not a tagged release. Production releases must still originate from `origin/main`. No release tags or release workflow guards are changed.
 
@@ -40,7 +40,7 @@ Keep the existing PWA passkey recovery record. The native app deliberately does 
 
 ## Remaining migration work / intentional exceptions
 
-- **Background push:** existing PWA push remains available. This preview polls only while active. Native APNs requires a suitable provisioning identity/entitlement and a Worker APNs delivery path; do not represent foreground polling or local notifications as background delivery.
+- **Background push:** approval alerts use native APNs when configured, alongside existing PWA push. Pairing alerts still use the PWA; the native app can review devices while open. Physical device delivery requires verification with a compatible paid-team provisioning profile.
 - **Provisioning and deployment:** use the CLI/web console to create/update Cloudflare infrastructure. This preview connects to existing vaults.
 - **Cloudflare Access:** redirects are intentionally rejected. Interactive Access-protected endpoints need a separate native authentication design; do not paste Access tokens into the app.
 - **Recovery/export:** existing PWA retains recovery duties. Native key removal and key replacement are intentionally absent from the preview to avoid stranding existing encrypted records.
@@ -90,3 +90,12 @@ Settings → Transfer vault key → Send to another iPhone now exports the exist
 The sender validates the request type, version, size, origin and P-256 key before authentication. Changing vaults discards the old incoming transfer key. Exports require fresh Keychain authentication even when already unlocked. The app never exports a plaintext key or sends the root key to a server. The PWA already supports the same owner export; CLI root-key access remains intentionally excluded. PWA passkey recovery is still required for durable recovery. No Worker deployment is needed.
 
 Protocol tests verify the envelope's origin, key and expiry, wrong-recipient rejection and invalid request rejection. UI tests verify the access explanation and disabled export without a request. Actual Keychain authentication, Files handoff and import on a second physical phone require on-device verification.
+
+
+## Preview 0.1.5 (build 6)
+
+Native Settings → Notifications imports a private setup file, then requests iOS permission and registers the device with the configured vault. Transfer the setup file privately from the vault owner’s Mac to Files on the phone; do not post it or publish it in the AltStore source. Approval alerts contain only a generic message and request ID; tapping opens the corresponding request and refreshes it. Native registrations can be inspected and removed in the web console’s Machines view or with `sickrat notifications list --setup-file <path>` and `sickrat notifications remove <id> --setup-file <path> --yes`. Removing a registration prevents silent re-registration; turn notifications off and back on in the iOS app to enroll again. Apple device-token registration is inherently iOS-only; the CLI and PWA cannot create APNs device tokens.
+
+APNs Worker bindings are `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY`, `APNS_TOPIC`, `APNS_ENVIRONMENT`, and `APNS_ENROLLMENT_SECRET` (sandbox or production). They must be installed as Worker secrets. The branch CLI preserves existing APNs secret bindings on subsequent updates, but older released CLIs may remove them. Native notification registration and management require the private setup credential; existing vault APIs retain their own access model, so protect the vault endpoint against unauthorized access. Never place the APNs private key in app binaries or repository files. The development preview uses a topic-specific sandbox key; production signing requires matching production configuration.
+
+Tests cover APNs JWT signing, request routing, token registration and revocation, native-only approval creation, and the notification settings and request-opening UI. Simulator and mocked APNs tests cannot prove real-device delivery or that AltStore retains the entitlement after signing; those require owner verification.

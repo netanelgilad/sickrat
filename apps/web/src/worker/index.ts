@@ -1,4 +1,5 @@
 import { isOAuthReferenceSegment } from "@sickrat/protocol";
+import { sendAPNs, validAPNsToken, type APNsConfig } from "./apns";
 import {
 	exchangeOAuthAuthorizationCode,
 	getOAuthProvider,
@@ -183,6 +184,12 @@ type EnvWithBindings = Env & {
 	CF_OAUTH_CLIENT_ID?: string;
 	VAPID_PUBLIC_KEY?: string;
 	VAPID_PRIVATE_KEY?: string;
+	APNS_TEAM_ID?: string;
+	APNS_KEY_ID?: string;
+	APNS_PRIVATE_KEY?: string;
+	APNS_TOPIC?: string;
+	APNS_ENVIRONMENT?: string;
+	APNS_ENROLLMENT_SECRET?: string;
 	SICKRAT_VAULT_NAME?: string;
 	SICKRAT_DEPLOYED_BY?: string;
 	SICKRAT_VERSION?: string;
@@ -443,6 +450,7 @@ async function getLatestNotification(subscriptionId: string, env: EnvWithBinding
 
 async function ensureSchema(env: EnvWithBindings) {
 	if (!env.DB) return false;
+	await env.DB.prepare("CREATE TABLE IF NOT EXISTS native_push_devices (id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)").run();
 	await env.DB.prepare(
 		"CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL)",
 	).run();
@@ -838,6 +846,35 @@ async function sendEmptyWebPush(subscription: PushSubscriptionRecord, env: EnvWi
 	}
 
 	return response.status;
+}
+
+function apnsConfig(env: EnvWithBindings): APNsConfig | null {
+	if (!env.APNS_TEAM_ID || !env.APNS_KEY_ID || !env.APNS_PRIVATE_KEY || !env.APNS_TOPIC || !env.APNS_ENROLLMENT_SECRET ||
+		(env.APNS_ENVIRONMENT !== "sandbox" && env.APNS_ENVIRONMENT !== "production")) return null;
+	return { teamId: env.APNS_TEAM_ID, keyId: env.APNS_KEY_ID, privateKey: env.APNS_PRIVATE_KEY,
+		topic: env.APNS_TOPIC, environment: env.APNS_ENVIRONMENT };
+}
+
+async function nativePushAuthorized(request: Request, env: EnvWithBindings): Promise<boolean> {
+	if (!env.APNS_ENROLLMENT_SECRET) return false;
+	const supplied = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
+	if (!supplied) return false;
+	const [a, b] = await Promise.all([sha256Base64Url(supplied), sha256Base64Url(env.APNS_ENROLLMENT_SECRET)]);
+	let difference = a.length ^ b.length;
+	for (let i = 0; i < a.length; i++) difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	return difference === 0;
+}
+
+async function notifyNative(requestId: string, env: EnvWithBindings) {
+	const config = apnsConfig(env);
+	if (!config || !env.DB) return;
+	const devices = await env.DB.prepare("SELECT id, token FROM native_push_devices ORDER BY updated_at DESC LIMIT 20").all<{id: string; token: string}>();
+	await Promise.all(devices.results.map(async device => {
+		try {
+			const result = await sendAPNs(config, device.token, requestId);
+			if (result.stale) await env.DB!.prepare("DELETE FROM native_push_devices WHERE id = ? AND token = ?").bind(device.id, device.token).run();
+		} catch { /* A failed notification must never prevent an approval request. */ }
+	}));
 }
 
 function mapApproval(row: ApprovalRequestRecord) {
@@ -1829,6 +1866,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 				configured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY),
 				vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
 			},
+			nativePush: { configured: Boolean(apnsConfig(env)) },
 			database: {
 				configured: Boolean(env.DB),
 			},
@@ -2052,7 +2090,8 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 
 		const subscription = await env.DB.prepare("SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions ORDER BY created_at DESC LIMIT 1")
 			.first<PushSubscriptionRecord & { p256dh: string; auth: string }>();
-		if (!subscription) return json({ error: "No push subscription is registered. Open the PWA and enable push first." }, { status: 409 });
+		const native = apnsConfig(env) ? await env.DB.prepare("SELECT id FROM native_push_devices LIMIT 1").first<{id: string}>() : null;
+		if (!subscription && !native) return json({ error: "No push subscription is registered. Enable notifications in Sickrat first." }, { status: 409 });
 
 		const id = crypto.randomUUID();
 		const createdAt = new Date().toISOString();
@@ -2063,7 +2102,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		)
 			.bind(
 				id,
-				subscription.id,
+				subscription?.id ?? `native:${native!.id}`,
 				device.label,
 				body.command,
 				body.message ?? null,
@@ -2077,10 +2116,10 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			)
 			.run();
 		const approval = await env.DB.prepare(`${approvalSelect} WHERE id = ?`).bind(id).first<ApprovalRequestRecord>();
-		const realtime = approval ? await publishApproval(subscription.id, mapApproval(approval), env) : null;
+		const realtime = approval && subscription ? await publishApproval(subscription.id, mapApproval(approval), env) : null;
 		let pushStatus: number | null = null;
 		try {
-			pushStatus = await sendEmptyWebPush(
+			if (subscription) pushStatus = await sendEmptyWebPush(
 				{
 					id: subscription.id,
 					endpoint: subscription.endpoint,
@@ -2092,7 +2131,58 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		} catch {
 			// Realtime delivery may still have succeeded; the CLI will keep polling either way.
 		}
+		try { await notifyNative(id, env); } catch { /* Approval remains pending if notification delivery fails. */ }
 		return json({ requestId: id, status: "pending", realtime, pushStatus });
+	}
+
+	if (url.pathname === "/api/native-push/register" && request.method === "POST") {
+		if (!(await nativePushAuthorized(request, env))) return json({error: "Notification setup authorization required."}, {status: 401});
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		if (!apnsConfig(env)) return json({ error: "Native push is not configured." }, { status: 503 });
+		const body = await request.json() as { token?: unknown; id?: unknown; previousToken?: unknown };
+		if (!validAPNsToken(body.token)) return json({ error: "Invalid device token." }, { status: 400 });
+		if (body.id !== undefined) {
+			if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/.test(body.id)) return json({error: "Invalid notification device ID."}, {status: 400});
+			if (!validAPNsToken(body.previousToken)) return json({error: "Invalid notification credential."}, {status: 400});
+			const registered = await env.DB.prepare("SELECT id FROM native_push_devices WHERE id = ? AND token = ?").bind(body.id, body.previousToken).first();
+			if (!registered) return json({error: "Notification registration was removed. Enable notifications again."}, {status: 410});
+			await env.DB.prepare("UPDATE native_push_devices SET token = ?, updated_at = ? WHERE id = ?").bind(body.token, new Date().toISOString(), body.id).run();
+			return json({id: body.id});
+		}
+		const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM native_push_devices").first<{count: number}>();
+		const existing = await env.DB.prepare("SELECT id FROM native_push_devices WHERE token = ?").bind(body.token).first<{id: string}>();
+		if (!existing && (count?.count ?? 0) >= 20) return json({ error: "Too many native notification devices." }, { status: 409 });
+		const id = crypto.randomUUID(), now = new Date().toISOString();
+		await env.DB.prepare("INSERT INTO native_push_devices (id, token, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(token) DO UPDATE SET updated_at = excluded.updated_at")
+			.bind(id, body.token, now, now).run();
+		const record = await env.DB.prepare("SELECT id FROM native_push_devices WHERE token = ?").bind(body.token).first<{id: string}>();
+		return json({ id: record!.id });
+	}
+
+	if (url.pathname === "/api/native-push/devices" && request.method === "GET") {
+		if (!(await nativePushAuthorized(request, env))) return json({error: "Notification setup authorization required."}, {status: 401});
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const result = await env.DB.prepare("SELECT id, created_at, updated_at FROM native_push_devices ORDER BY updated_at DESC").all<{id:string;created_at:string;updated_at:string}>();
+		return json({ devices: result.results.map(row => ({ id: row.id, createdAt: row.created_at, updatedAt: row.updated_at })) });
+	}
+
+	const nativeDevice = url.pathname.match(/^\/api\/native-push\/devices\/([^/]+)\/revoke$/);
+	if (nativeDevice && request.method === "POST") {
+		if (!(await nativePushAuthorized(request, env))) return json({error: "Notification setup authorization required."}, {status: 401});
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const id = nativeDevice[1];
+		if (!/^[0-9a-f-]{36}$/.test(id)) return json({error: "Invalid notification device ID."}, {status: 400});
+		await env.DB.prepare("DELETE FROM native_push_devices WHERE id = ?").bind(id).run();
+		return json({ok: true});
+	}
+
+	if (url.pathname === "/api/native-push/unregister" && request.method === "POST") {
+		if (!(await nativePushAuthorized(request, env))) return json({error: "Notification setup authorization required."}, {status: 401});
+		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
+		const body = await request.json() as { token?: unknown };
+		if (!validAPNsToken(body.token)) return json({ error: "Invalid device token." }, { status: 400 });
+		await env.DB.prepare("DELETE FROM native_push_devices WHERE token = ?").bind(body.token).run();
+		return json({ ok: true });
 	}
 
 	if (url.pathname === "/api/push/subscribe" && request.method === "POST") {

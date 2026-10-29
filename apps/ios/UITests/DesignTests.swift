@@ -70,6 +70,27 @@ import XCTest
     shot.lifetime = .keepAlways
     add(shot)
   }
+  func testNotificationOpensMatchingApproval() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--design-preview"]
+    app.launchEnvironment["SICKRAT_DESIGN_STATE"] = "notification"
+    app.launch()
+    XCTAssertTrue(app.navigationBars["Review request"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["Test request"].exists)
+  }
+  func testNotificationSettingsExplainsApprovalAlerts() {
+    let app = launch("idle")
+    app.tabBars.buttons["Settings"].tap()
+    for _ in 0..<5 where !app.buttons["Notifications"].isHittable { app.swipeUp() }
+    app.buttons["Notifications"].tap()
+    XCTAssertTrue(app.navigationBars["Notifications"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.buttons["Import setup file"].exists)
+    XCTAssertTrue(app.staticTexts["Import your private setup file, then enable alerts for access requests. Open Sickrat to approve or deny them."].exists)
+    let shot = XCTAttachment(screenshot: app.screenshot())
+    shot.name = "Notification settings"
+    shot.lifetime = .keepAlways
+    add(shot)
+  }
   func testUnlockProgressStaysInToolbar() {
     let app = launch("unlock")
     XCTAssertEqual(

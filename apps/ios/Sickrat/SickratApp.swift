@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 @main struct SickratApp: App {
   @State private var model = VaultModel.appModel()
+  @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var appDelegate
   @Environment(\.scenePhase) private var phase
   var body: some Scene {
     WindowGroup {
@@ -21,21 +22,27 @@ import UniformTypeIdentifiers
 struct RootView: View {
   @Environment(VaultModel.self) private var model
   @Environment(\.scenePhase) private var phase
+  @State private var push = PushCoordinator.shared
+  @State private var selection = 0
   var body: some View {
     @Bindable var model = model
     Group {
       if model.configured {
-        TabView {
-          Tab("Requests", systemImage: "checkmark.shield") { RequestsView() }.badge(
+        TabView(selection: $selection) {
+          Tab("Requests", systemImage: "checkmark.shield", value: 0) { RequestsView() }.badge(
             model.pending.count)
-          Tab("Vault", systemImage: "key.horizontal") { VaultView() }
-          Tab("Settings", systemImage: "gearshape") { SettingsView() }
+          Tab("Vault", systemImage: "key.horizontal", value: 1) { VaultView() }
+          Tab("Settings", systemImage: "gearshape", value: 2) { SettingsView() }
         }
       } else {
         WelcomeView()
       }
     }
     .tint(.indigo)
+    .onChange(of: push.requestID) { _, id in if id != nil { selection = 0 } }
+    .task(id: "push-\(phase)-\(model.endpoint)") {
+      if phase == .active { await push.start(model) }
+    }
     .alert(
       "Couldn’t complete action",
       isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })
@@ -97,8 +104,10 @@ struct WelcomeView: View {
 struct RequestsView: View {
   @Environment(VaultModel.self) private var model
   @State private var pulling = false
+  @State private var push = PushCoordinator.shared
+  @State private var path: [String] = []
   var body: some View {
-    NavigationStack {
+    NavigationStack(path: $path) {
       List {
         RefreshErrorRow()
         if model.lastRefresh == nil {
@@ -129,6 +138,27 @@ struct RequestsView: View {
           }
         }
       }.vaultActivity()
+        .navigationDestination(for: String.self) { id in
+          if let request = model.approvals.first(where: { $0.id == id }) {
+            RequestDetail(request: request)
+          } else if model.refreshing || (model.lastRefresh == nil && model.refreshError == nil) {
+            ProgressView("Loading request…")
+          } else if model.lastRefresh == nil {
+            ContentUnavailableView("Couldn’t load request", systemImage: "wifi.exclamationmark", description: Text("Check your connection and try again."))
+          } else {
+            ContentUnavailableView("Request unavailable", systemImage: "tray", description: Text("It may have expired or already been removed."))
+          }
+        }
+        .task(id: push.requestID) {
+          guard let id = push.requestID else { return }
+          #if DEBUG
+            if !DesignFixture.enabled { await model.reload() }
+          #else
+            await model.reload()
+          #endif
+          path = [id]
+          push.requestID = nil
+        }
         .navigationTitle("Requests")
         .refreshable {
           pulling = true
@@ -456,6 +486,9 @@ struct SettingsView: View {
             Label("Paired devices", systemImage: "laptopcomputer.and.iphone")
           }
         }
+        Section("Notifications") {
+          NavigationLink { NotificationSettingsView() } label: { Label("Notifications", systemImage: "bell") }
+        }
         Section("Security") {
           Button {
             Task {
@@ -477,7 +510,7 @@ struct SettingsView: View {
             "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")"
           )
           Text(
-            "Requests refresh while the app is open. Background push and vault provisioning are still being migrated."
+            "Requests refresh while the app is open. Enable alerts in Notifications. Vault provisioning remains in the CLI."
           ).font(.footnote).foregroundStyle(.secondary)
           if let url = URL(string: model.endpoint) { Link("Open web console", destination: url) }
         }

@@ -72,15 +72,29 @@ enum NotificationCredential {
     guard let model, model.configured else { throw VaultError("Connect a vault first.") }
     let origin = model.endpoint
     if NotificationCredential.read(origin) == nil {
+      let pendingAccount = origin + "#pending-notifications"
       var bytes = [UInt8](repeating: 0, count: 32)
       guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw VaultError("Couldn’t create device credential.") }
-      let credential = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-      defer { pairingCode = nil }
+      let generatedCredential = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+      let credential = NotificationCredential.read(pendingAccount) ?? generatedCredential
+      try NotificationCredential.save(credential, origin: pendingAccount)
       var approved = false
-      for _ in 0..<120 {
+      let deadline = Date().addingTimeInterval(600)
+      while Date() < deadline {
         try Task.checkCancellation()
         guard model.endpoint == origin else { throw VaultError("Vault changed. Try again.") }
-        let result = try await model.request("native-push/enroll", method: "POST", origin: origin, bearer: credential)
+        guard UIApplication.shared.applicationState == .active else {
+          try await Task.sleep(for: .seconds(2))
+          continue
+        }
+        let result: [String: Any]
+        do {
+          result = try await model.request("native-push/enroll", method: "POST", origin: origin, bearer: credential)
+        } catch let error as URLError where [.networkConnectionLost, .notConnectedToInternet, .timedOut, .cancelled].contains(error.code) {
+          status = UIApplication.shared.applicationState == .active ? "Waiting for connection…" : "Waiting for approval on your Mac"
+          try await Task.sleep(for: .seconds(2))
+          continue
+        }
         if let value = result["approved"] as? Int, value == 1 { approved = true; break }
         pairingCode = result["code"] as? String
         status = "Waiting for approval on your Mac"
@@ -88,7 +102,9 @@ enum NotificationCredential {
       }
       guard approved else { throw VaultError("Pairing expired. Enable notifications to try again.") }
       try NotificationCredential.save(credential, origin: origin)
+      pairingCode = nil
       setupReady = true
+      SecItemDelete(NotificationCredential.query(pendingAccount) as CFDictionary)
     }
     let capabilities = try await model.request("capabilities")
     guard let native = capabilities["nativePush"] as? [String: Any], native["configured"] as? Bool == true else {

@@ -103,3 +103,7 @@ Tests cover APNs JWT signing, request routing, token registration and revocation
 ## Preview 0.1.6 (build 7)
 
 Enable Notifications now creates a ten-minute pairing code. The owner approves it on the Mac with `bun apps/cli/src/index.ts notifications approve <CODE> --setup-file ~/.config/sickrat/apns/sickrat-notification-setup.json`, or in the PWA Machines notification management panel after loading its owner setup credential. The iPhone receives no setup file. It generates a random device credential, stored in its Keychain after approval; the server stores only its hash and restricts it to that device's notification token. Owner approval and device management still require the private owner credential. Removing a device also invalidates its enrollment credential. The owner credential is never bundled into the app. This is a Mac-authorized pairing flow, not proof of root-key possession; the current vault has no server-verifiable owner-key identity.
+
+## Preview 0.1.7 (build 8)
+
+Notification enrollment preserves its pending credential in device Keychain. Polling pauses in the background and retries temporary network interruptions, allowing the owner to switch to another app to share the code without abandoning pairing. Process restarts can reuse the pending credential when Enable Notifications is tapped again. Real app-switching behavior and push delivery still require iPhone verification.

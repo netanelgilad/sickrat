@@ -2789,6 +2789,11 @@ async function notificationsCommand(args: string[]) {
   const setup = JSON.parse(await readFile(resolve(setupPath), "utf8")) as {type?:string;version?:number;origin?:string;secret?:string};
   if (setup.type !== "sickrat-native-push-setup" || setup.version !== 1 || setup.origin !== config.workerUrl.replace(/\/$/, "") || !setup.secret || !/^[A-Za-z0-9_-]{43}$/.test(setup.secret)) throw new Error("Notification setup file does not match this vault.");
   const headers = {authorization: `Bearer ${setup.secret}`};
+  if (action === "approve" && args[2]) {
+    await api(config.workerUrl, "/api/native-push/enroll/approve", {method:"POST", headers, body:JSON.stringify({code:args[2].toUpperCase()})});
+    console.log("Notification enrollment approved for this device.");
+    return;
+  }
   if (action === "list") {
     const result = await api<{devices: Array<{id:string;createdAt:string;updatedAt:string}>}>(config.workerUrl, "/api/native-push/devices", {headers});
     if (args.includes("--json")) console.log(JSON.stringify(result.devices, null, 2));

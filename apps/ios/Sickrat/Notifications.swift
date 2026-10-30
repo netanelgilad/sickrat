@@ -35,6 +35,7 @@ enum NotificationCredential {
   var requestID: String?
   var status = "Not enabled"
   var setupReady = false
+  var pairingCode: String?
   private var attempt = 0
   var enabled: Bool { UserDefaults.standard.bool(forKey: "nativePush.enabled") }
   private var token: String? { UserDefaults.standard.string(forKey: "nativePush.token") }
@@ -69,7 +70,26 @@ enum NotificationCredential {
 
   func enable() async throws {
     guard let model, model.configured else { throw VaultError("Connect a vault first.") }
-    guard NotificationCredential.read(model.endpoint) != nil else { throw VaultError("Import the notification setup file first.") }
+    let origin = model.endpoint
+    if NotificationCredential.read(origin) == nil {
+      var bytes = [UInt8](repeating: 0, count: 32)
+      guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw VaultError("Couldn’t create device credential.") }
+      let credential = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+      defer { pairingCode = nil }
+      var approved = false
+      for _ in 0..<120 {
+        try Task.checkCancellation()
+        guard model.endpoint == origin else { throw VaultError("Vault changed. Try again.") }
+        let result = try await model.request("native-push/enroll", method: "POST", origin: origin, bearer: credential)
+        if let value = result["approved"] as? Int, value == 1 { approved = true; break }
+        pairingCode = result["code"] as? String
+        status = "Waiting for approval on your Mac"
+        try await Task.sleep(for: .seconds(5))
+      }
+      guard approved else { throw VaultError("Pairing expired. Enable notifications to try again.") }
+      try NotificationCredential.save(credential, origin: origin)
+      setupReady = true
+    }
     let capabilities = try await model.request("capabilities")
     guard let native = capabilities["nativePush"] as? [String: Any], native["configured"] as? Bool == true else {
       throw VaultError("Native notifications are not configured for this vault yet.")
@@ -183,6 +203,11 @@ struct NotificationSettingsView: View {
     Form {
       Section {
         LabeledContent("Status", value: push.status)
+        if let code = push.pairingCode {
+          LabeledContent("Pairing code", value: code).monospaced().textSelection(.enabled)
+          Text("Approve this code on your Mac to allow this iPhone to receive alerts. The code expires in 10 minutes.")
+            .foregroundStyle(.secondary)
+        }
         if push.enabled {
           Button {
             Task { await model.run("Connecting notifications…") { await push.start(model) } }
@@ -190,14 +215,12 @@ struct NotificationSettingsView: View {
           Button("Turn off notifications", role: .destructive) {
             Task { await model.run("Turning off notifications…") { try await push.disable() } }
           }
-        } else if !push.setupReady {
-          Button("Import setup file", systemImage: "doc.badge.arrow.up") { importing = true }
         } else {
           Button {
             Task { await model.run("Enabling notifications…") { try await push.enable() } }
           } label: { OperationLabel(title: "Enable notifications", systemImage: "bell", operations: ["Enabling notifications…"]) }
         }
-      } footer: { Text("Import your private setup file, then enable alerts for access requests. Open Sickrat to approve or deny them.") }
+      } footer: { Text("Enable alerts for access requests. On first use, approve this iPhone from your Mac. Open Sickrat to approve or deny requests.") }
     }.vaultActivity().navigationTitle("Notifications").navigationBarTitleDisplayMode(.inline)
       .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
         do {

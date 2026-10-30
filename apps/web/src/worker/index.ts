@@ -450,6 +450,7 @@ async function getLatestNotification(subscriptionId: string, env: EnvWithBinding
 
 async function ensureSchema(env: EnvWithBindings) {
 	if (!env.DB) return false;
+	await env.DB.prepare("CREATE TABLE IF NOT EXISTS native_push_enrollments (credential_hash TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0, token TEXT)").run();
 	await env.DB.prepare("CREATE TABLE IF NOT EXISTS native_push_devices (id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)").run();
 	await env.DB.prepare(
 		"CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, created_at TEXT NOT NULL)",
@@ -2135,12 +2136,44 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		return json({ requestId: id, status: "pending", realtime, pushStatus });
 	}
 
+	if (url.pathname === "/api/native-push/enroll" && request.method === "POST") {
+		if (!(await ensureSchema(env)) || !env.DB || !apnsConfig(env)) return json({error:"Notifications unavailable."}, {status:503});
+		const credential = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
+		if (!credential) return json({error:"Device credential required."},{status:400});
+		await env.DB.prepare("DELETE FROM native_push_enrollments WHERE approved = 0 AND expires_at < ?").bind(Date.now()).run();
+		const hash = await sha256Base64Url(credential);
+		const existing = await env.DB.prepare("SELECT code, approved FROM native_push_enrollments WHERE credential_hash = ?").bind(hash).first();
+		if (existing) return json(existing);
+		const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM native_push_enrollments WHERE approved = 0").first<{count:number}>();
+		if ((count?.count ?? 0) >= 100) return json({error:"Try again later."},{status:429});
+		const code = crypto.randomUUID().replaceAll("-", "").slice(0, 10).toUpperCase();
+		await env.DB.prepare("INSERT INTO native_push_enrollments (credential_hash, code, expires_at) VALUES (?, ?, ?)").bind(hash,code,Date.now()+600000).run();
+		return json({code,approved:0});
+	}
+	if (url.pathname === "/api/native-push/enroll/approve" && request.method === "POST") {
+		if (!(await nativePushAuthorized(request,env))) return json({error:"Owner authorization required."},{status:401});
+		if (!(await ensureSchema(env)) || !env.DB) return json({error:"Database unavailable."},{status:503});
+		const body = await request.json() as {code?:unknown};
+		if (typeof body.code !== "string" || !/^[A-F0-9]{10}$/.test(body.code)) return json({error:"Invalid code."},{status:400});
+		const result = await env.DB.prepare("UPDATE native_push_enrollments SET approved = 1 WHERE code = ? AND expires_at > ? AND approved = 0").bind(body.code,Date.now()).run();
+		return result.meta.changes ? json({ok:true}) : json({error:"Code expired or already used."},{status:410});
+	}
+
 	if (url.pathname === "/api/native-push/register" && request.method === "POST") {
-		if (!(await nativePushAuthorized(request, env))) return json({error: "Notification setup authorization required."}, {status: 401});
+		const ownerAuthorized = await nativePushAuthorized(request, env);
+		if (!ownerAuthorized && !request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)) return json({error:"Device authorization required."},{status:401});
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		if (!apnsConfig(env)) return json({ error: "Native push is not configured." }, { status: 503 });
 		const body = await request.json() as { token?: unknown; id?: unknown; previousToken?: unknown };
 		if (!validAPNsToken(body.token)) return json({ error: "Invalid device token." }, { status: 400 });
+		if (!ownerAuthorized) {
+			const credential = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
+			const hash = credential ? await sha256Base64Url(credential) : "";
+			const enrollment = await env.DB.prepare("SELECT token FROM native_push_enrollments WHERE credential_hash = ? AND approved = 1").bind(hash).first<{token:string|null}>();
+			if (!enrollment || (enrollment.token && enrollment.token !== body.token && enrollment.token !== body.previousToken)) return json({error:"Device authorization required."},{status:401});
+			await env.DB.prepare("UPDATE native_push_enrollments SET token = ? WHERE credential_hash = ?").bind(body.token,hash).run();
+		}
+
 		if (body.id !== undefined) {
 			if (typeof body.id !== "string" || !/^[0-9a-f-]{36}$/.test(body.id)) return json({error: "Invalid notification device ID."}, {status: 400});
 			if (!validAPNsToken(body.previousToken)) return json({error: "Invalid notification credential."}, {status: 400});
@@ -2172,15 +2205,25 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const id = nativeDevice[1];
 		if (!/^[0-9a-f-]{36}$/.test(id)) return json({error: "Invalid notification device ID."}, {status: 400});
+		await env.DB.prepare("DELETE FROM native_push_enrollments WHERE token IN (SELECT token FROM native_push_devices WHERE id = ?)").bind(id).run();
 		await env.DB.prepare("DELETE FROM native_push_devices WHERE id = ?").bind(id).run();
 		return json({ok: true});
 	}
 
 	if (url.pathname === "/api/native-push/unregister" && request.method === "POST") {
-		if (!(await nativePushAuthorized(request, env))) return json({error: "Notification setup authorization required."}, {status: 401});
+		const ownerAuthorized = await nativePushAuthorized(request, env);
+		if (!ownerAuthorized && !request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)) return json({error:"Device authorization required."},{status:401});
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
 		const body = await request.json() as { token?: unknown };
 		if (!validAPNsToken(body.token)) return json({ error: "Invalid device token." }, { status: 400 });
+		if (!ownerAuthorized) {
+			const credential = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1];
+			const hash = credential ? await sha256Base64Url(credential) : "";
+			const enrollment = await env.DB.prepare("SELECT token FROM native_push_enrollments WHERE credential_hash = ? AND approved = 1").bind(hash).first<{token:string|null}>();
+			if (!enrollment || (enrollment.token && enrollment.token !== body.token && true)) return json({error:"Device authorization required."},{status:401});
+			await env.DB.prepare("UPDATE native_push_enrollments SET token = ? WHERE credential_hash = ?").bind(body.token,hash).run();
+		}
+
 		await env.DB.prepare("DELETE FROM native_push_devices WHERE token = ?").bind(body.token).run();
 		return json({ ok: true });
 	}

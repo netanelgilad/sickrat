@@ -20,6 +20,25 @@ describe("native notification registration and approvals", () => {
    fetchMock.activate(); fetchMock.disableNetConnect();
  });
  afterAll(() => fetchMock.deactivate());
+ it("requires owner approval and scopes a paired credential to one device", async () => {
+   const deviceSecret = "d".repeat(43);
+   const deviceRequest = (path: string, body?: unknown) => worker.fetch(new Request(`https://vault.example/api/native-push/${path}`, {method:"POST",headers:{authorization:`Bearer ${deviceSecret}`,"content-type":"application/json"},body:body === undefined ? undefined : JSON.stringify(body)}),bindings,createExecutionContext());
+   const started = await deviceRequest("enroll");
+   const pairing = await started.json() as {code:string;approved:number};
+   expect(pairing.approved).toBe(0);
+   expect((await deviceRequest("register",{token:"d".repeat(64)})).status).toBe(401);
+   expect((await deviceRequest("enroll/approve",{code:pairing.code})).status).toBe(401);
+   expect((await request("/api/native-push/enroll/approve",{code:pairing.code})).status).toBe(200);
+   expect((await request("/api/native-push/enroll/approve",{code:pairing.code})).status).toBe(410);
+   expect((await (await deviceRequest("enroll")).json() as {approved:number}).approved).toBe(1);
+   const registered = await deviceRequest("register",{token:"d".repeat(64)});
+   expect(registered.status).toBe(200);
+   expect((await deviceRequest("unregister",{token:"e".repeat(64)})).status).toBe(401);
+   expect((await deviceRequest("register",{token:"e".repeat(64)})).status).toBe(401);
+   const {id} = await registered.json() as {id:string};
+   await request(`/api/native-push/devices/${id}/revoke`,{});
+   expect((await deviceRequest("register",{token:"d".repeat(64)})).status).toBe(401);
+ });
  it("registers idempotently, sends a generic alert for a signed request without a web subscription, and unregisters", async () => {
    const ctx = createExecutionContext();
    const unauthorized = await worker.fetch(new Request("https://vault.example/api/native-push/devices"), bindings, ctx);

@@ -1855,6 +1855,7 @@ function AppShell({
 	const [pairing, setPairing] = useState<PairingCodeDetails | null>(null);
 	const [pairingStatus, setPairingStatus] = useState("Enter the six-digit code shown in your terminal.");
 	const [pushSubscriptionChecked, setPushSubscriptionChecked] = useState(false);
+	const [notificationPairingCode, setNotificationPairingCode] = useState("");
 	const [nativePushSecret, setNativePushSecret] = useState<string | null>(null);
 	const [cloudflareToken, setCloudflareToken] = useState<string | null>(() => localStorage.getItem("sickrat.cf.accessToken"));
 	const [selectedAccountId, setSelectedAccountId] = useState("");
@@ -4292,7 +4293,17 @@ function AppShell({
 							} catch (error) { setPairingStatus(friendlyError(error, "Couldn’t read setup file.")); }
 						}} />
 					</Block>}
-					{nativePushSecret && <List strong inset>
+					{nativePushSecret && <Block strong inset>
+                        <input aria-label="iPhone notification pairing code" placeholder="Pairing code from iPhone" value={notificationPairingCode} onChange={event => setNotificationPairingCode(event.target.value.toUpperCase())} />
+                        <Button disabled={busy || !/^[A-F0-9]{10}$/.test(notificationPairingCode)} onClick={async () => {
+                            try {
+                                const response = await fetch("/api/native-push/enroll/approve", {method:"POST", headers:{"content-type":"application/json", authorization:`Bearer ${nativePushSecret}`}, body:JSON.stringify({code:notificationPairingCode})});
+                                if (!response.ok) throw new Error("Code expired or invalid.");
+                                setNotificationPairingCode(""); setPairingStatus("iPhone notification enrollment approved.");
+                            } catch(error) { setPairingStatus(friendlyError(error,"Couldn’t approve enrollment.")); }
+                        }}>Approve iPhone notifications</Button>
+                    </Block>}
+                    {nativePushSecret && <List strong inset>
 						{nativePushQuery.isPending ? <ListItem title="Loading notification devices…" /> :
 						 nativePushQuery.isError ? <ListItem title="Couldn’t load notification devices" /> :
 						 nativePushQuery.data?.length ? nativePushQuery.data.map(device =>

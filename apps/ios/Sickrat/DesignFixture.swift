@@ -37,6 +37,7 @@ extension VaultModel {
         return model
       }
       model.lastRefresh = Date()
+      model.lastRequestRefresh = model.lastRefresh
       if scenario == "pending" {
         model.secrets = [Secret(id: "deploy", ref: "production/deploy-token", label: "Deployment token", updatedAt: "2026-10-29T12:00:00.000Z")]
         model.approvals = [Approval(id: "deploy-request", device: "Mac Studio", command: "npm run deploy -- --production", message: "Publish the website update", secretRefs: ["production/deploy-token"], resourceRequests: [], accessDurationSeconds: 900, status: "pending", expiresAt: "2099-01-01T18:30:00Z", expired: false, ephemeralPublicKey: nil)]
@@ -85,6 +86,11 @@ extension VaultModel {
           id: id, device: device, command: "test", message: message, secretRefs: [],
           resourceRequests: [], accessDurationSeconds: nil, status: status,
           expiresAt: "2099-01-01T00:00:00Z", expired: false, ephemeralPublicKey: nil)
+      }
+      if scenario == "history" {
+        model.approvals += (1...12).map { index in
+          Approval(id: "older-\(index)", device: "Older Mac \(index)", command: "test", message: "An earlier request", secretRefs: [], resourceRequests: [], accessDurationSeconds: nil, status: "approved", expiresAt: "2099-01-01T00:00:00Z", expired: false, ephemeralPublicKey: nil)
+        }
       }
       model.secrets = [
         Secret(

@@ -115,3 +115,11 @@ The product rationale, prior-art links, per-screen responsibilities, accessibili
 Native secret navigation, a brief completion symbol animation and successful-action haptics provide feedback. Reduce Motion uses ordinary navigation and removes custom receipt motion. These changes retain the existing backend, encryption and approval checks; no Worker deployment is required.
 
 Validation for this preview: the complete simulator suite passed, including cryptography, key transfer, OAuth policy, activity, date/duration presentation, loading geometry, request review, vault search and pairing navigation. A separate four-test run passed in dark appearance with Accessibility Extra Large text, including app switching during synthetic notification pairing. Light/dark screenshots were inspected. Signed device archive/export succeeded with the existing development APNs entitlement. Fixtures don't verify live encrypted approval completion, APNs delivery or physical-device haptic feel after this update.
+
+## Preview 0.1.9 (build 10) — focused inbox
+
+Requests shows pending decisions, at most three recent items, and a Request history link. The separate history list fetches the latest 100 requests only when opened, matching the API's existing limit. Pending and recent inbox queries run concurrently with catalog requests, and the inbox appears before catalog loading completes. Initial approval waits for catalog readiness. Notification links can fetch requests outside the small preview directly. Native-only presentation/data-loading changes use existing API capabilities, with no Worker deployment.
+
+Tests cover early inbox publication, catalog failure, lazy history, notification lookup and discarding responses after switching vaults, plus bounded home history and access to older activity.
+
+The 40-test simulator run passed. Focused follow-up checks cover the final compact home rows, stable automatic refresh and notification opening at Accessibility Extra Large text in dark appearance. Device archive/export retains the existing app identity and development APNs entitlement. Actual phone loading time still depends on vault/network latency; the tests verify the loading dependency and bounded history behavior rather than claiming a measured device speedup.

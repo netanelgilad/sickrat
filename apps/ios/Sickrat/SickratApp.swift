@@ -118,11 +118,12 @@ struct RequestsView: View {
   @State private var pulling = false
   @State private var push = PushCoordinator.shared
   @State private var path: [String] = []
+  @State private var openingNotification = false
   var body: some View {
     NavigationStack(path: $path) {
       List {
         RefreshErrorRow()
-        if model.lastRefresh == nil {
+        if model.lastRequestRefresh == nil {
           if model.refreshError == nil { InitialVaultState(showProgress: !pulling) }
         } else if model.pending.isEmpty {
           Section { RequestsClearRow() }
@@ -137,25 +138,30 @@ struct RequestsView: View {
             }
           }
         }
-        let history = model.approvals.filter { !$0.pending }
+        let history = Array(model.approvals.filter { !$0.pending }.prefix(3))
         if !history.isEmpty {
           Section("Recent activity") {
             ForEach(history) { request in
               NavigationLink {
                 RequestDetail(request: request)
               } label: {
-                RequestRow(request: request)
+                RecentRequestRow(request: request)
               }
             }
+          }
+        }
+        Section {
+          NavigationLink { RequestHistoryView() } label: {
+            Label("Request history", systemImage: "clock.arrow.circlepath")
           }
         }
       }.vaultActivity()
         .navigationDestination(for: String.self) { id in
           if let request = model.approvals.first(where: { $0.id == id }) {
             RequestDetail(request: request)
-          } else if model.refreshing || (model.lastRefresh == nil && model.refreshError == nil) {
+          } else if openingNotification || model.refreshing || (model.lastRequestRefresh == nil && model.refreshError == nil) {
             ProgressView("Loading request…")
-          } else if model.lastRefresh == nil {
+          } else if model.lastRequestRefresh == nil {
             ContentUnavailableView("Couldn’t load request", systemImage: "wifi.exclamationmark", description: Text("Check your connection and try again."))
           } else {
             ContentUnavailableView("Request unavailable", systemImage: "tray", description: Text("It may have expired or already been removed."))
@@ -163,12 +169,15 @@ struct RequestsView: View {
         }
         .task(id: push.requestID) {
           guard let id = push.requestID else { return }
+          openingNotification = true
+          defer { openingNotification = false }
+          path = [id]
+          await model.loadNotificationRequest(id)
           #if DEBUG
             if !DesignFixture.enabled { await model.reload() }
           #else
             await model.reload()
           #endif
-          path = [id]
           push.requestID = nil
         }
         .navigationTitle("Requests")
@@ -179,6 +188,19 @@ struct RequestsView: View {
         }
         .toolbar { UnlockButton() }
     }
+  }
+}
+struct RecentRequestRow: View {
+  let request: Approval
+  var body: some View {
+    HStack(spacing: 12) {
+      VaultSymbol(symbol: request.statusSymbol, tint: request.statusTint)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(request.device).font(.subheadline.weight(.semibold)).lineLimit(1)
+        Text("\(request.statusTitle) · \(request.message ?? request.command)")
+          .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+      }
+    }.padding(.vertical, 3).accessibilityElement(children: .combine)
   }
 }
 struct RequestRow: View {
@@ -251,6 +273,7 @@ struct RequestDetail: View {
   }
   private var review: some View {
     Form {
+      RefreshErrorRow()
       Section {
         VStack(alignment: .leading, spacing: 14) {
           VaultSymbol(symbol: current.pending ? "laptopcomputer" : current.statusSymbol,
@@ -275,7 +298,7 @@ struct RequestDetail: View {
           } icon: { Image(systemName: "key.horizontal").foregroundStyle(.indigo) }
         }
         ForEach(current.resourceRequests.filter { $0.type != "secret" }) { resource in
-          if resource.type == "oauth_token", current.pending {
+          if resource.type == "oauth_token", current.pending, model.lastRefresh != nil {
             OAuthAccessRow(resource: resource)
           } else {
             VStack(alignment: .leading, spacing: 4) {
@@ -297,7 +320,7 @@ struct RequestDetail: View {
       } footer: {
         Text("Only the requesting device can decrypt an approved grant.")
       }
-      if current.pending {
+      if current.pending && model.lastRefresh != nil {
         let missing = current.secretRefs.filter { ref in !model.secrets.contains { $0.ref == ref } }
         if !missing.isEmpty {
           Section {
@@ -314,7 +337,10 @@ struct RequestDetail: View {
     .safeAreaInset(edge: .bottom, spacing: 0) {
       if current.pending {
         VStack(spacing: 12) {
-          if oauthBlocked {
+          if model.lastRefresh == nil {
+            Text(model.refreshing ? "Loading vault details…" : "Refresh vault details to approve.")
+              .font(.footnote).foregroundStyle(.secondary)
+          } else if oauthBlocked {
             Text("Update the account permissions above to approve.")
               .font(.footnote).foregroundStyle(.secondary)
           }
@@ -323,7 +349,7 @@ struct RequestDetail: View {
               .frame(maxWidth: .infinity).padding(.vertical, 5)
           }.buttonStyle(.borderedProminent).controlSize(.large)
             .accessibilityLabel("Approve access")
-            .disabled(model.busy || oauthBlocked)
+            .disabled(model.busy || oauthBlocked || model.lastRefresh == nil)
           Button(role: .destructive) {
             Task {
               await model.run("Denying request…") {
@@ -335,7 +361,7 @@ struct RequestDetail: View {
             OperationLabel(title: typeSize.isAccessibilitySize ? "Deny" : "Deny request", systemImage: "xmark", operations: ["Denying request…"])
               .frame(maxWidth: .infinity).padding(.vertical, 5)
           }.buttonStyle(.bordered).tint(.red).controlSize(.large)
-            .accessibilityLabel("Deny request").disabled(model.busy)
+            .accessibilityLabel("Deny request").disabled(model.busy || model.lastRefresh == nil)
         }.padding().background(.bar)
       }
     }

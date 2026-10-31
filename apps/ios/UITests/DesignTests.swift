@@ -78,8 +78,11 @@ import XCTest
     XCTAssertTrue(app.navigationBars["Review request"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.staticTexts["Test Mac"].exists)
     for _ in 0..<8 where !app.buttons["Command details"].isHittable { scrollDetails(app) }
-    app.buttons["Command details"].tap()
-    XCTAssertTrue(app.staticTexts["Test request"].exists)
+    let disclosure = app.buttons["Command details"]
+    if disclosure.buttons.firstMatch.exists { disclosure.buttons.firstMatch.tap() }
+    else { disclosure.tap() }
+    for _ in 0..<8 where !app.staticTexts["Test request"].exists { scrollDetails(app) }
+    XCTAssertTrue(app.staticTexts["Test request"].waitForExistence(timeout: 3))
   }
   func testNotificationSettingsExplainsApprovalAlerts() {
     let app = launch("idle")
@@ -117,7 +120,9 @@ import XCTest
     XCTAssertFalse(app.staticTexts["npm run deploy -- --production"].isHittable)
     capture(app, "Review — scope and decision")
     for _ in 0..<8 where !app.buttons["Command details"].isHittable { scrollDetails(app) }
-    app.buttons["Command details"].tap()
+    let disclosure = app.buttons["Command details"]
+    if disclosure.buttons.firstMatch.exists { disclosure.buttons.firstMatch.tap() }
+    else { disclosure.tap() }
     XCTAssertTrue(app.staticTexts["npm run deploy -- --production"].waitForExistence(timeout: 3))
     XCTAssertTrue(app.buttons["Approve access"].isHittable)
   }
@@ -158,6 +163,19 @@ import XCTest
     XCTAssertTrue(app.tabBars.buttons["Vault"].isEnabled)
     app.tabBars.buttons["Vault"].tap()
     XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 3))
+  }
+  func testHomeLimitsHistoryAndOlderItemsRemainReachable() {
+    let app = launch("history")
+    XCTAssertTrue(app.staticTexts["Mac Studio"].exists)
+    XCTAssertFalse(app.staticTexts["Older Mac 1"].exists)
+    capture(app, "Home — three recent requests")
+    for _ in 0..<8 where !app.buttons["Request history"].isHittable { scrollDetails(app) }
+    XCTAssertTrue(app.buttons["Request history"].isHittable)
+    app.buttons["Request history"].tap()
+    XCTAssertTrue(app.navigationBars["Request history"].waitForExistence(timeout: 3))
+    for _ in 0..<8 where !app.staticTexts["Older Mac 1"].isHittable { app.swipeUp() }
+    XCTAssertTrue(app.staticTexts["Older Mac 1"].isHittable)
+    capture(app, "History — older requests on demand")
   }
   func testApprovalReceipt() {
     let app = XCUIApplication()

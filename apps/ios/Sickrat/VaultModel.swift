@@ -3,7 +3,7 @@ import Foundation
 import LocalAuthentication
 import Observation
 
-struct PublicJWK: Decodable {
+struct PublicJWK: Sendable, Decodable {
   let kty: String
   let crv: String
   let x: String
@@ -11,7 +11,7 @@ struct PublicJWK: Decodable {
   var fields: [String: String] { ["kty": kty, "crv": crv, "x": x, "y": y] }
 }
 
-struct Approval: Decodable, Identifiable {
+struct Approval: Sendable, Decodable, Identifiable {
   let id: String
   let device: String
   let command: String
@@ -23,7 +23,7 @@ struct Approval: Decodable, Identifiable {
   let expiresAt: String
   let expired: Bool
   let ephemeralPublicKey: PublicJWK?
-  struct Resource: Decodable, Identifiable {
+  struct Resource: Sendable, Decodable, Identifiable {
     var id: String {
       [
         type, ref ?? "", providerId ?? "", connectionName ?? "", env ?? "", resourceRef ?? "",
@@ -41,18 +41,18 @@ struct Approval: Decodable, Identifiable {
   }
   var pending: Bool { status == "pending" && !expired }
 }
-struct Secret: Decodable, Identifiable {
+struct Secret: Sendable, Decodable, Identifiable {
   let id: String
   let ref: String
   let label: String
   let updatedAt: String
 }
-struct Device: Decodable, Identifiable {
+struct Device: Sendable, Decodable, Identifiable {
   let id: String
   let label: String
   let revokedAt: String?
 }
-struct Connection: Decodable, Identifiable {
+struct Connection: Sendable, Decodable, Identifiable {
   let id: String
   let providerId: String
   let connectionName: String
@@ -61,7 +61,7 @@ struct Connection: Decodable, Identifiable {
   let grantedScopes: [String]
   let revokedAt: String?
 }
-struct BrowserSession: Decodable, Identifiable {
+struct BrowserSession: Sendable, Decodable, Identifiable {
   let id: String
   let resourceRef: String
   let state: String
@@ -93,6 +93,11 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   var refreshError: String?
   private var lockGeneration = 0
   var lastRefresh: Date?
+  var lastRequestRefresh: Date?
+  var requestHistory: [Approval] = []
+  var loadingHistory = false
+  var historyError: String?
+  var historyLoaded = false
   var transferKey: P256.KeyAgreement.PrivateKey?
   private let session: URLSession
   init(session: URLSession? = nil) {
@@ -161,6 +166,10 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     vaultName = name
     UserDefaults.standard.set(origin, forKey: "vault.endpoint")
     lastRefresh = nil
+    lastRequestRefresh = nil
+    requestHistory = []
+    historyLoaded = false
+    historyError = nil
     refreshError = nil
     approvals = []
     secrets = []
@@ -192,24 +201,65 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     #endif
     do { try await refresh() } catch { /* Refresh errors are inline, never modal. */  }
   }
+  private func fetch<T: Decodable & Sendable>(
+    _ path: String, field: String, as type: T.Type, origin: String
+  ) async throws -> T {
+    try decode(try await request(path, origin: origin), field, as: type)
+  }
   private func fetchSnapshot() async throws {
-    let approvalsResponse = try await request("approvals")
-    let secretsResponse = try await request("secrets")
-    let devicesResponse = try await request("devices")
-    let connectionsResponse = try await request("oauth/connections")
-    let sessionsResponse = try await request("browser-sessions")
+    let origin = endpoint
+    async let pending: [Approval] = fetch("approvals?status=pending", field: "approvals", as: [Approval].self, origin: origin)
+    async let recent: [Approval] = fetch("approvals?limit=3", field: "approvals", as: [Approval].self, origin: origin)
+    async let nextSecrets: [Secret] = fetch("secrets", field: "secrets", as: [Secret].self, origin: origin)
+    async let nextDevices: [Device] = fetch("devices", field: "devices", as: [Device].self, origin: origin)
+    async let nextConnections: [Connection] = fetch("oauth/connections", field: "connections", as: [Connection].self, origin: origin)
+    async let nextSessions: [BrowserSession] = fetch("browser-sessions", field: "browserSessions", as: [BrowserSession].self, origin: origin)
+    let (pendingItems, recentItems) = try await (pending, recent)
     try Task.checkCancellation()
-    let nextApprovals = try decode(approvalsResponse, "approvals", as: [Approval].self)
-    let nextSecrets = try decode(secretsResponse, "secrets", as: [Secret].self)
-    let nextDevices = try decode(devicesResponse, "devices", as: [Device].self)
-    let nextConnections = try decode(connectionsResponse, "connections", as: [Connection].self)
-    let nextSessions = try decode(sessionsResponse, "browserSessions", as: [BrowserSession].self)
-    approvals = nextApprovals
-    secrets = nextSecrets
-    devices = nextDevices
-    connections = nextConnections
-    sessions = nextSessions
+    guard endpoint == origin else { throw CancellationError() }
+    // Publish the decision inbox before slower account/session metadata arrives.
+    let pendingIDs = Set(pendingItems.map(\.id))
+    approvals = pendingItems + recentItems.filter { !pendingIDs.contains($0.id) }
+    lastRequestRefresh = Date()
+    let catalog = try await (nextSecrets, nextDevices, nextConnections, nextSessions)
+    try Task.checkCancellation()
+    guard endpoint == origin else { throw CancellationError() }
+    (secrets, devices, connections, sessions) = catalog
     lastRefresh = Date()
+  }
+  func loadHistory() async {
+    guard !loadingHistory else { return }
+    loadingHistory = true
+    defer { loadingHistory = false }
+    #if DEBUG
+      if DesignFixture.enabled {
+        requestHistory = approvals.filter { !$0.pending }
+        historyLoaded = true
+        return
+      }
+    #endif
+    let origin = endpoint
+    do {
+      let result: [Approval] = try await fetch("approvals?limit=100", field: "approvals", as: [Approval].self, origin: origin)
+      try Task.checkCancellation()
+      guard endpoint == origin else { return }
+      requestHistory = result.filter { !$0.pending }
+      historyLoaded = true
+      historyError = nil
+    } catch {
+      if endpoint == origin && !Self.isExpectedCancellation(error) {
+        historyError = "Couldn’t load history. Try again."
+      }
+    }
+  }
+  func loadNotificationRequest(_ id: String) async {
+    guard !approvals.contains(where: { $0.id == id }) else { return }
+    let origin = endpoint
+    do {
+      let request: Approval = try await fetch("approvals/\(id)", field: "approval", as: Approval.self, origin: origin)
+      guard endpoint == origin, !Task.isCancelled else { return }
+      if !approvals.contains(where: { $0.id == id }) { approvals.append(request) }
+    } catch { /* The destination presents the existing unavailable/offline state. */ }
   }
   static func isExpectedCancellation(_ error: Error) -> Bool {
     if error is CancellationError { return true }

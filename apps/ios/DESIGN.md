@@ -51,3 +51,9 @@ The native owner already verified physical-device enrollment and APNs delivery b
 ## Parity
 
 This pass changes native presentation and feedback, not backend capabilities, grant envelopes or lifecycle rules. PWA and CLI protocols remain compatible. Sharing a notification pairing code uses the system share sheet and shares only the public code. Infrastructure provisioning and durable passkey recovery remain the documented CLI/PWA exceptions.
+
+## Focused home follow-up
+
+Home now prioritizes pending decisions and shows at most three recent completed/expired items. Request history opens a separate native list that fetches the latest 100 requests on demand, matching the existing API limit; it is not an unlimited archive. No counts, charts or maintenance shortcuts are added to the decision screen.
+
+The previous loader made five API requests in sequence and waited for every result before publishing the inbox. It now fetches a dedicated pending list, a three-request recent preview and the catalog concurrently, publishing the inbox before the catalog finishes. Initial approval controls wait for catalog readiness so partial loading cannot be mistaken for missing secrets or permissions. Requests referenced by notification are fetched directly when absent from the recent preview. Older history is not polled on the home screen. Existing CLI and PWA filtering/inspection APIs already support these requests; no server deployment or protocol change is needed.

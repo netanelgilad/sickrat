@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		092420B2074938E7372E8BAC /* OAuthConnect.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C46B1A5F3215C2A4798F9C /* OAuthConnect.swift */; };
 		0A625F146587829603DA198A /* CryptoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86DC2ACF1922A4836DBB272C /* CryptoTests.swift */; };
+		19B587204D473C62E340E4D8 /* RequestHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2278B5DD7C14C1B13C0586CE /* RequestHistoryView.swift */; };
 		19C37679076387653CBC3D80 /* DesignFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 425B5E4F0B151441D10D9FD3 /* DesignFixture.swift */; };
 		28EC715E2C770A49D347E7CD /* ActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA307657AB4E8644C9B2510 /* ActivityTests.swift */; };
 		29767D0BF86084C72CC364F9 /* DesignPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8142D4C2852D78E7A53CE08 /* DesignPresentationTests.swift */; };
@@ -19,6 +20,7 @@
 		5E12B344762347841B59960C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB318A0C3BB83C47D9513FFF /* Assets.xcassets */; };
 		608C9D0D1E68EFD032B60B22 /* OAuthPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AFFDAC5A2D3DF3A9992F9F9 /* OAuthPolicyTests.swift */; };
 		7B763C8A2D7072FC228E907B /* Crypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = D192336E401D78094EC26F17 /* Crypto.swift */; };
+		83C0756B3A2884290A449402 /* InboxLoadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F68B23EF226803BCE11739FE /* InboxLoadingTests.swift */; };
 		918FAED120C955CCAF3F29CB /* OAuthManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C8D1A3D39140BD0B25CF654 /* OAuthManagement.swift */; };
 		97976C66AA3433D1513D77D5 /* SickratApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 983BB7CEFDAB19BAFBB0749F /* SickratApp.swift */; };
 		BA202FC9765F28867B19A908 /* ActivityViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D1A90A87C73A5CC08D0DB3 /* ActivityViews.swift */; };
@@ -46,6 +48,7 @@
 
 /* Begin PBXFileReference section */
 		0E9785DE960740A3E5F7D61E /* ResourceGrants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResourceGrants.swift; sourceTree = "<group>"; };
+		2278B5DD7C14C1B13C0586CE /* RequestHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RequestHistoryView.swift; sourceTree = "<group>"; };
 		2A042CE43F774D4578C8B9BA /* VaultModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultModel.swift; sourceTree = "<group>"; };
 		3AFFDAC5A2D3DF3A9992F9F9 /* OAuthPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthPolicyTests.swift; sourceTree = "<group>"; };
 		425B5E4F0B151441D10D9FD3 /* DesignFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignFixture.swift; sourceTree = "<group>"; };
@@ -67,6 +70,7 @@
 		DDA307657AB4E8644C9B2510 /* ActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityTests.swift; sourceTree = "<group>"; };
 		E5C46B1A5F3215C2A4798F9C /* OAuthConnect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OAuthConnect.swift; sourceTree = "<group>"; };
 		E8142D4C2852D78E7A53CE08 /* DesignPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignPresentationTests.swift; sourceTree = "<group>"; };
+		F68B23EF226803BCE11739FE /* InboxLoadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxLoadingTests.swift; sourceTree = "<group>"; };
 		F92AB1D866F504C8DED76607 /* DesignTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -87,6 +91,7 @@
 				DDA307657AB4E8644C9B2510 /* ActivityTests.swift */,
 				86DC2ACF1922A4836DBB272C /* CryptoTests.swift */,
 				E8142D4C2852D78E7A53CE08 /* DesignPresentationTests.swift */,
+				F68B23EF226803BCE11739FE /* InboxLoadingTests.swift */,
 				9E99AA5E49F43AC1228E2BEE /* KeyTransferTests.swift */,
 				3AFFDAC5A2D3DF3A9992F9F9 /* OAuthPolicyTests.swift */,
 			);
@@ -116,6 +121,7 @@
 				C5683DC6942DB74AFA1128B5 /* Notifications.swift */,
 				E5C46B1A5F3215C2A4798F9C /* OAuthConnect.swift */,
 				4C8D1A3D39140BD0B25CF654 /* OAuthManagement.swift */,
+				2278B5DD7C14C1B13C0586CE /* RequestHistoryView.swift */,
 				0E9785DE960740A3E5F7D61E /* ResourceGrants.swift */,
 				4BDBC5605C27B7A747452F99 /* Sickrat.entitlements */,
 				983BB7CEFDAB19BAFBB0749F /* SickratApp.swift */,
@@ -250,6 +256,7 @@
 				28EC715E2C770A49D347E7CD /* ActivityTests.swift in Sources */,
 				0A625F146587829603DA198A /* CryptoTests.swift in Sources */,
 				29767D0BF86084C72CC364F9 /* DesignPresentationTests.swift in Sources */,
+				83C0756B3A2884290A449402 /* InboxLoadingTests.swift in Sources */,
 				BCE02A14B40A61E5AB408420 /* KeyTransferTests.swift in Sources */,
 				608C9D0D1E68EFD032B60B22 /* OAuthPolicyTests.swift in Sources */,
 			);
@@ -267,6 +274,7 @@
 				388BE64F4DE242EC4F2CEC29 /* Notifications.swift in Sources */,
 				092420B2074938E7372E8BAC /* OAuthConnect.swift in Sources */,
 				918FAED120C955CCAF3F29CB /* OAuthManagement.swift in Sources */,
+				19B587204D473C62E340E4D8 /* RequestHistoryView.swift in Sources */,
 				35BDC96301EFF6F474F3702A /* ResourceGrants.swift in Sources */,
 				97976C66AA3433D1513D77D5 /* SickratApp.swift in Sources */,
 				46C6C34E2FC2F9B31890A88F /* VaultModel.swift in Sources */,
@@ -349,7 +357,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -369,7 +377,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.8;
+				MARKETING_VERSION = 0.1.9;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -451,7 +459,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -465,7 +473,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.8;
+				MARKETING_VERSION = 0.1.9;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";

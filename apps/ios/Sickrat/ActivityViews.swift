@@ -23,7 +23,7 @@ struct OperationLabel: View {
           if active {
             ProgressView().controlSize(.small)
           } else if let systemImage {
-            Image(systemName: systemImage)
+            Image(systemName: systemImage).font(.system(size: 18))
           }
         }
         .frame(width: 22, height: 22).accessibilityHidden(true)

@@ -36,6 +36,7 @@ enum NotificationCredential {
   var status = "Not enabled"
   var setupReady = false
   var pairingCode: String?
+  var enrolling = false
   private var attempt = 0
   var enabled: Bool { UserDefaults.standard.bool(forKey: "nativePush.enabled") }
   private var token: String? { UserDefaults.standard.string(forKey: "nativePush.token") }
@@ -69,6 +70,9 @@ enum NotificationCredential {
   }
 
   func enable() async throws {
+    guard !enrolling else { return }
+    enrolling = true
+    defer { enrolling = false }
     guard let model, model.configured else { throw VaultError("Connect a vault first.") }
     let origin = model.endpoint
     if NotificationCredential.read(origin) == nil {
@@ -213,18 +217,42 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
 
 struct NotificationSettingsView: View {
   @Environment(VaultModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var push = PushCoordinator.shared
-  @State private var importing = false
   var body: some View {
     Form {
       Section {
-        LabeledContent("Status", value: push.status)
-        if let code = push.pairingCode {
-          LabeledContent("Pairing code", value: code).monospaced().textSelection(.enabled)
-          Text("Approve this code on your Mac to allow this iPhone to receive alerts. The code expires in 10 minutes.")
+        VStack(alignment: .leading, spacing: 14) {
+          VaultSymbol(symbol: push.status == "On" ? "bell.badge.fill" : "bell", tint: .indigo)
+            .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+          Text(push.status == "On" ? "Ready when you’re needed" : "Know when access is needed")
+            .font(.title2.bold())
+          Text("Get an alert when a device needs access. Open Sickrat to review the resources and decide.")
             .foregroundStyle(.secondary)
+        }.padding(.vertical, 8)
+      }
+      Section {
+        LabeledContent("Status") {
+          Text(push.status).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+            .accessibilityIdentifier("notification-status")
         }
-        if push.enabled {
+        if let code = push.pairingCode {
+          VStack(alignment: .leading, spacing: 12) {
+            Text("Approve this iPhone on your Mac").font(.headline)
+            Text(code).font(.title2.monospaced().bold()).textSelection(.enabled)
+              .accessibilityLabel("Pairing code, \(code.map(String.init).joined(separator: " "))")
+            Text("Share this code with your Mac, then return here. It expires in 10 minutes. You can switch apps while you wait.")
+              .font(.subheadline).foregroundStyle(.secondary)
+            ShareLink(item: code) { Label("Share pairing code", systemImage: "square.and.arrow.up") }
+          }.padding(.vertical, 8)
+        }
+        if push.enrolling {
+          HStack(spacing: 10) {
+            ProgressView().controlSize(.small).accessibilityHidden(true)
+            Text(push.pairingCode == nil ? "Setting up notifications…" : "Waiting for your Mac…")
+              .font(.subheadline).foregroundStyle(.secondary)
+          }.accessibilityElement(children: .combine)
+        } else if push.enabled {
           Button {
             Task { await model.run("Connecting notifications…") { await push.start(model) } }
           } label: { OperationLabel(title: "Reconnect", systemImage: "arrow.clockwise", operations: ["Connecting notifications…"]) }
@@ -233,18 +261,34 @@ struct NotificationSettingsView: View {
           }
         } else {
           Button {
-            Task { await model.run("Enabling notifications…") { try await push.enable() } }
-          } label: { OperationLabel(title: "Enable notifications", systemImage: "bell", operations: ["Enabling notifications…"]) }
+            Task {
+              do { try await push.enable() }
+              catch {
+                if !VaultModel.isExpectedCancellation(error) {
+                  push.status = "Setup paused. Try again."
+                  model.error = error.localizedDescription
+                }
+              }
+            }
+          } label: { Label("Enable notifications", systemImage: "bell.badge") }
         }
-      } footer: { Text("Enable alerts for access requests. On first use, approve this iPhone from your Mac. Open Sickrat to approve or deny requests.") }
-    }.vaultActivity().navigationTitle("Notifications").navigationBarTitleDisplayMode(.inline)
-      .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-        do {
-          let url = try result.get()
-          let access = url.startAccessingSecurityScopedResource()
-          defer { if access { url.stopAccessingSecurityScopedResource() } }
-          try push.importSetup(Data(contentsOf: url))
-        } catch { if !VaultModel.isExpectedCancellation(error) { model.error = error.localizedDescription } }
+      } footer: {
+        Text("Alerts contain no secret values. Approving a notification pairing code allows alerts on this iPhone; it doesn’t grant vault access.")
       }
+      if !push.enabled {
+        Section("First-time setup") {
+          Label("Approve this iPhone from your Mac.", systemImage: "1.circle")
+          Label("Allow notifications when iOS asks.", systemImage: "2.circle")
+          Label("Review access requests from an alert.", systemImage: "3.circle")
+        }.font(.subheadline)
+      }
+      Section {
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+          Link(destination: url) { Label("Open iOS notification settings", systemImage: "arrow.up.forward.app") }
+        }
+      }
+    }
+    .vaultActivity().navigationTitle("Notifications").navigationBarTitleDisplayMode(.inline)
+    .sensoryFeedback(.success, trigger: push.status == "On") { _, ready in ready }
   }
 }

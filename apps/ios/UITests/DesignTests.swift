@@ -76,6 +76,9 @@ import XCTest
     app.launchEnvironment["SICKRAT_DESIGN_STATE"] = "notification"
     app.launch()
     XCTAssertTrue(app.navigationBars["Review request"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["Test Mac"].exists)
+    for _ in 0..<8 where !app.buttons["Command details"].isHittable { scrollDetails(app) }
+    app.buttons["Command details"].tap()
     XCTAssertTrue(app.staticTexts["Test request"].exists)
   }
   func testNotificationSettingsExplainsApprovalAlerts() {
@@ -84,12 +87,86 @@ import XCTest
     for _ in 0..<5 where !app.buttons["Notifications"].isHittable { app.swipeUp() }
     app.buttons["Notifications"].tap()
     XCTAssertTrue(app.navigationBars["Notifications"].waitForExistence(timeout: 3))
-    XCTAssertTrue(app.buttons["Import setup file"].exists)
-    XCTAssertTrue(app.staticTexts["Import your private setup file, then enable alerts for access requests. Open Sickrat to approve or deny them."].exists)
+    XCTAssertTrue(app.buttons["Enable notifications"].exists)
+    XCTAssertTrue(app.staticTexts["Approve this iPhone from your Mac."].exists)
+    XCTAssertFalse(app.buttons["Import setup file"].exists)
     let shot = XCTAttachment(screenshot: app.screenshot())
     shot.name = "Notification settings"
     shot.lifetime = .keepAlways
     add(shot)
+  }
+  private func scrollDetails(_ app: XCUIApplication) {
+    // Stay inside the scrollable content, above the persistent decision area.
+    let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42))
+    start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.18)))
+  }
+  private func capture(_ app: XCUIApplication, _ name: String) {
+    let shot = XCTAttachment(screenshot: app.screenshot())
+    shot.name = name
+    shot.lifetime = .keepAlways
+    add(shot)
+  }
+  func testPendingRequestKeepsDecisionVisibleAndDisclosesCommand() {
+    let app = launch("pending")
+    capture(app, "Requests — pending")
+    app.staticTexts["Mac Studio"].tap()
+    XCTAssertTrue(app.navigationBars["Review request"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.buttons["Approve access"].isHittable)
+    XCTAssertTrue(app.buttons["Deny request"].isHittable)
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "15 minutes")).firstMatch.exists)
+    XCTAssertFalse(app.staticTexts["npm run deploy -- --production"].isHittable)
+    capture(app, "Review — scope and decision")
+    for _ in 0..<8 where !app.buttons["Command details"].isHittable { scrollDetails(app) }
+    app.buttons["Command details"].tap()
+    XCTAssertTrue(app.staticTexts["npm run deploy -- --production"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.buttons["Approve access"].isHittable)
+  }
+  func testVaultSearchHasUsefulEmptyStateAndKeepsCategoriesReachable() {
+    let app = launch("idle")
+    app.tabBars.buttons["Vault"].tap()
+    XCTAssertTrue(app.buttons["Connected accounts"].exists || app.staticTexts["Connected accounts"].exists)
+    capture(app, "Vault — categories and secrets")
+    app.searchFields.firstMatch.tap()
+    app.searchFields.firstMatch.typeText("no-such-secret")
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "No Results")).firstMatch.waitForExistence(timeout: 3))
+    capture(app, "Vault — no search results")
+  }
+  func testDesignScreenshots() {
+    let app = launch("idle")
+    capture(app, "Requests — recent activity")
+    app.tabBars.buttons["Vault"].tap()
+    app.staticTexts["Example API key"].tap()
+    XCTAssertTrue(app.buttons["Reveal value"].waitForExistence(timeout: 3))
+    capture(app, "Secret — protected value")
+    app.tabBars.buttons["Settings"].tap()
+    capture(app, "Settings — security and access")
+    app.buttons["Notifications"].tap()
+    capture(app, "Notifications — explanation and setup")
+  }
+  func testPairingKeepsSharingAndNavigationAvailableAcrossAppSwitching() {
+    let app = launch("pairing")
+    app.tabBars.buttons["Settings"].tap()
+    app.buttons["Notifications"].tap()
+    for _ in 0..<12 where !app.buttons["Share pairing code"].isHittable { scrollDetails(app) }
+    XCTAssertTrue(app.buttons["Share pairing code"].waitForExistence(timeout: 3))
+    XCTAssertTrue(app.buttons["Share pairing code"].isEnabled)
+    capture(app, "Notifications — waiting for Mac")
+    XCUIDevice.shared.press(.home)
+    app.activate()
+    XCTAssertTrue(app.buttons["Share pairing code"].isEnabled)
+    XCTAssertFalse(app.alerts.firstMatch.exists)
+    XCTAssertTrue(app.tabBars.buttons["Vault"].isEnabled)
+    app.tabBars.buttons["Vault"].tap()
+    XCTAssertTrue(app.navigationBars["Vault"].waitForExistence(timeout: 3))
+  }
+  func testApprovalReceipt() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--design-preview"]
+    app.launchEnvironment["SICKRAT_DESIGN_STATE"] = "receipt"
+    app.launch()
+    XCTAssertTrue(app.staticTexts["Access approved"].waitForExistence(timeout: 4))
+    XCTAssertTrue(app.buttons["Done"].isHittable)
+    capture(app, "Approval — completion receipt")
   }
   func testUnlockProgressStaysInToolbar() {
     let app = launch("unlock")

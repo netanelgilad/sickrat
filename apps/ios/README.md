@@ -12,7 +12,7 @@ xcodebuild -project Sickrat.xcodeproj -scheme Sickrat -destination 'platform=iOS
 ./scripts/build-ipa.sh
 ```
 
-The unsigned development IPA is `build/Sickrat-0.1.3-4.ipa`. AltStore Classic signs it with the installing user's identity. The current preview requests the development APNs entitlement; associated-domain and shared-Keychain entitlements are not requested. The app needs a device passcode for key storage.
+The unsigned development IPA is `build/Sickrat-<version>-<build>.ipa`. AltStore Classic signs it with the installing user's identity. The current preview requests the development APNs entitlement; associated-domain and shared-Keychain entitlements are not requested. The app needs a device passcode for key storage.
 
 This branch's private AltStore installation is a development preview, not a tagged release. Production releases must still originate from `origin/main`. No release tags or release workflow guards are changed.
 
@@ -40,7 +40,7 @@ Keep the existing PWA passkey recovery record. The native app deliberately does 
 
 ## Remaining migration work / intentional exceptions
 
-- **Background push:** approval alerts use native APNs when configured, alongside existing PWA push. Pairing alerts still use the PWA; the native app can review devices while open. Physical device delivery requires verification with a compatible paid-team provisioning profile.
+- **Background push:** approval alerts use native APNs when configured, alongside existing PWA push. Pairing alerts still use the PWA; the native app can review devices while open. The owner confirmed enrollment and background delivery on the direct signed 0.1.7 preview using a paid-team development profile. Pairing alerts still need native support.
 - **Provisioning and deployment:** use the CLI/web console to create/update Cloudflare infrastructure. This preview connects to existing vaults.
 - **Cloudflare Access:** redirects are intentionally rejected. Interactive Access-protected endpoints need a separate native authentication design; do not paste Access tokens into the app.
 - **Recovery/export:** existing PWA retains recovery duties. Native key removal and key replacement are intentionally absent from the preview to avoid stranding existing encrypted records.
@@ -107,3 +107,11 @@ Enable Notifications now creates a ten-minute pairing code. The owner approves i
 ## Preview 0.1.7 (build 8)
 
 Notification enrollment preserves its pending credential in device Keychain. Polling pauses in the background and retries temporary network interruptions, allowing the owner to switch to another app to share the code without abandoning pairing. Process restarts can reuse the pending credential when Enable Notifications is tapped again. Real app-switching behavior and push delivery still require iPhone verification.
+
+## Preview 0.1.8 (build 9) — native product and design
+
+The product rationale, prior-art links, per-screen responsibilities, accessibility and motion rules are in [DESIGN.md](DESIGN.md). Requests now emphasize the requester, purpose, resources and duration; approval controls remain reachable during scrolling. Successful decisions show a receipt. Vault categories are reachable above secrets, search has a distinct no-results state, and secret details use readable dates and a contextual Edit action. Notifications explain pairing and offer native sharing of the public code. Pairing progress is local, allowing navigation and sharing while waiting for the Mac.
+
+Native secret navigation, a brief completion symbol animation and successful-action haptics provide feedback. Reduce Motion uses ordinary navigation and removes custom receipt motion. These changes retain the existing backend, encryption and approval checks; no Worker deployment is required.
+
+Validation for this preview: the complete simulator suite passed, including cryptography, key transfer, OAuth policy, activity, date/duration presentation, loading geometry, request review, vault search and pairing navigation. A separate four-test run passed in dark appearance with Accessibility Extra Large text, including app switching during synthetic notification pairing. Light/dark screenshots were inspected. Signed device archive/export succeeded with the existing development APNs entitlement. Fixtures don't verify live encrypted approval completion, APNs delivery or physical-device haptic feel after this update.

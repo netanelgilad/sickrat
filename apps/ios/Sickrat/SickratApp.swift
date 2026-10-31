@@ -5,9 +5,21 @@ import UniformTypeIdentifiers
   @State private var model = VaultModel.appModel()
   @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var appDelegate
   @Environment(\.scenePhase) private var phase
+  @ViewBuilder private var appContent: some View {
+    #if DEBUG
+      if DesignFixture.enabled && DesignFixture.scenario == "receipt" {
+        NavigationStack {
+          RequestReceipt(outcome: .approved, device: "Mac Studio", duration: "15 minutes") {}
+            .navigationTitle("Request complete").navigationBarTitleDisplayMode(.inline)
+        }.tint(.indigo)
+      } else { RootView() }
+    #else
+      RootView()
+    #endif
+  }
   var body: some Scene {
     WindowGroup {
-      RootView().environment(model)
+      appContent.environment(model)
         .overlay {
           if phase == .background {
             Color(.systemBackground).ignoresSafeArea().overlay {
@@ -171,31 +183,36 @@ struct RequestsView: View {
 }
 struct RequestRow: View {
   let request: Approval
-  private var status: String { request.expired ? "Expired" : request.status.capitalized }
-  private var symbol: String {
-    if request.pending { return "clock" }
-    if request.expired { return "clock.badge.xmark" }
-    return request.status == "approved" ? "checkmark.circle" : "xmark.circle"
-  }
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text(request.device).font(.body.weight(.semibold)).lineLimit(1)
-      Text(request.message ?? request.command).font(.subheadline).foregroundStyle(.secondary)
-        .lineLimit(2)
-      Label(status, systemImage: symbol).font(.caption)
-        .foregroundStyle(request.pending ? Color.orange : Color.secondary)
+    HStack(alignment: .top, spacing: 12) {
+      VaultSymbol(symbol: request.pending ? "hand.raised" : request.statusSymbol,
+                  tint: request.pending ? .indigo : request.statusTint)
+      VStack(alignment: .leading, spacing: 5) {
+        Text(request.device).font(.headline).lineLimit(2)
+        Text(request.message ?? request.command).font(.subheadline).foregroundStyle(.secondary)
+          .lineLimit(2)
+        if request.pending {
+          Text(request.accessSummary).font(.caption).foregroundStyle(.secondary)
+        } else {
+          Label(request.statusTitle, systemImage: request.statusSymbol)
+            .font(.caption).foregroundStyle(request.statusTint)
+        }
+      }
     }
-    .padding(.vertical, 3)
+    .padding(.vertical, 5)
     .accessibilityElement(children: .combine)
   }
 }
 struct RequestDetail: View {
   @Environment(VaultModel.self) private var model
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var phase
   let request: Approval
   @State private var confirm = false
   @State private var missingValues: [String: String] = [:]
-  @Environment(\.scenePhase) private var phase
+  @State private var outcome: RequestOutcome?
+  @Environment(\.dynamicTypeSize) private var typeSize
   private var oauthBlocked: Bool {
     current.resourceRequests.filter { $0.type == "oauth_token" }.contains {
       OAuthPolicy.matches($0, model.connections).count != 1
@@ -203,89 +220,131 @@ struct RequestDetail: View {
   }
   var current: Approval { model.approvals.first { $0.id == request.id } ?? request }
   var body: some View {
-    Form {
-      Section("Requested by") {
-        LabeledContent("Device", value: current.device)
-        Text(current.command).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-        if let message = current.message { Text(message) }
+    Group {
+      if let outcome {
+        RequestReceipt(outcome: outcome, device: request.device, duration: request.durationTitle) {
+          dismiss()
+        }
+      } else {
+        review
       }
-      Section("Access") {
-        ForEach(current.secretRefs, id: \.self) { Text($0) }
-        ForEach(
-          current.resourceRequests.filter { $0.type != "secret" }
-        ) { resource in
+    }
+    .navigationTitle(outcome == nil ? "Review request" : "Request complete")
+    .navigationBarTitleDisplayMode(.inline)
+    .sensoryFeedback(.success, trigger: outcome != nil)
+    .onChange(of: phase) { _, phase in if phase == .background { missingValues = [:] } }
+    .confirmationDialog(
+      "Allow \(current.device) to access these resources?", isPresented: $confirm,
+      titleVisibility: .visible
+    ) {
+      Button("Approve access") {
+        Task {
+          await model.run("Approving access…") {
+            if model.key == nil { try await model.unlock() }
+            try await model.approve(current, missingValues: missingValues)
+            missingValues = [:]
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { outcome = .approved }
+          }
+        }
+      }
+    }
+  }
+  private var review: some View {
+    Form {
+      Section {
+        VStack(alignment: .leading, spacing: 14) {
+          VaultSymbol(symbol: current.pending ? "laptopcomputer" : current.statusSymbol,
+                      tint: current.pending ? .indigo : current.statusTint)
+          Text(current.device).font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
+          if let message = current.message, !message.isEmpty {
+            Text(message).font(.body).foregroundStyle(.secondary)
+          }
+          Label(current.pending ? "Requests your approval" : current.statusTitle,
+                systemImage: current.pending ? "hand.raised" : current.statusSymbol)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(current.pending ? Color.indigo : current.statusTint)
+        }.padding(.vertical, 8)
+      }
+      Section("Requested access") {
+        ForEach(current.secretRefs, id: \.self) { ref in
+          Label {
+            VStack(alignment: .leading, spacing: 4) {
+              Text(model.secrets.first { $0.ref == ref }?.label ?? ref)
+              Text(ref).font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
+          } icon: { Image(systemName: "key.horizontal").foregroundStyle(.indigo) }
+        }
+        ForEach(current.resourceRequests.filter { $0.type != "secret" }) { resource in
           if resource.type == "oauth_token", current.pending {
             OAuthAccessRow(resource: resource)
           } else {
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 4) {
               Text(resource.resourceRef ?? resource.providerId ?? resource.type)
-              Text(resource.scopes?.joined(separator: ", ") ?? resource.access ?? "").font(.caption)
-                .foregroundStyle(.secondary)
+              Text(resource.scopes?.joined(separator: ", ") ?? resource.access ?? "")
+                .font(.caption).foregroundStyle(.secondary)
             }
           }
         }
-        LabeledContent(
-          "Duration",
-          value: current.accessDurationSeconds.map { "\($0 / 60) minutes" } ?? "One-time access")
-        LabeledContent("Status", value: current.expired ? "Expired" : current.status.capitalized)
+        LabeledContent("Access duration", value: current.durationTitle)
+        if current.pending, let expiry = VaultDate.parse(current.expiresAt) {
+          LabeledContent("Respond before") { Text(expiry, style: .time) }
+        }
+      }
+      Section {
+        DisclosureGroup("Command details") {
+          Text(current.command).font(.body.monospaced()).textSelection(.enabled)
+        }
+      } footer: {
+        Text("Only the requesting device can decrypt an approved grant.")
       }
       if current.pending {
         let missing = current.secretRefs.filter { ref in !model.secrets.contains { $0.ref == ref } }
         if !missing.isEmpty {
-          Section("Create requested secrets") {
+          Section {
             ForEach(missing, id: \.self) { ref in
-              SecureField(
-                ref,
-                text: Binding(get: { missingValues[ref] ?? "" }, set: { missingValues[ref] = $0 })
-              ).textInputAutocapitalization(.never).autocorrectionDisabled()
+              SecureField(ref, text: Binding(get: { missingValues[ref] ?? "" }, set: { missingValues[ref] = $0 }))
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
+          } header: { Text("Create requested secrets") } footer: {
+            Text("These secrets aren’t in your vault yet. Enter their values to create and share them when you approve.")
           }
         }
-        Section {
-          Button {
-            confirm = true
-          } label: {
-            OperationLabel(
-              title: "Approve access", systemImage: "checkmark.shield",
-              operations: ["Approving access…"])
-          }.disabled(model.busy || oauthBlocked)
+      }
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      if current.pending {
+        VStack(spacing: 12) {
+          if oauthBlocked {
+            Text("Update the account permissions above to approve.")
+              .font(.footnote).foregroundStyle(.secondary)
+          }
+          Button { confirm = true } label: {
+            OperationLabel(title: typeSize.isAccessibilitySize ? "Approve" : "Approve access", systemImage: "checkmark.shield", operations: ["Approving access…"])
+              .frame(maxWidth: .infinity).padding(.vertical, 5)
+          }.buttonStyle(.borderedProminent).controlSize(.large)
+            .accessibilityLabel("Approve access")
+            .disabled(model.busy || oauthBlocked)
           Button(role: .destructive) {
             Task {
               await model.run("Denying request…") {
                 try await model.revoke("approvals/\(current.id)/deny")
-                dismiss()
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { outcome = .denied }
               }
             }
           } label: {
-            OperationLabel(
-              title: "Deny request", systemImage: "xmark", operations: ["Denying request…"])
-          }.disabled(model.busy)
-        } footer: {
-          Text("Only the requesting device can decrypt an approved grant.")
-        }
+            OperationLabel(title: typeSize.isAccessibilitySize ? "Deny" : "Deny request", systemImage: "xmark", operations: ["Denying request…"])
+              .frame(maxWidth: .infinity).padding(.vertical, 5)
+          }.buttonStyle(.bordered).tint(.red).controlSize(.large)
+            .accessibilityLabel("Deny request").disabled(model.busy)
+        }.padding().background(.bar)
       }
-    }.vaultActivity()
-      .navigationTitle("Review request").navigationBarTitleDisplayMode(.inline)
-      .onChange(of: phase) { _, phase in if phase == .background { missingValues = [:] } }
-      .confirmationDialog(
-        "Allow \(current.device) to access these resources?", isPresented: $confirm,
-        titleVisibility: .visible
-      ) {
-        Button("Approve access") {
-          Task {
-            await model.run("Approving access…") {
-              if model.key == nil { try await model.unlock() }
-              try await model.approve(current, missingValues: missingValues)
-              missingValues = [:]
-              dismiss()
-            }
-          }
-        }
-      }
+    }
+    .vaultActivity()
   }
 }
 struct UnlockButton: ToolbarContent {
   @Environment(VaultModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private var unlocking: Bool { model.activity == "Unlocking vault…" }
   var body: some ToolbarContent {
     ToolbarItem(placement: .topBarTrailing) {
@@ -301,61 +360,75 @@ struct UnlockButton: ToolbarContent {
             ProgressView().controlSize(.small)
           } else {
             Image(systemName: model.key == nil ? "lock" : "lock.open")
+              .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
           }
         }.frame(width: 24, height: 24)
       }
       .accessibilityLabel(
         unlocking ? "Unlocking vault" : (model.key == nil ? "Unlock vault" : "Lock vault")
       )
+      .sensoryFeedback(.success, trigger: model.key != nil) { _, unlocked in unlocked }
       .disabled(model.busy)
     }
   }
 }
 struct VaultView: View {
   @Environment(VaultModel.self) private var model
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Namespace private var secretTransition
   @State private var pulling = false
   @State private var search = ""
   @State private var adding = false
+  private var results: [Secret] {
+    model.secrets.filter {
+      search.isEmpty || $0.ref.localizedCaseInsensitiveContains(search)
+        || $0.label.localizedCaseInsensitiveContains(search)
+    }.sorted { $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+  }
   var body: some View {
     NavigationStack {
       List {
         RefreshErrorRow()
-        Section("Secrets") {
-          if model.lastRefresh == nil {
-            if model.refreshError == nil {
-              InitialVaultState(showProgress: !pulling, title: "Fetching secrets…")
+        if search.isEmpty {
+          Section {
+            NavigationLink { ConnectionsView() } label: {
+              VaultCategoryRow(title: "Connected accounts", symbol: "person.crop.circle", tint: .blue,
+                               count: model.lastRefresh == nil ? nil : model.connections.filter { $0.revokedAt == nil }.count)
             }
-          } else if model.secrets.isEmpty {
-            ContentUnavailableView(
-              "A place for your secrets", systemImage: "key.horizontal",
-              description: Text("Add a secret to share it through approved requests."))
-          }
-          ForEach(
-            model.secrets.filter {
-              search.isEmpty || $0.ref.localizedCaseInsensitiveContains(search)
-                || $0.label.localizedCaseInsensitiveContains(search)
-            }
-          ) { secret in
-            NavigationLink {
-              SecretDetail(secret: secret)
-            } label: {
-              VStack(alignment: .leading) {
-                Text(secret.label)
-                Text(secret.ref).font(.caption).foregroundStyle(.secondary)
-              }
+            NavigationLink { SessionsView() } label: {
+              VaultCategoryRow(title: "Browser sessions", symbol: "globe", tint: .teal,
+                               count: model.lastRefresh == nil ? nil : model.sessions.filter { $0.state != "revoked" }.count)
             }
           }
         }
-        Section {
-          NavigationLink {
-            ConnectionsView()
-          } label: {
-            Label("Connected accounts", systemImage: "person.crop.circle.badge.checkmark")
+        Section(search.isEmpty ? "Secrets" : "Search results") {
+          if model.lastRefresh == nil {
+            if model.refreshError == nil { InitialVaultState(showProgress: !pulling, title: "Fetching secrets…") }
+          } else if model.secrets.isEmpty {
+            ContentUnavailableView {
+              Label("Your first secret", systemImage: "key.horizontal")
+            } description: {
+              Text("Store an API key or password. Share access only when you approve a request.")
+            } actions: {
+              Button("Add a secret") { adding = true }.buttonStyle(.borderedProminent)
+            }
+          } else if results.isEmpty {
+            ContentUnavailableView.search(text: search)
           }
-          NavigationLink {
-            SessionsView()
-          } label: {
-            Label("Browser sessions", systemImage: "globe")
+          ForEach(results) { secret in
+            NavigationLink {
+              SecretDetail(secret: secret)
+                .vaultNavigationTransition(id: secret.id, namespace: secretTransition, reduceMotion: reduceMotion)
+            } label: {
+              HStack(spacing: 12) {
+                VaultSymbol(symbol: "key.horizontal", tint: .indigo)
+                  .matchedTransitionSource(id: secret.id, in: secretTransition)
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(secret.label).font(.body.weight(.medium))
+                  Text(secret.ref).font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+              }.padding(.vertical, 3)
+            }
           }
         }
       }.vaultActivity()
@@ -366,9 +439,7 @@ struct VaultView: View {
           await model.reload()
         }
         .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            Button("Add secret", systemImage: "plus") { adding = true }
-          }
+          ToolbarItem(placement: .topBarTrailing) { Button("Add secret", systemImage: "plus") { adding = true } }
           UnlockButton()
         }
         .sheet(isPresented: $adding) { SecretEditor() }
@@ -385,11 +456,16 @@ struct SecretDetail: View {
     Form {
       Section {
         LabeledContent("Reference", value: secret.ref)
-        LabeledContent("Updated", value: secret.updatedAt)
+        LabeledContent("Updated") {
+          if let date = VaultDate.parse(secret.updatedAt) {
+            Text(date, format: .dateTime.day().month(.abbreviated).year())
+          } else { Text("Unavailable").foregroundStyle(.secondary) }
+        }
       }
       Section("Value") {
         if let value {
           Text(value).font(.system(.body, design: .monospaced)).privacySensitive()
+            .textSelection(.enabled)
           Button("Hide value") { self.value = nil }
         } else {
           Button {
@@ -405,9 +481,9 @@ struct SecretDetail: View {
           }.disabled(model.busy)
         }
       }
-      Section { Button("Edit secret") { editing = true } }
     }.vaultActivity()
       .navigationTitle(secret.label).navigationBarTitleDisplayMode(.inline)
+      .toolbar { Button("Edit") { editing = true } }
       .sheet(isPresented: $editing) { SecretEditor(secret: secret) }
       .onDisappear { value = nil }
       .onChange(of: phase) { _, phase in if phase != .active { value = nil } }
@@ -473,23 +549,25 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
-        Section("Your vault") {
-          Text(model.endpoint).font(.footnote).textSelection(.enabled)
-          NavigationLink {
-            TransferView()
-          } label: {
-            Label("Transfer vault key", systemImage: "iphone.and.arrow.forward")
+        Section {
+          HStack(spacing: 14) {
+            VaultSymbol(symbol: "lock.shield", tint: .indigo)
+            VStack(alignment: .leading, spacing: 5) {
+              Text("Your vault").font(.headline)
+              Text(URL(string: model.endpoint)?.host ?? model.endpoint)
+                .font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+          }.padding(.vertical, 7)
+        }
+        Section("Access & alerts") {
+          NavigationLink { NotificationSettingsView() } label: {
+            Label("Notifications", systemImage: "bell.badge")
           }
-          NavigationLink {
-            DevicesView()
-          } label: {
+          NavigationLink { DevicesView() } label: {
             Label("Paired devices", systemImage: "laptopcomputer.and.iphone")
           }
         }
-        Section("Notifications") {
-          NavigationLink { NotificationSettingsView() } label: { Label("Notifications", systemImage: "bell") }
-        }
-        Section("Security") {
+        Section {
           Button {
             Task {
               await model.run(model.key == nil ? "Unlocking vault…" : "Locking vault…") {
@@ -497,25 +575,24 @@ struct SettingsView: View {
               }
             }
           } label: {
-            OperationLabel(
-              title: model.key == nil ? "Unlock vault" : "Lock vault", systemImage: "faceid",
-              operations: ["Unlocking vault…", "Locking vault…"])
+            OperationLabel(title: model.key == nil ? "Unlock vault" : "Lock vault",
+                           systemImage: model.key == nil ? "lock" : "lock.open",
+                           operations: ["Unlocking vault…", "Locking vault…"])
           }
-          Text(
-            "Your key stays in this device’s Keychain, protected by Face ID or your passcode. The vault locks when the app enters the background."
-          ).font(.footnote).foregroundStyle(.secondary)
+          NavigationLink { TransferView() } label: {
+            Label("Transfer vault key", systemImage: "iphone.and.arrow.forward")
+          }
+        } header: { Text("Security") } footer: {
+          Text("Your vault locks when you leave the app. Its key is protected by this iPhone’s Keychain and device authentication. Keep your web passkey for recovery.")
         }
-        Section("Development preview") {
-          Text(
-            "\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "")"
-          )
-          Text(
-            "Requests refresh while the app is open. Enable alerts in Notifications. Vault provisioning remains in the CLI."
-          ).font(.footnote).foregroundStyle(.secondary)
-          if let url = URL(string: model.endpoint) { Link("Open web console", destination: url) }
+        Section {
+          if let url = URL(string: model.endpoint) {
+            Link(destination: url) { Label("Open web console", systemImage: "safari") }
+          }
+        } footer: {
+          Text("Sickrat \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") · Development preview")
         }
-      }.vaultActivity()
-        .navigationTitle("Settings")
+      }.vaultActivity().navigationTitle("Settings")
     }
   }
 }

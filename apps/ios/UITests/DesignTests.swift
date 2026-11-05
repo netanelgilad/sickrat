@@ -119,12 +119,27 @@ import XCTest
     XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "15 minutes")).firstMatch.exists)
     XCTAssertFalse(app.staticTexts["npm run deploy -- --production"].isHittable)
     capture(app, "Review — scope and decision")
-    for _ in 0..<8 where !app.buttons["Command details"].isHittable { scrollDetails(app) }
+    // SwiftUI can report a Form row beneath the sticky actions as hittable.
+    // Bring the disclosure above those controls before tapping it.
+    for _ in 0..<8 {
+      let command = app.buttons["Command details"]
+      if command.isHittable && command.frame.maxY < app.buttons["Approve access"].frame.minY - 8 { break }
+      scrollDetails(app)
+    }
     let disclosure = app.buttons["Command details"]
     if disclosure.buttons.firstMatch.exists { disclosure.buttons.firstMatch.tap() }
     else { disclosure.tap() }
     XCTAssertTrue(app.staticTexts["npm run deploy -- --production"].waitForExistence(timeout: 3))
     XCTAssertTrue(app.buttons["Approve access"].isHittable)
+  }
+  func testApproveStartsAfterOneTap() {
+    let app = launch("pending")
+    app.staticTexts["Mac Studio"].tap()
+    app.buttons["Approve access"].tap()
+    // The fixture refuses networking. Reaching that error proves the first tap
+    // started the action without a second confirmation or a real vault grant.
+    XCTAssertTrue(app.alerts.staticTexts["Sample previews do not contact a vault."].waitForExistence(timeout: 4))
+    XCTAssertFalse(app.sheets.firstMatch.exists)
   }
   func testVaultSearchHasUsefulEmptyStateAndKeepsCategoriesReachable() {
     let app = launch("idle")

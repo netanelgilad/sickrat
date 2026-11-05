@@ -235,7 +235,6 @@ struct RequestDetail: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var phase
   let request: Approval
-  @State private var confirm = false
   @State private var missingValues: [String: String] = [:]
   @State private var outcome: RequestOutcome?
   @Environment(\.dynamicTypeSize) private var typeSize
@@ -259,21 +258,6 @@ struct RequestDetail: View {
     .navigationBarTitleDisplayMode(.inline)
     .sensoryFeedback(.success, trigger: outcome != nil)
     .onChange(of: phase) { _, phase in if phase == .background { missingValues = [:] } }
-    .confirmationDialog(
-      "Allow \(current.device) to access these resources?", isPresented: $confirm,
-      titleVisibility: .visible
-    ) {
-      Button("Approve access") {
-        Task {
-          await model.run("Approving access…") {
-            if model.key == nil { try await model.unlock() }
-            try await model.approve(current, missingValues: missingValues)
-            missingValues = [:]
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { outcome = .approved }
-          }
-        }
-      }
-    }
   }
   private var review: some View {
     Form {
@@ -348,7 +332,16 @@ struct RequestDetail: View {
             Text("Update the account permissions above to approve.")
               .font(.footnote).foregroundStyle(.secondary)
           }
-          Button { confirm = true } label: {
+          Button {
+            Task {
+              await model.run("Approving access…") {
+                if model.key == nil { try await model.unlock() }
+                try await model.approve(current, missingValues: missingValues)
+                missingValues = [:]
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { outcome = .approved }
+              }
+            }
+          } label: {
             OperationLabel(title: typeSize.isAccessibilitySize ? "Approve" : "Approve access", systemImage: "checkmark.shield", operations: ["Approving access…"])
               .frame(maxWidth: .infinity).padding(.vertical, 5)
           }.buttonStyle(.borderedProminent).controlSize(.large)

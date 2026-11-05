@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 extension VaultModel {
@@ -39,6 +40,8 @@ extension VaultModel {
       model.lastRefresh = Date()
       model.lastRequestRefresh = model.lastRefresh
       if scenario == "pending" {
+        // A dummy key lets the UI exercise the action; request() blocks fixture networking.
+        model.key = SymmetricKey(data: Data(repeating: 42, count: 32))
         model.secrets = [Secret(id: "deploy", ref: "production/deploy-token", label: "Deployment token", updatedAt: "2026-10-29T12:00:00.000Z")]
         model.approvals = [Approval(id: "deploy-request", device: "Mac Studio", command: "npm run deploy -- --production", message: "Publish the website update", secretRefs: ["production/deploy-token"], resourceRequests: [], accessDurationSeconds: 900, status: "pending", expiresAt: "2099-01-01T18:30:00Z", expired: false, ephemeralPublicKey: nil)]
         return model

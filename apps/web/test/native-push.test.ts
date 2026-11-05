@@ -1,4 +1,4 @@
-import { env, createExecutionContext, fetchMock, waitOnExecutionContext } from "cloudflare:test";
+import { env, createExecutionContext, fetchMock, waitOnExecutionContext, runInDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import worker from "../src/worker";
 import { canonicalApprovalPayload } from "../../../packages/protocol/src/index";
@@ -68,11 +68,37 @@ describe("native notification registration and approvals", () => {
    const ephemeral = await crypto.subtle.generateKey({name:"ECDH",namedCurve:"P-256"},true,["deriveBits"]);
    const unsigned = {deviceId,command:"test",secretRefs:["test/ref"],resourceRequests:[{type:"secret" as const,ref:"test/ref"}],approvalWaitSeconds:120,ephemeralPublicKey:await crypto.subtle.exportKey("jwk",ephemeral.publicKey),timestamp:new Date().toISOString(),nonce:crypto.randomUUID()};
    const signature = b64(await crypto.subtle.sign({name:"ECDSA",hash:"SHA-256"},sign.privateKey,new TextEncoder().encode(canonicalApprovalPayload(unsigned))));
-   fetchMock.get("https://api.sandbox.push.apple.com").intercept({path:`/3/device/${token}`,method:"POST"}).reply(200, "");
+   fetchMock.get("https://api.sandbox.push.apple.com").intercept({path:`/3/device/${token}`,method:"POST",body:raw => JSON.parse(String(raw)).aps.badge === 1}).reply(200, "");
    const response = await request("/api/approval-requests", {...unsigned,signature});
    expect(response.status).toBe(200);
-   expect((await response.json() as {status:string}).status).toBe("pending");
+   const created = await response.json() as {status:string;requestId:string};
+   expect(created.status).toBe("pending");
+   expect((await (await request("/api/approvals?status=pending")).json() as {pendingCount:number}).pendingCount).toBe(1);
    expect(fetchMock.pendingInterceptors()).toHaveLength(0);
+   const badgeHub = env.APPROVAL_HUB.get(env.APPROVAL_HUB.idFromName("native-icon-badge"));
+   // The test passes APNs bindings to fetch directly; the real DO receives them
+   // from its deployment. Supply the same bindings to the test instance.
+   await runInDurableObject(badgeHub, async (instance, state) => {
+     (instance as unknown as {env:typeof bindings}).env = bindings;
+     expect(await state.storage.getAlarm()).not.toBeNull();
+   });
+   const expectClearBadge = () => fetchMock.get("https://api.sandbox.push.apple.com").intercept({
+     path:`/3/device/${token}`,method:"POST",body:raw => JSON.stringify(JSON.parse(String(raw))) === JSON.stringify({aps:{badge:0}})
+   }).reply(200, "");
+   expectClearBadge();
+   expect((await request(`/api/approvals/${created.requestId}/deny`,{})).status).toBe(200);
+   expect(fetchMock.pendingInterceptors()).toHaveLength(0);
+   expect((await (await request("/api/approvals?status=pending")).json() as {pendingCount:number}).pendingCount).toBe(0);
+   const another = {...unsigned,nonce:crypto.randomUUID()};
+   const anotherSignature = b64(await crypto.subtle.sign({name:"ECDSA",hash:"SHA-256"},sign.privateKey,new TextEncoder().encode(canonicalApprovalPayload(another))));
+   fetchMock.get("https://api.sandbox.push.apple.com").intercept({path:`/3/device/${token}`,method:"POST",body:raw => JSON.parse(String(raw)).aps.badge === 1}).reply(200, "");
+   const expiring = await (await request("/api/approval-requests",{...another,signature:anotherSignature})).json() as {requestId:string};
+   await env.DB.prepare("UPDATE approval_requests SET created_at = ? WHERE id = ?").bind(new Date(Date.now()-180_000).toISOString(),expiring.requestId).run();
+   expect((await (await request("/api/approvals?status=pending")).json() as {pendingCount:number}).pendingCount).toBe(0);
+   expectClearBadge();
+   expect(await runDurableObjectAlarm(badgeHub)).toBe(true);
+   expect(fetchMock.pendingInterceptors()).toHaveLength(0);
+   await runInDurableObject(badgeHub, async (_instance, state) => expect(await state.storage.getAlarm()).toBeNull());
    expect((await request(`/api/native-push/devices/${first.id}/revoke`,{})).status).toBe(200);
    expect((await request("/api/native-push/register",{token,id:first.id,previousToken:token})).status).toBe(410);
    expect((await request("/api/native-push/unregister",{token})).status).toBe(200);

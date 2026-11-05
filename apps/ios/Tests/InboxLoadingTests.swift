@@ -26,7 +26,7 @@ final class InboxNetwork: URLProtocol, @unchecked Sendable {
         case "/api/approvals":
           let query = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
           if query.contains(where: { $0.name == "status" && $0.value == "pending" }) {
-            body = ["approvals": [Self.approval("pending", status: "pending")]]
+            body = ["approvals": [Self.approval("pending", status: "pending")], "pendingCount": 7]
           } else if query.contains(where: { $0.name == "limit" && $0.value == "3" }) {
             body = ["approvals": [Self.approval("recent", status: "approved")]]
           } else {
@@ -62,6 +62,7 @@ final class InboxNetwork: URLProtocol, @unchecked Sendable {
     let deadline = Date().addingTimeInterval(0.4)
     while model.lastRequestRefresh == nil && Date() < deadline { try await Task.sleep(for: .milliseconds(5)) }
     XCTAssertNotNil(model.lastRequestRefresh)
+    XCTAssertEqual(model.pendingBadgeCount, 7)
     XCTAssertNil(model.lastRefresh)
     XCTAssertEqual(model.approvals.map(\.id), ["pending", "recent"])
     XCTAssertFalse(model.historyLoaded)

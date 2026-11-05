@@ -248,7 +248,28 @@ const vapidJwtCache = new Map<string, { token: string; expiresAt: number }>();
 export class ApprovalHub {
 	private sessions = new Set<WebSocket>();
 
+	constructor(private state: DurableObjectState, private env: EnvWithBindings) {}
+
+	private async scheduleBadgeRefresh() {
+		if (!this.env.DB) return;
+		const next = await this.env.DB.prepare(`SELECT MIN((julianday(created_at) - 2440587.5) * 86400000 + COALESCE(approval_wait_seconds, ?) * 1000) AS deadline
+			FROM approval_requests WHERE status = 'pending'
+			AND (julianday(created_at) - 2440587.5) * 86400000 + COALESCE(approval_wait_seconds, ?) * 1000 > ?`)
+			.bind(defaultApprovalWaitSeconds, defaultApprovalWaitSeconds, Date.now()).first<{deadline:number|null}>();
+		if (next?.deadline != null) await this.state.storage.setAlarm(Math.ceil(next.deadline) + 50);
+		else await this.state.storage.deleteAlarm();
+	}
+
+	async alarm() {
+		await notifyNative(null, this.env, false);
+		await this.scheduleBadgeRefresh();
+	}
+
 	async fetch(request: Request) {
+		if (new URL(request.url).pathname === "/native-badge-refresh" && request.method === "POST") {
+			await this.scheduleBadgeRefresh();
+			return json({ok:true});
+		}
 		if (request.headers.get("upgrade") === "websocket") {
 			const pair = new WebSocketPair();
 			const [client, server] = Object.values(pair);
@@ -866,16 +887,38 @@ async function nativePushAuthorized(request: Request, env: EnvWithBindings): Pro
 	return difference === 0;
 }
 
-async function notifyNative(requestId: string, env: EnvWithBindings) {
+async function pendingApprovalCount(env: EnvWithBindings): Promise<number> {
+	if (!env.DB) return 0;
+	const result = await env.DB.prepare(`SELECT COUNT(*) AS count FROM approval_requests WHERE status = 'pending'
+		AND julianday(created_at) + COALESCE(approval_wait_seconds, ?) / 86400.0 > julianday(?)`)
+		.bind(defaultApprovalWaitSeconds, new Date().toISOString()).first<{count:number}>();
+	return result?.count ?? 0;
+}
+
+async function notifyNative(requestId: string | null, env: EnvWithBindings, schedule = true) {
 	const config = apnsConfig(env);
 	if (!config || !env.DB) return;
+	if (schedule && env.APPROVAL_HUB) {
+		try {
+			const scheduled = await env.APPROVAL_HUB.get(env.APPROVAL_HUB.idFromName("native-icon-badge"))
+				.fetch("https://approval-hub/native-badge-refresh", {method:"POST"});
+			await scheduled.arrayBuffer();
+		} catch { /* Badge expiry scheduling must not block a decision. */ }
+	}
+	const badgeCount = await pendingApprovalCount(env);
 	const devices = await env.DB.prepare("SELECT id, token FROM native_push_devices ORDER BY updated_at DESC LIMIT 20").all<{id: string; token: string}>();
 	await Promise.all(devices.results.map(async device => {
 		try {
-			const result = await sendAPNs(config, device.token, requestId);
+			const result = await sendAPNs(config, device.token, requestId, badgeCount);
 			if (result.stale) await env.DB!.prepare("DELETE FROM native_push_devices WHERE id = ? AND token = ?").bind(device.id, device.token).run();
 		} catch { /* A failed notification must never prevent an approval request. */ }
 	}));
+}
+
+async function refreshNativeBadge(env: EnvWithBindings, ctx?: ExecutionContext) {
+	const update = notifyNative(null, env).catch(() => { /* A badge update cannot undo a decision. */ });
+	if (ctx) ctx.waitUntil(update);
+	else await update;
 }
 
 function mapApproval(row: ApprovalRequestRecord) {
@@ -1309,7 +1352,7 @@ async function createDemoApproval(subscriptionId: string, env: EnvWithBindings) 
 	return id;
 }
 
-async function handleApi(request: Request, env: EnvWithBindings) {
+async function handleApi(request: Request, env: EnvWithBindings, ctx?: ExecutionContext) {
 	const url = new URL(request.url);
 
 	if (url.pathname === "/api/browser-sessions" && request.method === "GET") {
@@ -2426,7 +2469,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			: env.DB.prepare(`${approvalSelect} ORDER BY created_at DESC LIMIT ?`).bind(limit);
 		const result = await statement.all<ApprovalRequestRecord>();
 		const approvals = status === "pending" ? result.results.filter((row) => !isExpiredPendingApproval(row)) : result.results;
-		return json({ approvals: approvals.map(mapApproval) });
+		return json({ approvals: approvals.map(mapApproval), ...(status === "pending" ? { pendingCount: await pendingApprovalCount(env) } : {}) });
 	}
 
 	if (url.pathname.startsWith("/api/approvals/") && !url.pathname.endsWith("/grant") && request.method === "GET") {
@@ -2610,6 +2653,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 				}
 				throw error;
 			}
+			await refreshNativeBadge(env, ctx);
 			return json({ ok: true, id, status: "approved", decidedAt, accessExpiresAt: material.expiresAt });
 		}
 
@@ -2660,6 +2704,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 			).bind(decidedAt, JSON.stringify(body.grantCiphertext), decidedAt, accessExpiresAt, id),
 		);
 		await env.DB.batch(statements);
+		await refreshNativeBadge(env, ctx);
 		return json({ ok: true, id, status: "approved", decidedAt, accessExpiresAt });
 	}
 
@@ -2682,6 +2727,7 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 		await env.DB.prepare("UPDATE approval_requests SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'")
 			.bind(status, decidedAt, id)
 			.run();
+		await refreshNativeBadge(env, ctx);
 		return json({ ok: true, id, status, decidedAt });
 	}
 
@@ -2689,10 +2735,10 @@ async function handleApi(request: Request, env: EnvWithBindings) {
 }
 
 export default {
-	async fetch(request, env): Promise<Response> {
+	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 		if (url.pathname.startsWith("/oauth/callback/")) return handleOAuthCallback(request, env as EnvWithBindings);
-		if (url.pathname.startsWith("/api/")) return handleApi(request, env as EnvWithBindings);
+		if (url.pathname.startsWith("/api/")) return handleApi(request, env as EnvWithBindings, ctx);
 		return (env as EnvWithBindings).ASSETS.fetch(request);
 	},
 } satisfies ExportedHandler<EnvWithBindings>;

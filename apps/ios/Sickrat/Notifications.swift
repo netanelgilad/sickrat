@@ -57,6 +57,17 @@ enum NotificationCredential {
     registerWithApple()
   }
 
+  func updateBadge(_ count: Int) async {
+    #if DEBUG
+      if DesignFixture.enabled { return }
+    #endif
+    let center = UNUserNotificationCenter.current()
+    let settings = await center.notificationSettings()
+    guard settings.badgeSetting == .enabled else { return }
+    // Zero clears the icon badge; never clear merely because the app opened.
+    try? await center.setBadgeCount(max(0, count))
+  }
+
   func importSetup(_ data: Data) throws {
     guard data.count < 4096, let model,
       let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -206,7 +217,7 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     PushCoordinator.shared.status = "Couldn’t register. Check the app’s signing and try again."
   }
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-    [.banner, .sound]
+    [.banner, .sound, .badge]
   }
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
     guard let id = response.notification.request.content.userInfo["requestId"] as? String,

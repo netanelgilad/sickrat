@@ -10,7 +10,8 @@ export function validAPNsToken(value: unknown): value is string {
 	return typeof value === "string" && /^[a-f0-9]{64,200}$/.test(value);
 }
 
-export async function sendAPNs(config: APNsConfig, deviceToken: string, requestId: string, fetcher: typeof fetch = fetch): Promise<{ status: number; stale: boolean }> {
+export async function sendAPNs(config: APNsConfig, deviceToken: string, requestId: string | null, badgeCount: number, fetcher: typeof fetch = fetch): Promise<{ status: number; stale: boolean }> {
+	if (!Number.isSafeInteger(badgeCount) || badgeCount < 0) throw new Error("Invalid badge count");
 	if (!validAPNsToken(deviceToken)) throw new Error("Invalid APNs device token");
 	const identity = `${config.teamId}:${config.keyId}:${config.environment}`;
 	let jwt = cached?.identity === identity && cached.expires > Date.now() ? cached.token : undefined;
@@ -28,8 +29,8 @@ export async function sendAPNs(config: APNsConfig, deviceToken: string, requestI
 	const host = config.environment === "sandbox" ? "api.sandbox.push.apple.com" : "api.push.apple.com";
 	const response = await fetcher(`https://${host}/3/device/${deviceToken}`, {
 		signal: AbortSignal.timeout(5000),
-		method: "POST", headers: { authorization: `bearer ${jwt}`, "apns-topic": config.topic, "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 60), "content-type": "application/json" },
-		body: JSON.stringify({ aps: { alert: { title: "Sickrat", body: "An access request needs your review." }, sound: "default" }, requestId }),
+		method: "POST", headers: { authorization: `bearer ${jwt}`, "apns-topic": config.topic, "apns-collapse-id": "sickrat-requests", "apns-push-type": "alert", "apns-priority": "10", "apns-expiration": String(Math.floor(Date.now() / 1000) + 60), "content-type": "application/json" },
+		body: JSON.stringify({ aps: { badge: badgeCount, ...(requestId ? { alert: { title: "Sickrat", body: "An access request needs your review." }, sound: "default" } : {}) }, ...(requestId ? { requestId } : {}) }),
 	});
 	let reason: unknown;
 	if (!response.ok) { try { reason = ((await response.json()) as {reason?: string}).reason; } catch { /* No usable error body. */ } }

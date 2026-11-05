@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../../..', import.meta.url));
 const cli = new URL('../../cli/src/index.ts', import.meta.url);
 const temporary = new URL('../../cli/src/.ios-preview-deploy.ts', import.meta.url);
-const version = '0.1.53-ios-push-preview.1';
+const version = '0.1.53-ios-badge-preview.1';
 const source = await readFile(cli, 'utf8');
 const marker = 'async function vaultUpdate(args: string[]) {';
 const start = source.indexOf(marker);

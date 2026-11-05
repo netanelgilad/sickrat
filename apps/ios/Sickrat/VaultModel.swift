@@ -94,6 +94,7 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   private var lockGeneration = 0
   var lastRefresh: Date?
   var lastRequestRefresh: Date?
+  var pendingBadgeCount: Int?
   var requestHistory: [Approval] = []
   var loadingHistory = false
   var historyError: String?
@@ -167,6 +168,7 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     UserDefaults.standard.set(origin, forKey: "vault.endpoint")
     lastRefresh = nil
     lastRequestRefresh = nil
+    pendingBadgeCount = nil
     requestHistory = []
     historyLoaded = false
     historyError = nil
@@ -206,9 +208,19 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   ) async throws -> T {
     try decode(try await request(path, origin: origin), field, as: type)
   }
+  private struct PendingInbox: Sendable {
+    let approvals: [Approval]
+    let count: Int
+  }
+  private func fetchPendingInbox(origin: String) async throws -> PendingInbox {
+    let response = try await request("approvals?status=pending", origin: origin)
+    let approvals = try decode(response, "approvals", as: [Approval].self)
+    let serverCount = response["pendingCount"] as? Int
+    return PendingInbox(approvals: approvals, count: max(approvals.count, serverCount ?? 0))
+  }
   private func fetchSnapshot() async throws {
     let origin = endpoint
-    async let pending: [Approval] = fetch("approvals?status=pending", field: "approvals", as: [Approval].self, origin: origin)
+    async let pending = fetchPendingInbox(origin: origin)
     async let recent: [Approval] = fetch("approvals?limit=3", field: "approvals", as: [Approval].self, origin: origin)
     async let nextSecrets: [Secret] = fetch("secrets", field: "secrets", as: [Secret].self, origin: origin)
     async let nextDevices: [Device] = fetch("devices", field: "devices", as: [Device].self, origin: origin)
@@ -218,8 +230,9 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     try Task.checkCancellation()
     guard endpoint == origin else { throw CancellationError() }
     // Publish the decision inbox before slower account/session metadata arrives.
-    let pendingIDs = Set(pendingItems.map(\.id))
-    approvals = pendingItems + recentItems.filter { !pendingIDs.contains($0.id) }
+    let pendingIDs = Set(pendingItems.approvals.map(\.id))
+    approvals = pendingItems.approvals + recentItems.filter { !pendingIDs.contains($0.id) }
+    pendingBadgeCount = pendingItems.count
     lastRequestRefresh = Date()
     let catalog = try await (nextSecrets, nextDevices, nextConnections, nextSessions)
     try Task.checkCancellation()

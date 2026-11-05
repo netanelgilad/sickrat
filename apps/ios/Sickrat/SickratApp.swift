@@ -42,7 +42,7 @@ struct RootView: View {
       if model.configured {
         TabView(selection: $selection) {
           Tab("Requests", systemImage: "checkmark.shield", value: 0) { RequestsView() }.badge(
-            model.pending.count)
+            model.pendingBadgeCount ?? model.pending.count)
           Tab("Vault", systemImage: "key.horizontal", value: 1) { VaultView() }
           Tab("Settings", systemImage: "gearshape", value: 2) { SettingsView() }
         }
@@ -51,6 +51,10 @@ struct RootView: View {
       }
     }
     .tint(.indigo)
+    .task(id: model.lastRequestRefresh) {
+      guard phase == .active, model.lastRequestRefresh != nil, let count = model.pendingBadgeCount else { return }
+      await push.updateBadge(count)
+    }
     .onChange(of: push.requestID) { _, id in if id != nil { selection = 0 } }
     .task(id: "push-\(phase)-\(model.endpoint)") {
       if phase == .active { await push.start(model) }

@@ -116,9 +116,11 @@ import XCTest
     XCTAssertTrue(app.navigationBars["Review request"].waitForExistence(timeout: 3))
     XCTAssertTrue(app.buttons["Approve access"].isHittable)
     XCTAssertTrue(app.buttons["Deny request"].isHittable)
-    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "15 minutes")).firstMatch.exists)
     XCTAssertFalse(app.staticTexts["npm run deploy -- --production"].isHittable)
     capture(app, "Review — scope and decision")
+    let duration = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "15 minutes")).firstMatch
+    for _ in 0..<8 where !duration.exists { scrollDetails(app) }
+    XCTAssertTrue(duration.exists)
     // SwiftUI can report a Form row beneath the sticky actions as hittable.
     // Bring the disclosure above those controls before tapping it.
     for _ in 0..<8 {

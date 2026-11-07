@@ -58,10 +58,20 @@ import XCTest
   func testTransferScreenExplainsAccessAndRequiresRequest() {
     let app = launch("idle")
     app.tabBars.buttons["Settings"].tap()
-    app.buttons["Transfer vault key"].tap()
-    for _ in 0..<6 where !app.buttons["Send to another iPhone"].isHittable { app.swipeUp() }
-    app.buttons["Send to another iPhone"].tap()
-    XCTAssertTrue(app.navigationBars["Send to another iPhone"].waitForExistence(timeout: 3))
+    let transfer = app.buttons["Transfer vault key"]
+    guard revealFormElement(transfer, in: app) else { return }
+    transfer.tap()
+    guard app.navigationBars["Transfer key"].waitForExistence(timeout: 10) else {
+      XCTFail("The transfer screen did not open after tapping its visible row.")
+      return
+    }
+    let send = app.buttons["Send to another iPhone"]
+    guard revealFormElement(send, in: app) else { return }
+    send.tap()
+    guard app.navigationBars["Send to another iPhone"].waitForExistence(timeout: 10) else {
+      XCTFail("The transfer destination did not open after tapping its visible row.")
+      return
+    }
     for _ in 0..<6 where !app.buttons["Authenticate and save transfer"].exists { app.swipeUp() }
     XCTAssertFalse(app.buttons["Authenticate and save transfer"].isEnabled)
     XCTAssertTrue(app.staticTexts["Only use a request from a device you own. Transferring the key gives that device full access to this vault."].exists)
@@ -97,6 +107,28 @@ import XCTest
     shot.name = "Notification settings"
     shot.lifetime = .keepAlways
     add(shot)
+  }
+  private func revealFormElement(_ element: XCUIElement, in app: XCUIApplication,
+                                 file: StaticString = #filePath, line: UInt = #line) -> Bool {
+    // SwiftUI can mark rows beneath the floating tab bar as hittable. Require
+    // the whole row to be inside the unobscured Form before tapping it.
+    for _ in 0..<12 {
+      if element.exists {
+        let frame = element.frame
+        let top = app.navigationBars.firstMatch.frame.maxY + 8
+        let bottom = app.tabBars.firstMatch.frame.minY - 12
+        if element.isHittable && frame.minY >= top && frame.maxY <= bottom { return true }
+        if frame.minY < top {
+          let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+          start.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)))
+          continue
+        }
+      }
+      scrollDetails(app)
+    }
+    capture(app, "Form navigation — target not visible")
+    XCTFail("Could not reveal the requested Form row above the tab bar.", file: file, line: line)
+    return false
   }
   private func scrollDetails(_ app: XCUIApplication) {
     // Stay inside the scrollable content, above the persistent decision area.

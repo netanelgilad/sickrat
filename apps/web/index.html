@@ -1,18 +1,22 @@
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-		<meta name="theme-color" content="#f2f2f7" />
-		<meta name="apple-mobile-web-app-capable" content="yes" />
-		<meta name="apple-mobile-web-app-status-bar-style" content="black" />
-		<meta name="apple-mobile-web-app-title" content="Sickrat" />
-		<link rel="apple-touch-icon" href="/icons/icon.svg" />
-		<link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
-		<title>Sickrat</title>
-	</head>
-	<body>
-		<div id="root"></div>
-		<script type="module" src="/src/main.tsx"></script>
-	</body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Open Sickrat for iOS</title>
+  <style>
+    body{font:17px/1.55 system-ui;margin:64px auto;padding:0 24px;max-width:32rem;color:light-dark(#1c1c1e,#f2f2f7);background:light-dark(#f2f2f7,#000)}
+    h1{line-height:1.15;letter-spacing:-.03em}p{opacity:.75}a{color:light-dark(#493dd1,#a9a2ff)}
+    .open{display:inline-block;background:#5146d9;color:#fff;padding:13px 24px;border-radius:14px;text-decoration:none;font-weight:600}code{overflow-wrap:anywhere;font-size:.85em}
+  </style>
+</head>
+<body>
+  <h1>Your vault is in Sickrat for iOS.</h1>
+  <p>Review access requests, manage your secrets and accounts, and save recovery backups in the native app.</p>
+  <a class="open" id="open" href="sickrat://open">Open in Sickrat</a>
+  <p>Connect the app to this vault address:<br><code id="origin"></code></p>
+  <p>Install Sickrat using your signed iOS build. The web console has been retired. Your encrypted records remain in your own Cloudflare account.</p>
+  <script type="module" src="/src/handoff.ts"></script>
+</body>
 </html>

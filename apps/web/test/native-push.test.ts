@@ -62,7 +62,12 @@ describe("native notification registration and approvals", () => {
    expect((await request("/api/native-push/register", {token:"b".repeat(64),id:first.id,previousToken:"c".repeat(64)})).status).toBe(410);
    const sign = await crypto.subtle.generateKey({name:"ECDSA",namedCurve:"P-256"},true,["sign","verify"]);
    const publicKey = await crypto.subtle.exportKey("jwk",sign.publicKey);
+   fetchMock.get("https://api.sandbox.push.apple.com").intercept({path:`/3/device/${token}`,method:"POST",body:raw => {
+     const value = JSON.parse(String(raw));
+     return /^[0-9]{6}$/.test(value.pairingCode) && value.aps.badge === 0 && value.aps.alert.body === "A device wants to pair with your vault." && !String(raw).includes("Test Mac");
+   }}).reply(200, "");
    const pairing = await request("/api/devices/pairing-codes", {label:"Test Mac",publicKey});
+   expect(fetchMock.pendingInterceptors()).toHaveLength(0);
    const {code,deviceId} = await pairing.json() as {code:string;deviceId:string};
    expect((await request(`/api/devices/pairing-codes/${code}/approve`, {})).status).toBe(200);
    const ephemeral = await crypto.subtle.generateKey({name:"ECDH",namedCurve:"P-256"},true,["deriveBits"]);

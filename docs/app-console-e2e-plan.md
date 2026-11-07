@@ -1,5 +1,8 @@
 # Sickrat App Console E2E Plan
 
+> Historical design/test plan from the PWA era. Current product and migration: [native iOS migration](native-ios-migration.md). UI paths below are not current instructions.
+
+
 This is the implementation handoff for turning `/app` into a real management console instead of a setup panel page. The next run should implement this end-to-end, not as a phased mock. Use subagents for parallel slices, but integrate into one deployed product.
 
 ## Current State

@@ -1,5 +1,8 @@
 # CLI Control Plane
 
+> Historical design/test plan from the PWA era. Current product and migration: [native iOS migration](native-ios-migration.md). UI paths below are not current instructions.
+
+
 ## Command Model
 
 The CLI has two separate authority levels:

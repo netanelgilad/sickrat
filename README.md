@@ -8,12 +8,14 @@ Sickrat is not a hosted multi-tenant secrets service. It provisions and talks to
 
 The active code in this repo currently includes:
 
-- `apps/ios`: native SwiftUI iOS development preview; see [setup and migration status](apps/ios/README.md)
+- `apps/ios`: native SwiftUI owner app; see [setup and migration status](apps/ios/README.md)
 - `apps/cli`: a Bun/TypeScript CLI named `sickrat`
 - `apps/site`: an Astro public product site deployed to `sickrat.dev`
-- `apps/web`: a React/Vite PWA console and Cloudflare Worker artifact deployed into each user's Cloudflare account by the CLI
+- `apps/web`: the Cloudflare Worker API and a minimal iOS handoff page deployed into each user's Cloudflare account by the CLI
 - `packages/protocol`: shared TypeScript protocol helpers and envelope definitions
 - `docs`: architecture, CLI, provisioning, protocol, and threat-model notes
+
+The iOS app is the only owner-facing app. It provides Requests, Vault, Accounts, device pairing, APNs alerts, recovery backups, and encrypted iPhone-to-iPhone key transfer. Browser pages only open public links in iOS or complete system OAuth. The public documentation site is unchanged. See [native setup](apps/ios/README.md) and [PWA retirement and migration](docs/native-ios-migration.md).
 
 Expect breaking changes while the core protocol and deployment flow settle.
 
@@ -27,7 +29,7 @@ Agentic tools often need credentials to do useful work, but handing long-lived s
 - approvals return short-lived encrypted grants for the specific request
 - infrastructure lives in the user's own Cloudflare account
 
-The OAuth gateway extends the same approval model to short-lived provider access tokens for connected services, starting with Cloudflare and X. Provider catalog metadata and public client IDs can be inspected and configured from either the CLI or PWA; account connection and reauthorization hand off to the passkey-protected PWA. The browser-session vault applies that model to authenticated browser state without leaving durable sessions on userland machines. See [docs/oauth-gateway.md](docs/oauth-gateway.md), [docs/browser-session-vault.md](docs/browser-session-vault.md), [docs/architecture.md](docs/architecture.md), and [docs/threat-model.md](docs/threat-model.md) for the deeper designs.
+The OAuth gateway extends the same approval model to short-lived provider access tokens for connected services, starting with Cloudflare and X. Provider catalog metadata and public client IDs can be inspected and configured from either the CLI or iOS; account connection and reauthorization run in the device-authenticated iOS app. The browser-session vault applies that model to authenticated browser state without leaving durable sessions on userland machines. See [docs/oauth-gateway.md](docs/oauth-gateway.md), [docs/browser-session-vault.md](docs/browser-session-vault.md), [docs/architecture.md](docs/architecture.md), and [docs/threat-model.md](docs/threat-model.md) for the deeper designs.
 
 ## Repository Layout
 
@@ -35,7 +37,8 @@ The OAuth gateway extends the same approval model to short-lived provider access
 apps/
   cli/             Bun/TypeScript CLI
   site/            Astro public product site for sickrat.dev
-  web/             React PWA console and Cloudflare Worker artifact for user-owned vaults
+  ios/             Native SwiftUI iPhone/iPad owner app
+  web/             User-owned Worker API and iOS link handoff (legacy artifact path)
 packages/
   protocol/        Shared request/response and crypto envelope helpers
 docs/
@@ -63,7 +66,7 @@ Install dependencies:
 npm ci
 ```
 
-Run the web app and Worker locally:
+Run the vault API and link handoff locally:
 
 ```sh
 npm run web
@@ -93,7 +96,7 @@ npm run web:build
 
 The Worker test harness under `apps/web/test` exercises the OAuth provider catalog, PKCE token exchange, refresh exchange, and encrypted connection storage against Miniflare D1.
 
-Build the PWA/Worker bundle:
+Build the vault API deployment artifact:
 
 ```sh
 npm run web:build
@@ -156,7 +159,7 @@ mv sickrat ~/.local/bin/sickrat
 
 On Intel Macs, replace the asset with `sickrat-darwin-x64`. On Linux, use `sickrat-linux-arm64` or `sickrat-linux-x64`. Always verify the selected binary with `SHA256SUMS` before installing it.
 
-The first release channel is GitHub Releases because the CLI is a compiled Bun binary and also needs the matching Worker/PWA artifact used by `sickrat vault create`. npm and Homebrew packaging can sit on top of this release channel later, but they should not be the source of truth for the deploy artifact.
+The first release channel is GitHub Releases because the CLI is a compiled Bun binary and also needs the matching Worker API artifact used by `sickrat vault create`. npm and Homebrew packaging can sit on top of this release channel later, but they should not be the source of truth for the deploy artifact.
 
 ## Releases
 

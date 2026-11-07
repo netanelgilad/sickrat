@@ -449,7 +449,7 @@ Shows the local and remote deployment status for a user-owned Sickrat vault.
 Usage:
   sickrat vault update [name] [--dry-run] [--yes] [--force-unlock]
 
-Updates a user-owned Sickrat vault Worker/PWA and deployment manifest using verified release artifacts.
+Updates a user-owned Sickrat vault Worker API and deployment manifest using verified release artifacts.
 `,
 		"self update": `sickrat self update
 
@@ -479,7 +479,7 @@ Usage:
   sickrat provider show <provider> [--json]
   sickrat provider configure <provider> --client-id <id> [--json]
 
-Lists the OAuth provider catalog and displays the same setup metadata as the PWA,
+Lists the OAuth provider catalog and displays the same setup metadata as the iOS app,
 including callback URL, public client ID, PKCE/persistent-access support, and scope
 risk classifications. Configure saves or replaces a public OAuth client ID; Sickrat's
 current providers are public PKCE clients and do not use client secrets.
@@ -496,8 +496,8 @@ Usage:
 
 Lists and manages the OAuth connections in the paired vault. Connection details include
 the provider, account identity, granted scopes, timestamps, and last-used time.
-Connect and reauthorize open the corresponding secure PWA flow because OAuth consent and
-the refresh token stay protected by the passkey-unlocked vault key and are never available
+Connect and reauthorize open the corresponding native iOS flow because OAuth consent and
+the refresh token stay protected by the device-authenticated vault key and are never available
 to the CLI.
 `,
 		run: `sickrat run
@@ -1764,7 +1764,7 @@ async function deployVaultWorker(input: {
 	const accessToken = await resolveCloudflareAccessToken(input.accessToken);
 	const version = input.version ?? cliVersion;
 	const artifact = input.artifact ?? (await resolveWebArtifact());
-	console.error("Preparing vault PWA and Worker bundle...");
+	console.error("Preparing vault API and iOS handoff bundle...");
 	if (artifact.build) await artifact.build();
 
 	const vapid = input.vapid ?? (await generateVapidKeys());
@@ -1773,7 +1773,7 @@ async function deployVaultWorker(input: {
 	} else {
 		console.error("Generated vault-specific VAPID keys.");
 	}
-	console.error("Uploading vault PWA assets...");
+	console.error("Uploading vault handoff assets...");
 	const assetsJwt = await uploadVaultAssets({
 		accessToken,
 		accountId: input.accountId,
@@ -1859,7 +1859,7 @@ async function createVault(args: string[]) {
 	console.log(`Worker\tdeployed\t${vault.scriptName}`);
 	console.log(`Vault URL\t${workerUrl}`);
 	console.log(`Vault QR\t${qrPath}`);
-	console.error(`Open ${workerUrl} on your phone, add it to the Home Screen, enable push notifications, then run:`);
+	console.error(`Connect the iOS app to ${workerUrl}, secure its vault key, enable notifications, then run:`);
 	console.error(`  sickrat pair ${workerUrl}`);
 }
 
@@ -2039,10 +2039,10 @@ async function vaultUpdate(args: string[]) {
 	const willRotateVapid = !vault.vapidPublicKey || !vault.vapidPrivateKey;
 	const plan = [
 		...(needsManifest ? ["initialize remote deployment manifest"] : []),
-		...(needsVersionUpdate ? [`deploy Worker/PWA artifact ${targetVersion}`] : []),
+		...(needsVersionUpdate ? [`deploy Worker API artifact ${targetVersion}`] : []),
 		"ensure D1 manifest and migration tables",
 		"ensure encrypted browser-session R2 bucket and Worker binding",
-		...(willRotateVapid ? ["rotate VAPID push keys and require PWA push refresh"] : ["preserve VAPID push keys"]),
+		...(willRotateVapid ? ["rotate VAPID push keys and require legacy web push refresh"] : ["preserve VAPID push keys"]),
 		"verify /api/capabilities",
 		"write deployment manifest",
 	];
@@ -2104,7 +2104,7 @@ async function vaultUpdate(args: string[]) {
 		await releaseUpdateLock(vault, cloudflare.accessToken);
 		console.log(`Vault ${vault.name} updated to ${targetVersion}.`);
 		if (willRotateVapid) {
-			console.log("Push keys were rotated for this legacy vault. Open the installed PWA Settings page and refresh push if notifications do not arrive.");
+			console.log("Push keys were rotated for this legacy vault. Enable native notifications in the iOS app; legacy web push has been retired.");
 		}
 	} catch (error) {
 		console.error("Vault update failed. The update lock remains for inspection or --force-unlock retry.");

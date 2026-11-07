@@ -1,5 +1,8 @@
 # CLI Design
 
+See [native iOS migration](native-ios-migration.md) for the current owner app, key recovery, link handoff, and intentional CLI boundaries.
+
+
 The CLI should feel familiar to users of tools like the 1Password CLI while adding mobile approval as the core security primitive.
 
 ## Commands
@@ -60,13 +63,13 @@ sickrat://oauth/x/personal?scope=tweet.read&scope=users.read
 sickrat://oauth/slack/community?scope=chat:write
 ```
 
-These are request descriptors, not token material. The CLI parses them into typed OAuth resource requests, the PWA shows provider/account/scopes during approval, and the approved grant injects a short-lived access token into the target environment variable.
+These are request descriptors, not token material. The CLI parses them into typed OAuth resource requests, the iOS app shows provider/account/scopes during approval, and the approved grant injects a short-lived access token into the target environment variable.
 
-The optional path after the provider is the connection name configured in the PWA. Omit it only when exactly one connected account can satisfy the request; Sickrat rejects an ambiguous provider-only request rather than choosing an account implicitly.
+The optional path after the provider is the connection name configured in the iOS app. Omit it only when exactly one connected account can satisfy the request; Sickrat rejects an ambiguous provider-only request rather than choosing an account implicitly.
 
-The CLI recognizes these descriptors in direct `--env` mappings and env files. It sends a signed typed request, waits for PWA approval, decrypts the sealed access-token grant, validates provider/scopes/expiry, and injects the token into the named environment variable. Refresh tokens never leave the encrypted vault connection.
+The CLI recognizes these descriptors in direct `--env` mappings and env files. It sends a signed typed request, waits for iOS app approval, decrypts the sealed access-token grant, validates provider/scopes/expiry, and injects the token into the named environment variable. Refresh tokens never leave the encrypted vault connection.
 
-Cloudflare and X are supported providers. Use `sickrat provider show <provider>` to inspect the callback URL, setup documentation, PKCE/persistent-access support, and scope risk metadata. Save the public OAuth client ID with `sickrat provider configure <provider> --client-id <id>`, or configure the same field from **Connections** in the PWA. Both clients use authorization code with PKCE (`S256`) and token endpoint authentication `none`; Cloudflare uses the `refresh_token` grant, while X uses `offline.access` to issue a refresh token. Register the exact provider-specific callback URL shown by either interface.
+Cloudflare and X are supported providers. Use `sickrat provider show <provider>` to inspect the callback URL, setup documentation, PKCE/persistent-access support, and scope risk metadata. Save the public OAuth client ID with `sickrat provider configure <provider> --client-id <id>`, or configure the same field from **Connections** in the iOS app. Both clients use authorization code with PKCE (`S256`) and token endpoint authentication `none`; Cloudflare uses the `refresh_token` grant, while X uses `offline.access` to issue a refresh token. Register the exact provider-specific callback URL shown by either interface.
 
 For an X personal-brand workflow, research and draft preparation need only `tweet.read` and `users.read`:
 
@@ -84,7 +87,7 @@ Before connecting X, create a Project and App in the X Developer Console, enable
 
 ## `provider`
 
-`sickrat provider` inspects and configures the built-in OAuth provider catalog. Provider metadata and client IDs are non-secret, so list, show, and configure are available from both the CLI and PWA without unlocking the vault key.
+`sickrat provider` inspects and configures the built-in OAuth provider catalog. Provider metadata and client IDs are non-secret, so list, show, and configure are available from both the CLI and iOS app without unlocking the vault key.
 
 ```sh
 sickrat provider list
@@ -97,7 +100,7 @@ sickrat provider configure x --client-id <public-client-id>
 
 ## `connection`
 
-`sickrat connection` manages OAuth connections in the paired vault. `list` and `show` expose the same PWA data, including account identity, scopes, creation and update timestamps, and last-used time. Use `--json` for scriptable output and `--all` to include disconnected records.
+`sickrat connection` manages OAuth connections in the paired vault. `list` and `show` expose the same iOS app data, including account identity, scopes, creation and update timestamps, and last-used time. Use `--json` for scriptable output and `--all` to include disconnected records.
 
 ```sh
 sickrat connection list
@@ -107,7 +110,7 @@ sickrat connection rename cloudflare/work production
 sickrat connection disconnect cloudflare/default --yes
 ```
 
-`connect` opens the PWA provider flow with the requested connection name prefilled. `reauthorize` opens the PWA detail flow. OAuth consent and both operations remain browser-based because only the PWA unlocks the vault key used to encrypt or replace the refresh token; the refresh token is never supplied to the CLI.
+`connect` opens the iOS app provider flow with the requested connection name prefilled. `reauthorize` opens the iOS app detail flow. OAuth consent and both operations remain browser-based because only the iOS app unlocks the vault key used to encrypt or replace the refresh token; the refresh token is never supplied to the CLI.
 
 For Atlas Status Cloudflare provisioning, request the narrow Worker and D1 write scopes (and replace the command after `--` with the actual setup command):
 
@@ -129,9 +132,9 @@ sickrat run \
 `sickrat run` resolves references, requests mobile approval, injects plaintext values into the child process environment, and removes plaintext from CLI-owned buffers after the process exits or fails to spawn.
 
 Agents should include `--message` whenever they request approval so the phone screen explains the work being performed, not only the secret reference.
-Agents may request a reference that does not exist yet. The PWA should treat that as a just-in-time secret creation flow: collect the value from the user, save it encrypted into the vault, then continue the same approval.
+Agents may request a reference that does not exist yet. The iOS app should treat that as a just-in-time secret creation flow: collect the value from the user, save it encrypted into the vault, then continue the same approval.
 Agents may also request generated values for new refs when a workflow needs a fresh password or token. Keep that inside `sickrat run` rather than adding provider-specific commands. See [generated-secret-flows.md](generated-secret-flows.md).
-Agents may request OAuth access tokens from connected provider accounts. Keep the approval model the same: the PWA shows provider, account, scopes, command, device, and message, then returns a short-lived encrypted grant after approval. See [oauth-gateway.md](oauth-gateway.md).
+Agents may request OAuth access tokens from connected provider accounts. Keep the approval model the same: the iOS app shows provider, account, scopes, command, device, and message, then returns a short-lived encrypted grant after approval. See [oauth-gateway.md](oauth-gateway.md).
 Agents may request a timed local grant with `--access-for <duration>` when a multi-step task is expected to need the same refs repeatedly. The phone approval screen should look distinct from one-shot approvals and should make the duration clear. After approval, the CLI may reuse those refs without another phone prompt until the local grant expires.
 
 ## `browser-session`
@@ -217,7 +220,7 @@ sickrat vault update --dry-run
 sickrat vault update --yes
 ```
 
-`sickrat vault update` downloads the verified release Worker/PWA artifact, deploys it to the user's Cloudflare account, and writes a remote deployment manifest in D1. `sickrat update` is the combined happy path: update the CLI when needed, then update the selected/default vault.
+`sickrat vault update` downloads the verified release Worker API artifact, deploys it to the user's Cloudflare account, and writes a remote deployment manifest in D1. `sickrat update` is the combined happy path: update the CLI when needed, then update the selected/default vault.
 
 ## `inject`
 

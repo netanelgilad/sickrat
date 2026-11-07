@@ -1,5 +1,8 @@
 # Sickrat Vault MCP
 
+See [native iOS migration](native-ios-migration.md) for the current owner app, key recovery, link handoff, and intentional CLI boundaries.
+
+
 `sickrat mcp` serves the existing paired-device approval flow over MCP. It runs
 on a trusted machine that is already paired with the vault, including a
 self-hosted Executor machine. It does not run inside the Cloudflare Worker:
@@ -98,14 +101,14 @@ outstanding tickets. Uncollected results expire at the earliest of 60 seconds
 after retrieval, the original approval deadline, and any returned OAuth token
 expiry. Restarting loses all tickets. Cancellation aborts local polling; a
 pending approval on the phone expires normally, and is not marked denied.
-Revoking the paired device uses the existing PWA Devices screen.
+Revoking the paired device uses the existing iOS app Devices screen.
 
 ## Interface parity and intentional limits
 
 OAuth metadata matches the existing `provider list` / `connection list` CLI
-commands and PWA views. Access uses the same PWA approval workflow as `run`
-and `reveal`, including collecting a missing secret during approval. The PWA
-remains the authority for pairing, approval, passkey unlock, connection setup,
+commands and iOS app views. Access uses the same iOS app approval workflow as `run`
+and `reveal`, including collecting a missing secret during approval. The iOS app
+remains the authority for pairing, approval, device authentication, connection setup,
 and reauthorization. It cannot host a persistent local HTTP/stdio listener,
 so transport startup and bearer credential files are intentionally host-only.
 Local tickets are transport state; cancelling one does not change vault state.

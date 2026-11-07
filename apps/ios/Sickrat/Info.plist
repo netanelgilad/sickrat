@@ -8,6 +8,7 @@
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.netanelgilad.sickrat</string><key>CFBundleURLSchemes</key><array><string>sickrat</string></array></dict></array>
 <key>UILaunchScreen</key><dict/>
 <key>NSFaceIDUsageDescription</key><string>Unlock your vault and approve access to secrets.</string>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>

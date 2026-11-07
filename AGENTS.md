@@ -1,6 +1,6 @@
 # Product Interface Parity
 
-When a user-facing capability is added or changed in the Sickrat PWA or CLI, provide equivalent management and inspection support in the other interface where it is technically and security-wise appropriate. Keep the displayed metadata, validation rules, and lifecycle operations aligned. Document an intentional exception when platform constraints or the vault security model prevent direct parity; for example, OAuth reauthorization remains a PWA flow because only the PWA unlocks the encrypted refresh token with the vault key.
+The native iOS app is the only owner-facing app. When a user-facing capability is added or changed in iOS or the CLI, provide equivalent management and inspection support in the other interface where technically and security-wise appropriate. Align metadata, validation rules, and lifecycle operations. Document intentional exceptions: only authenticated owner clients hold the vault root key, so OAuth connection/reauthorization, root-key recovery, and root-key transfer remain native iOS flows. The CLI must never receive the root key or provider refresh tokens. The Cloudflare Worker is the backend, and its browser pages only hand off to iOS or complete system OAuth; do not restore a PWA console.
 
 # Release Discipline
 

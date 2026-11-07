@@ -1,5 +1,8 @@
 # Generated Secret Flows
 
+> Historical design/test plan from the PWA era. Current product and migration: [native iOS migration](native-ios-migration.md). UI paths below are not current instructions.
+
+
 Sickrat should support password-change and new-credential flows without adding provider-specific commands. The product surface should stay centered on `sickrat run`, the approval screen, and normal secret refs.
 
 ## Product Shape

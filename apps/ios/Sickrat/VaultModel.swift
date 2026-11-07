@@ -92,6 +92,7 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
   var refreshing = false
   var refreshError: String?
   private var lockGeneration = 0
+  var recoveryGeneration: Int { lockGeneration }
   var lastRefresh: Date?
   var lastRequestRefresh: Date?
   var pendingBadgeCount: Int?

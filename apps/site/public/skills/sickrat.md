@@ -11,7 +11,7 @@ Use Sickrat when a task needs a secret, API key, password, private configuration
 
 Do not ask the user to paste secrets into chat. Request the secret through Sickrat so the user can approve access from their phone.
 
-Sickrat vaults are user-owned Cloudflare deployments. The public `sickrat.dev` site only hosts docs and this skill file. The user's real vault is a private Worker/PWA created in their own Cloudflare account by the CLI.
+Sickrat vaults are user-owned Cloudflare deployments. The public `sickrat.dev` site only hosts docs and this skill file. The user's real vault is a private Worker API created in their own Cloudflare account by the CLI.
 
 ## Install The CLI
 
@@ -47,15 +47,16 @@ sickrat vault create default
 `sickrat login` opens Cloudflare OAuth in the user's browser and requests `offline_access` so the configured public client can issue a refresh token. Let the user complete the login. The CLI automatically refreshes the stored Cloudflare owner login when the OAuth client issued a refresh token. Do not ask the user to repeat browser login merely because the access token expired; retry `sickrat login` only when Sickrat reports that the refresh grant is unavailable, expired, or revoked. `sickrat vault create` creates the user's isolated vault resources in their Cloudflare account:
 
 - D1 database for encrypted vault records, devices, approvals, and push subscriptions
-- Worker/PWA deployment for the phone console
+- Worker API deployment for the native app
 - Durable Object binding for realtime approval delivery
-- vault-specific VAPID push keys
+- legacy VAPID bindings retained for safe migration; native delivery uses owner-configured APNs
 
 Do not create or use a shared Sickrat service account. Use the vault URL printed by `sickrat vault create`.
 
-After vault creation, tell the user to open that vault URL on their phone and add it to the Home Screen. If the CLI prints a `Vault QR` image path, show that image to the user so they can scan it from their phone. The first launch of the installed PWA asks the user to enable push notifications. Wait for the user to confirm that the PWA is installed and push is enabled before running `sickrat pair`.
+After vault creation, help the user install their signed native Sickrat iOS app and connect it to the printed HTTPS origin. For a new empty vault, use Settings → Vault recovery → Create key for an empty vault, then save an encrypted recovery backup. Existing vaults require the existing key via iPhone-to-iPhone transfer or a native recovery file; never create a replacement key. The Home Screen web app has been retired.
 
-If the vault PWA says an update is available, run `sickrat vault update --dry-run`, show the plan to the user, then run `sickrat vault update --yes` if they approve. User-owned vaults are updated through the CLI because Sickrat cannot centrally push changes into the user's Cloudflare account.
+Enable native notifications in Sickrat Settings → Notifications. Initial native enrollment is approved on the owner Mac using `sickrat notifications approve <CODE> --setup-file <owner-setup-file>`; never transfer the APNs private key or owner setup credential to the phone. Signed CLI requests also work with notifications disabled while the app is open.
+For a backend update, run `sickrat vault update --dry-run`, show the plan to the user, then run `sickrat vault update --yes` if they approve. User-owned vaults are updated through the CLI because Sickrat cannot centrally push changes into the user's Cloudflare account.
 
 ## Pair This Machine
 
@@ -65,11 +66,11 @@ If the machine is not paired yet:
 sickrat pair <your-sickrat-vault-url>
 ```
 
-Show the pairing code to the user and ask them to approve it in the Sickrat web app.
+Show the pairing code to the user and ask them to approve it in the Sickrat iOS app.
 
 If `sickrat vault create` just ran successfully, use the printed vault URL. Do not guess a hosted URL.
 
-If push is enabled, the user should receive a pairing notification on their installed PWA. If not, tell them to open the vault PWA, go to Machines, enter the six-digit pairing code, and approve the device.
+If push is enabled, the user should receive a pairing notification on their installed iOS app. If not, tell them to open the vault iOS app, go to Settings → Paired devices, enter the six-digit pairing code, and approve the device.
 
 ## Browser Sessions
 
@@ -173,7 +174,7 @@ Use timed access only when the task is actively ongoing and the reason is specif
 
 If the reference does not exist yet, still request it with a clear message. The user can create the missing secret from the approval screen and approve the same request.
 
-For password rotation, request the current ref and a new, specific ref in the same `sickrat run` call. The user can generate the new value in the PWA, approve both values, and the child process can complete the provider-specific password change:
+For password rotation, request the current ref and a new, specific ref in the same `sickrat run` call. The user can generate the new value in the iOS app, approve both values, and the child process can complete the provider-specific password change:
 
 ```sh
 sickrat run \
@@ -187,7 +188,7 @@ Only update local config to the new ref after the provider confirms the password
 
 ## Managing OAuth Providers
 
-Inspect and configure the same non-secret provider metadata available in the PWA:
+Inspect and configure the same non-secret provider metadata available in the iOS app:
 
 ```sh
 sickrat provider list
@@ -198,7 +199,7 @@ sickrat connection connect x/personal
 
 `provider show` returns the callback URL, setup documentation, PKCE and persistent-access support, plus scope labels and risk classifications. `provider configure` saves or replaces only a public client ID. Cloudflare and X are public PKCE clients in Sickrat and do not use a client secret. Provider definitions remain in Sickrat's versioned catalog; these commands configure a catalog provider rather than creating arbitrary provider endpoints.
 
-`connection connect` opens the secure PWA flow with the connection name prefilled. Account connection and reauthorization intentionally remain PWA flows because only the passkey-unlocked PWA can encrypt or replace the refresh token with the vault key.
+`connection connect` opens a public HTTPS handoff into the native iOS flow with the connection name prefilled. Account connection and reauthorization intentionally remain iOS app flows because only the device-authenticated iOS app can encrypt or replace the refresh token with the vault key.
 
 ## Requesting OAuth Access
 
@@ -231,22 +232,22 @@ sickrat run \
 
 Use CLI version `0.1.35` or newer for named OAuth connections. Keep non-sensitive values such as `CF_ACCOUNT_ID` in the normal process environment or env file.
 
-The user manages provider accounts from **Connections** in the installed PWA or inspects/configures non-secret provider metadata with the CLI commands above. It is valid to request Cloudflare or X access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
+The user manages provider accounts from **Connections** in the installed iOS app or inspects/configures non-secret provider metadata with the CLI commands above. It is valid to request Cloudflare or X access before an account is connected: the approval screen lets the user configure or connect the provider and then continue the same request.
 
 If the approval button is disabled for an OAuth request, read the blocker shown on the approval screen. It names missing canonical scope IDs or reports the provider connection error. Do not repeatedly request broader scopes to work around an OAuth client whose allowed-scope configuration is incomplete.
 
-Use the connection name shown in the PWA when more than one account is connected for a provider. The provider-only form, such as `sickrat://oauth/cloudflare?...`, is shorthand that works only when exactly one eligible connection matches the requested scopes.
+Use the connection name shown in the iOS app when more than one account is connected for a provider. The provider-only form, such as `sickrat://oauth/cloudflare?...`, is shorthand that works only when exactly one eligible connection matches the requested scopes.
 
-Request the narrowest scopes required by the command. Every scope must appear as a repeated `scope` query parameter. Do not invent provider ids or request providers that are not shown in the PWA catalog.
+Request the narrowest scopes required by the command. Every scope must appear as a repeated `scope` query parameter. Do not invent provider ids or request providers that are not shown in the iOS app catalog.
 
-The PWA decrypts the provider refresh token only after passkey unlock, mints an access token through the user-owned Worker, and seals that access token to the requesting CLI. The CLI receives only the approved access token. Never ask the user for an OAuth client secret, refresh token, access token, authorization code, or callback URL in chat.
+The iOS app decrypts the provider refresh token only after device authentication, mints an access token through the user-owned Worker, and seals that access token to the requesting CLI. The CLI receives only the approved access token. Never ask the user for an OAuth client secret, refresh token, access token, authorization code, or callback URL in chat.
 
 Timed access with `--access-for` also applies to OAuth grants. The CLI caches only the encrypted access-token grant, capped by both the approval window and provider token expiry; it never caches refresh tokens.
 
 ## Agent Behavior
 
 - For a first-time user, run `sickrat login` and `sickrat vault create` before pairing.
-- Treat the printed Worker/PWA URL as the user's private vault endpoint.
+- Treat the printed Worker API URL as the user's private vault endpoint.
 - Do not read, print, summarize, upload, or inspect `~/.sickrat/config.json`; it is CLI-private state and may contain Cloudflare OAuth tokens and device keys.
 - Explain why the secret is needed before requesting it.
 - Put that explanation in `--message` so it appears on the user's approval screen.
@@ -258,4 +259,4 @@ Timed access with `--access-for` also applies to OAuth grants. The CLI caches on
 - Prefer `sickrat run` so plaintext only reaches the child process that needs it.
 - Keep OAuth access tokens inside the child process environment and never print, inspect, or return them to chat.
 - Never use `sickrat reveal` unless the user explicitly asks for plaintext output in a clearly non-production test.
-- When a new secret value is needed, prefer the PWA approval flow so the user enters or generates the value on their device instead of sending plaintext through chat.
+- When a new secret value is needed, prefer the iOS app approval flow so the user enters or generates the value on their device instead of sending plaintext through chat.

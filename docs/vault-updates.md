@@ -1,5 +1,8 @@
 # Vault Updates And Migrations
 
+See [native iOS migration](native-ios-migration.md) for the current owner app, key recovery, link handoff, and intentional CLI boundaries.
+
+
 ## Goal
 
 Sickrat vaults are deployed into each user's Cloudflare account. After a vault is created, the project cannot push code or schema changes into that vault from a central service. Updates must be owner-initiated, repeatable, and recoverable through the CLI.
@@ -7,7 +10,7 @@ Sickrat vaults are deployed into each user's Cloudflare account. After a vault i
 The update system should handle:
 
 - updating the local `sickrat` CLI binary
-- updating the user-owned Worker/PWA artifact
+- updating the user-owned Worker API artifact
 - applying D1 schema migrations
 - applying Durable Object migration metadata
 - creating newly required Cloudflare resources
@@ -183,7 +186,7 @@ Current vault: 0.1.11
 Target vault:  0.1.12
 
 Plan:
-  - upload Worker/PWA artifact
+  - upload Worker API artifact
   - apply D1 migration 0004_approval_indexes
   - update Worker var SICKRAT_VERSION
   - verify /api/health
@@ -295,13 +298,13 @@ Run:
   sickrat vault update default --resume
 ```
 
-## PWA Update UX
+## iOS app Update UX
 
-The PWA should not pretend it can self-update across user-owned Cloudflare deployments.
+The iOS app should not pretend it can self-update across user-owned Cloudflare deployments.
 
 Recommended UX:
 
-- The PWA embeds its artifact version.
+- The iOS app embeds its artifact version.
 - It checks a public Sickrat release metadata endpoint, for example `https://sickrat.dev/releases/latest.json`.
 - If a newer compatible version exists, show a small in-app banner:
 
@@ -312,7 +315,7 @@ Ask your agent to run: sickrat vault update default
 
 The banner should not block approvals or secret entry. It should link to the exact CLI command and explain that the vault is owned by the user's Cloudflare account, so updates are applied from the user's CLI.
 
-If the installed service worker has a new local asset version after a successful vault update, the existing PWA reload prompt can still handle refreshing the app shell. That is separate from updating the Cloudflare resources.
+Native app binaries are updated separately from the Worker. The retired service worker unregisters and replaces the old console with a handoff page; it does not update the iOS binary.
 
 ## Compatibility Rules
 
@@ -347,12 +350,12 @@ The release metadata should include:
 4. Add `sickrat vault update --dry-run`.
 5. Add lock acquisition, force-unlock, and status reporting.
 6. Add the migration runner with a no-op migration for the current version.
-7. Add real Worker/PWA redeploy as the first update operation.
+7. Add real Worker API redeploy as the first update operation.
 8. Add D1 migration support.
 9. Add resource creation/pruning support.
 10. Add `sickrat self update`.
 11. Add `sickrat update` as the combined happy path.
-12. Add PWA update-available banner pointing to the CLI update command.
+12. Add iOS app update-available banner pointing to the CLI update command.
 
 This order makes the system observable before it becomes destructive.
 

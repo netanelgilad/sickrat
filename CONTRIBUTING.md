@@ -17,7 +17,7 @@ npm --workspace apps/web run typecheck
 npm run web:build
 ```
 
-The Worker test harness in `apps/web/test` is still being wired to the Cloudflare Vitest/Wrangler assets configuration. Run it when working on that setup or after the harness is fixed.
+Run `npm --workspace apps/web test -- --run` for the Worker tests. The package contains the API and a native link handoff, not a PWA. For iOS work, follow `apps/ios/AGENTS.md` and run the Xcode scheme tests.
 
 Build the CLI locally:
 

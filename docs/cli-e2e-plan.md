@@ -1,5 +1,8 @@
 # CLI E2E Plan
 
+> Historical design/test plan from the PWA era. Current product and migration: [native iOS migration](native-ios-migration.md). UI paths below are not current instructions.
+
+
 This is the next implementation plan for getting a real agent/CLI request through the deployed PWA approval flow.
 
 ## Current State

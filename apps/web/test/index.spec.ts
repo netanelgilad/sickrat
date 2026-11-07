@@ -35,17 +35,7 @@ async function createPairedDevice(label: string) {
 	});
 	const pairing = (await pairingResponse.json()) as { code: string; deviceId: string };
 	expect((await request(`/api/devices/pairing-codes/${pairing.code}/approve`, { method: "POST" })).status).toBe(200);
-	const subscriptionResponse = await request("/api/push/subscribe", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			subscription: {
-				endpoint: `https://push.example/${crypto.randomUUID()}`,
-				keys: { p256dh: "test-p256dh", auth: "test-auth" },
-			},
-		}),
-	});
-	expect(subscriptionResponse.status).toBe(200);
+
 	return { signingKeys, deviceId: pairing.deviceId };
 }
 
@@ -122,6 +112,13 @@ function browserSessionAuthorization(capability: string) {
 }
 
 describe("OAuth gateway Worker API", () => {
+  it("retires browser push without requiring it for native inbox requests", async () => {
+    expect((await request("/api/push/subscribe", { method: "POST", body: "{}" })).status).toBe(410);
+    expect((await request("/api/push/test", { method: "POST", body: "{}" })).status).toBe(410);
+    const capabilities = await (await request("/api/capabilities")).json() as {push:{supported:boolean}};
+    expect(capabilities.push.supported).toBe(false);
+  });
+
 	beforeEach(async () => {
 		fetchMock.activate();
 		fetchMock.disableNetConnect();
@@ -518,17 +515,7 @@ describe("OAuth gateway Worker API", () => {
 		});
 		const pairing = (await pairingResponse.json()) as { code: string; deviceId: string };
 		expect((await request(`/api/devices/pairing-codes/${pairing.code}/approve`, { method: "POST" })).status).toBe(200);
-		const subscriptionResponse = await request("/api/push/subscribe", {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({
-				subscription: {
-					endpoint: "https://push.example/oauth-test",
-					keys: { p256dh: "test-p256dh", auth: "test-auth" },
-				},
-			}),
-		});
-		expect(subscriptionResponse.status).toBe(200);
+
 
 		const ephemeralKeys = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
 		const unsigned = {

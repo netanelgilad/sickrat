@@ -23,6 +23,11 @@ describe("APNs delivery", () => {
     await sendAPNs({teamId:"TEAM123456",keyId:"KEY1234567",privateKey:pem,topic:"example.app",environment:"sandbox"}, token, null, 0, fetcher as typeof fetch);
     const clearing = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(clearing[1].body as string)).toEqual({aps:{badge:0}});
+    fetcher.mockClear();
+    await sendAPNs({teamId:"TEAM123456",keyId:"KEY1234567",privateKey:pem,topic:"example.app",environment:"sandbox"}, token, null, 2, fetcher as typeof fetch, "123456");
+    const pairing = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(pairing[1].body as string)).toEqual({aps:{badge:2,alert:{title:"Sickrat",body:"A device wants to pair with your vault."},sound:"default"},pairingCode:"123456"});
+    expect((pairing[1].headers as Record<string,string>)["apns-collapse-id"]).toBe("sickrat-pairing");
   });
   it("validates tokens and removes only definitively unregistered devices", async () => {
     expect(validAPNsToken("../bad")).toBe(false);

@@ -36,6 +36,8 @@ struct RootView: View {
   @Environment(\.scenePhase) private var phase
   @State private var push = PushCoordinator.shared
   @State private var selection = 0
+  @State private var deviceReview = false
+  @State private var accountFlow: AccountFlow?
   var body: some View {
     @Bindable var model = model
     Group {
@@ -54,6 +56,29 @@ struct RootView: View {
     .task(id: model.lastRequestRefresh) {
       guard phase == .active, model.lastRequestRefresh != nil, let count = model.pendingBadgeCount else { return }
       await push.updateBadge(count)
+    }
+    .sheet(isPresented: $deviceReview, onDismiss: { push.pairingCodeToReview = nil }) { NavigationStack { DevicesView(code: push.pairingCodeToReview ?? "") } }
+    .sheet(item: $accountFlow) { ConnectAccountView(flow: $0) }
+    .task(id: push.pairingCodeToReview) {
+      if push.pairingCodeToReview != nil { deviceReview = true }
+    }
+    .onOpenURL { url in
+      guard let route = OwnerRoute.parse(url, origin: model.endpoint) else {
+        model.error = "Connect to the matching vault before opening this link."
+        return
+      }
+      switch route {
+      case .home: selection = 0
+      case .approval(let id): push.requestID = id; selection = 0
+      case .devices: deviceReview = true
+      case .connect(let provider, let name): accountFlow = AccountFlow(providerID: provider, name: name, fixedName: true)
+      case .connection(let id):
+        Task { await model.run("Loading account…") {
+          try await model.refresh()
+          guard let connection = model.connections.first(where: { $0.id == id }) else { throw VaultError("This account no longer exists.") }
+          accountFlow = AccountFlow(connection: connection, providerID: connection.providerId, name: connection.connectionName)
+        } }
+      }
     }
     .onChange(of: push.requestID) { _, id in if id != nil { selection = 0 } }
     .task(id: "push-\(phase)-\(model.endpoint)") {
@@ -109,7 +134,7 @@ struct WelcomeView: View {
         }
         Section {
           Text(
-            "Use the address of your existing Sickrat vault. You’ll transfer its key securely from the PWA, then unlock with Face ID or your device passcode."
+            "Use the address of your existing Sickrat vault. Create a key for a new vault, restore a recovery backup, or transfer from your other iPhone. Unlock with Face ID or your device passcode."
           ).font(.footnote).foregroundStyle(.secondary)
         }
       }.vaultActivity()
@@ -602,16 +627,16 @@ struct SettingsView: View {
                            systemImage: model.key == nil ? "lock" : "lock.open",
                            operations: ["Unlocking vault…", "Locking vault…"])
           }
+          NavigationLink { RecoveryView() } label: {
+            Label("Vault recovery", systemImage: "externaldrive.badge.checkmark")
+          }
           NavigationLink { TransferView() } label: {
             Label("Transfer vault key", systemImage: "iphone.and.arrow.forward")
           }
         } header: { Text("Security") } footer: {
-          Text("Your vault locks when you leave the app. Its key is protected by this iPhone’s Keychain and device authentication. Keep your web passkey for recovery.")
+          Text("Your vault locks when you leave the app. Its key is protected by this iPhone’s Keychain and device authentication. Save an encrypted recovery backup and keep its password safe.")
         }
         Section {
-          if let url = URL(string: model.endpoint) {
-            Link(destination: url) { Label("Open web console", systemImage: "safari") }
-          }
         } footer: {
           Text("Sickrat \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · Build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") · Development preview")
         }
@@ -629,7 +654,7 @@ struct TransferView: View {
       Section {
         Text("Bring your existing key").font(.title2.bold())
         Text(
-          "Start here, then use the request on your other iPhone or in Settings → Native iOS transfer in your web console. Import the encrypted file here within 10 minutes."
+          "Start here, then use the request in Settings → Transfer vault key → Send to another iPhone on your other iPhone. Import the encrypted file here within 10 minutes."
         )
       }
       Section {
@@ -682,6 +707,7 @@ struct DevicesView: View {
   @State private var pairLabel: String?
   @State private var revoke: Device?
   @State private var revokingID: String?
+  init(code: String = "") { _code = State(initialValue: code) }
   var body: some View {
     Form {
       Section("Pair a device") {

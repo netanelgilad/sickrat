@@ -1,5 +1,8 @@
 # Threat Model
 
+See [native iOS migration](native-ios-migration.md) for the current owner app, key recovery, link handoff, and intentional CLI boundaries.
+
+
 ## Primary Threats
 
 - A compromised or over-permissioned local agent requests secrets it should not access.
@@ -40,9 +43,9 @@
 
 ## OAuth Token Exchange
 
-OAuth refresh can require the user-owned Worker to act as a transient token-exchange proxy because provider token endpoints often require a client secret or block browser CORS. In that mode, the PWA decrypts the refresh token only after passkey unlock and approval intent, sends it to the user's Worker over HTTPS, and the Worker exchanges it without persisting plaintext token material.
+OAuth refresh can require the user-owned Worker to act as a transient token-exchange proxy because provider token endpoints often require a client secret or block browser CORS. In that mode, the iOS app decrypts the refresh token only after device authentication and approval intent, sends it to the user's Worker over HTTPS, and the Worker exchanges it without persisting plaintext token material.
 
-This is a weaker property than static secret approval, where the Worker does not need to see plaintext. Provider connections should record whether refresh is PWA-direct or Worker-assisted, and the approval UI should make scope breadth and account identity visible before release.
+This is a weaker property than static secret approval, where the Worker does not need to see plaintext. Provider connections should record whether refresh is iOS app-direct or Worker-assisted, and the approval UI should make scope breadth and account identity visible before release.
 
 ## Local Machine Risks
 

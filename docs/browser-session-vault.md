@@ -1,5 +1,8 @@
 # Browser Session Vault
 
+See [native iOS migration](native-ios-migration.md) for the current owner app, key recovery, link handoff, and intentional CLI boundaries.
+
+
 ## Status
 
 This document specifies a first-class Sickrat resource for securely storing and
@@ -12,7 +15,7 @@ Implementation status as of 2026-07-31:
   tables;
 - typed approvals, phone-generated and wrapped record keys, one-time leases,
   conditional same-key replacement, the Node.js channel SDK, CLI
-  create/run/replace commands, and PWA session management are implemented;
+  create/run/replace commands, and iOS app session management are implemented;
 - synthetic create, later-process restore, update, abort, cleanup, and revoke
   paths are covered by automated tests;
 - migration of the real ChatGPT artifact and its later-process authenticated
@@ -30,7 +33,7 @@ Sickrat is the durable home of the encrypted browser session. For each
 approved operation:
 
 1. The automation requests a short-lived browser-session grant from Sickrat.
-2. The user approves the request on the phone under the existing Sickrat approval and passkey model.
+2. The user approves the request on the phone under the existing Sickrat approval and device authentication model.
 3. The CLI decrypts the session only for the approved child process and sends
    it through a private local process channel.
 4. Userland code decides how to consume it: restore a non-persistent browser,
@@ -104,7 +107,7 @@ The feature must preserve these properties:
 2. **No environment-variable delivery.** Browser sessions are structured, high-value credentials and must not be injected into a child process environment.
 3. **No plaintext in Sickrat storage.** Cloudflare stores only encrypted session bundles and non-sensitive metadata.
 4. **No Worker decryption.** The Worker coordinates storage, leases, replacement, and grants but cannot decrypt session contents.
-5. **Explicit short-lived access by default.** Retrieving a session requires phone approval and passkey unlock. Browser-session resources must not initially participate in reusable timed local grant caches.
+5. **Explicit short-lived access by default.** Retrieving a session requires phone approval and device authentication. Browser-session resources must not initially participate in reusable timed local grant caches.
 6. **Command and device binding.** A grant is bound to the paired device, requesting command, resource id, access mode, current object ETag, and expiry.
 7. **Single-writer replacement.** Only one active restore-and-update lease can exist for a session.
 8. **No secret observability.** Session contents, cookie names and values, tokens, storage keys, and decrypted payload sizes must not enter logs, notifications, analytics, crash reports, or audit descriptions.
@@ -142,7 +145,7 @@ Scheduled scrape
 scheduler
    │
    ▼
-Sickrat request ──push──> phone approval + passkey
+Sickrat request ──push──> phone approval + device authentication
    │
    ▼
 short-lived restore-and-update grant + exclusive lease
@@ -178,7 +181,7 @@ On creation, the mobile client generates a random record data key, wraps it
 with the vault key, and seals the plaintext data key to the approved CLI
 request key. The CLI uses that data key in memory to encrypt the captured
 artifact and uploads ciphertext under its one-time create capability. Restore
-reverses that delivery: the PWA unwraps the record key after passkey approval
+reverses that delivery: the iOS app unwraps the record key after device authentication
 and seals it to the request key; the CLI downloads and decrypts the current
 artifact in memory.
 
@@ -191,7 +194,7 @@ Sickrat core owns:
 
 - the small provider-neutral bundle schema and encrypted envelope;
 - secure create, read, replace, revoke, and delete operations;
-- phone approval, passkey unlock, grants, leases, conditional replacement, and
+- phone approval, device authentication, grants, leases, conditional replacement, and
   audit;
 - encrypted R2 artifact storage and safe D1 metadata;
 - private local delivery to and from the specifically approved child process;
@@ -216,7 +219,7 @@ not part of the stored browser-session format.
 
 Sickrat may publish a small SDK for its bundle schema and private-channel
 protocol. Optional Patchright helpers and provider code should be separate
-packages or examples built on that SDK. Sickrat Worker, PWA, and core CLI must
+packages or examples built on that SDK. Sickrat Worker, iOS app, and core CLI must
 not depend on a browser runtime or define a provider-adapter interface.
 
 ## Why Cookies Alone Are Not Enough
@@ -263,7 +266,7 @@ a separate, explicitly named Sickrat resource.
 ### ChatGPT protocol spike result
 
 The 2026-07-24 ChatGPT experiment validated this consumer model against the
-private web application protocol:
+private iOS application protocol:
 
 - a fresh browser context restored an authenticated session from the portable
   bundle;
@@ -485,9 +488,9 @@ The native resource requires command-specific protocol operations:
 
 1. CLI submits a typed `browser_session` request with resource identity,
    operation, command binding, and an ephemeral request public key.
-2. PWA displays the session-equivalent-to-login warning and requires passkey
+2. iOS app displays the session-equivalent-to-login warning and requires device authentication
    approval.
-3. For creation, the PWA generates and wraps a record data key. For replacement,
+3. For creation, the iOS app generates and wraps a record data key. For replacement,
    it unwraps the existing record data key. It seals the plaintext key plus the
    one-time write capability to the request key.
 4. CLI runs the userland producer, receives the artifact over the private child
@@ -500,7 +503,7 @@ The native resource requires command-specific protocol operations:
 
 1. CLI requests the session URI and access mode.
 2. Worker verifies the paired device and creates the approval session.
-3. PWA fetches the wrapped record key, unlocks it locally, and seals the data
+3. iOS app fetches the wrapped record key, unlocks it locally, and seals the data
    key plus current artifact descriptor, lease id, base R2 ETag, and optional
    write capability to the request public key.
 4. CLI downloads ciphertext, validates its digest and authenticated metadata,
@@ -522,15 +525,15 @@ A browser session changes as it is used, so a read-only vault-secret grant is in
 
 Recommended envelope design:
 
-1. During `create`, the PWA generates a random browser-session data-encryption
-   key after passkey approval. Replacement reuses that record key.
-2. The PWA wraps that data key with the vault key and seals the plaintext data
+1. During `create`, the iOS app generates a random browser-session data-encryption
+   key after device authentication. Replacement reuses that record key.
+2. The iOS app wraps that data key with the vault key and seals the plaintext data
    key to the CLI request public key.
 3. The CLI captures the authenticated artifact and encrypts it with the data
    key using authenticated encryption.
 4. The Worker stores the wrapped data key and safe record metadata in D1, and
    stores the current encrypted artifact at the session's stable R2 key.
-5. During restore, the PWA unwraps the record data key after approval and
+5. During restore, the iOS app unwraps the record data key after approval and
    releases it only inside the request's encrypted response envelope.
 6. The CLI downloads and decrypts the current artifact in memory,
    then passes it to the approved child over the private process channel.
@@ -825,7 +828,7 @@ platform-specific design.
 6. Userland verifies that authentication succeeded.
 7. Userland captures the cookies and web storage it needs.
 8. Userland returns the bundle through the private output pipe.
-9. The PWA-generated record data key encrypts the complete artifact locally.
+9. The iOS app-generated record data key encrypts the complete artifact locally.
 10. The CLI conditionally creates the stable R2 object and records its ETag in
     D1 under the one-time create capability.
 11. Sickrat destroys the data-key buffer, plaintext artifact, and delivery
@@ -892,7 +895,7 @@ Required behaviors:
   keeps no rollback history;
 - retry logic never reuses plaintext from a previous process.
 
-## PWA Experience
+## iOS app Experience
 
 Add a `Browser sessions` or `Sessions` section separate from ordinary secrets.
 
@@ -916,13 +919,13 @@ Actions:
 Approval screens should make it clear that an authenticated browser session is equivalent to being logged into the provider account. The UI should not offer reveal, copy, or download actions for the decrypted bundle.
 
 Initially, creation begins with a userland command such as
-`sickrat browser-session create ... -- <producer>`. The PWA approves and tracks
+`sickrat browser-session create ... -- <producer>`. The iOS app approves and tracks
 that request but does not launch Patchright or provision a browser runner.
-A later optional runner registry could let the PWA ask a paired machine or
+A later optional runner registry could let the iOS app ask a paired machine or
 container to start userland code, but that is a separate product feature and
 must not become a requirement of browser-session storage.
 
-The PWA must not expose record data keys as secrets or offer key creation,
+The iOS app must not expose record data keys as secrets or offer key creation,
 copy, reveal, or rotation controls. Key generation and wrapping happen
 automatically as part of session creation, replacement, and future rotation.
 
@@ -988,7 +991,7 @@ phone-approved trust path.
 1. Add `browser_session` to the protocol resource-request union.
 2. Make R2 an installed vault binding for one current encrypted object per
    session; add D1 session metadata and current ETag.
-3. Implement PWA-generated record data keys, vault-key wrapping, and
+3. Implement iOS app-generated record data keys, vault-key wrapping, and
    request-key sealing for create and restore approvals.
 4. Implement create, restore, replace, revoke, and health endpoints without
    any generic secret-key reference.
@@ -997,7 +1000,7 @@ phone-approved trust path.
 6. Add exclusive leases and conditional same-key R2 replacement by ETag.
 7. Add `sickrat browser-session create|run|replace|revoke` with the two-pipe
    framed child-process protocol and a browser-independent Node.js SDK.
-8. Add PWA list, detail, pending-request approval, health, reauthentication
+8. Add iOS app list, detail, pending-request approval, health, reauthentication
    status, and revocation views. Do not launch a browser or expose
    key-management UI for record data keys.
 9. Extend audit events without recording artifact contents or decrypted sizes.
@@ -1018,7 +1021,7 @@ Exit criteria:
   object;
 - all temporary local state is removed at the end of the grant;
 - Phase 2 passes with a synthetic bundle producer/consumer and no browser
-  dependency in the Worker, PWA, core CLI, or channel SDK.
+  dependency in the Worker, iOS app, core CLI, or channel SDK.
 
 ### Phase 3: end-to-end provider adoption
 
@@ -1125,7 +1128,7 @@ Using a real approved session without retaining its contents as a fixture:
 ## Open Questions
 
 1. Does FAIR require only Playwright storage state, or also session storage or non-portable service-worker state?
-2. Should a future, separate runner registry allow the PWA to ask a paired
+2. Should a future, separate runner registry allow the iOS app to ask a paired
    machine or container to start a userland capture command?
 3. Should the final rotated state be committed when scraping fails after authentication but before data extraction completes?
 4. What maximum grant duration safely accommodates slow providers and user-assisted reauthentication?
@@ -1137,7 +1140,7 @@ already-proven ChatGPT userland adapter:
 
 1. provision the R2 binding and browser-session D1 tables;
 2. add typed create and restore approval requests;
-3. generate and wrap the record data key in the PWA;
+3. generate and wrap the record data key in the iOS app;
 4. implement the two-pipe framed protocol, browser-independent Node.js SDK,
    and conditional same-key R2 replacement;
 5. prove create, restore, update, abort, and cleanup using a synthetic Node.js

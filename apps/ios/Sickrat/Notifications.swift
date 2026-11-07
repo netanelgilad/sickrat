@@ -33,6 +33,7 @@ enum NotificationCredential {
   static let shared = PushCoordinator()
   var model: VaultModel?
   var requestID: String?
+  var pairingCodeToReview: String?
   var status = "Not enabled"
   var setupReady = false
   var pairingCode: String?
@@ -220,9 +221,13 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     [.banner, .sound, .badge]
   }
   nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-    guard let id = response.notification.request.content.userInfo["requestId"] as? String,
-          UUID(uuidString: id) != nil else { return }
-    await MainActor.run { PushCoordinator.shared.requestID = id }
+    let info = response.notification.request.content.userInfo
+    if let id = info["requestId"] as? String, UUID(uuidString: id) != nil {
+      await MainActor.run { PushCoordinator.shared.requestID = id }
+    } else if let code = info["pairingCode"] as? String,
+      code.range(of: "^[0-9]{6}$", options: .regularExpression) != nil {
+      await MainActor.run { PushCoordinator.shared.pairingCodeToReview = code }
+    }
   }
 }
 

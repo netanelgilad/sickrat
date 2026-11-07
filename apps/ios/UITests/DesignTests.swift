@@ -203,6 +203,20 @@ import XCTest
     XCTAssertTrue(app.buttons["Done"].isHittable)
     capture(app, "Approval — completion receipt")
   }
+  func testNativeRecoveryReplacesWebConsole() {
+    let app = launch("idle")
+    app.tabBars.buttons["Settings"].tap()
+    for _ in 0..<8 where !app.buttons["Vault recovery"].isHittable { app.swipeUp() }
+    app.buttons["Vault recovery"].tap()
+    XCTAssertTrue(app.navigationBars["Vault recovery"].waitForExistence(timeout: 3))
+    for _ in 0..<8 where !app.secureTextFields["Recovery password"].exists { app.swipeUp() }
+    XCTAssertTrue(app.secureTextFields["Recovery password"].exists)
+    for _ in 0..<8 where !app.buttons["Authenticate and save backup"].exists { scrollDetails(app) }
+    XCTAssertFalse(app.buttons["Authenticate and save backup"].isEnabled)
+    XCTAssertFalse(app.buttons["Restore from recovery file"].isEnabled)
+    XCTAssertFalse(app.buttons["Open web console"].exists)
+    capture(app, "Recovery — native encrypted backup")
+  }
   func testUnlockProgressStaysInToolbar() {
     let app = launch("unlock")
     XCTAssertEqual(

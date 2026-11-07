@@ -1,5 +1,8 @@
 # Feature Request: Long-Pending Approval Requests
 
+> Historical design/test plan from the PWA era. Current product and migration: [native iOS migration](native-ios-migration.md). UI paths below are not current instructions.
+
+
 ## Problem
 
 Scheduled jobs that use `sickrat run --access-for 8h` still need the phone approval to happen inside the short pending-request window, currently about two minutes.

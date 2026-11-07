@@ -1,67 +1,48 @@
-# Sickrat for iOS — development preview
+# Sickrat for iOS
 
-Native Swift 6 / SwiftUI, iOS 18+, built with Xcode 26. No web view shell or third-party iOS packages.
+The native Swift 6 / SwiftUI app is Sickrat’s only owner-facing app. iOS 18+, Xcode 26+, no web view or third-party iOS packages. The CLI and user-owned Cloudflare Worker remain the agent interface and backend.
 
 ## Build and test
 
-Install Xcode and XcodeGen. From this folder:
-
 ```sh
-xcodegen generate
-xcodebuild -project Sickrat.xcodeproj -scheme Sickrat -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
-./scripts/build-ipa.sh
+xcodegen generate --spec apps/ios/project.yml
+xcodebuild -project apps/ios/Sickrat.xcodeproj -scheme Sickrat -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
 
-The unsigned development IPA is `build/Sickrat-<version>-<build>.ipa`. AltStore Classic signs it with the installing user's identity. The current preview requests the development APNs entitlement; associated-domain and shared-Keychain entitlements are not requested. The app needs a device passcode for key storage.
+For direct installation, archive in Xcode with your paid Apple Developer team, development/ad-hoc profile, registered iPhone, bundle `com.netanelgilad.sickrat`, and APNs entitlement. Export using Xcode’s development or ad-hoc distribution. Keep signing credentials outside the repo. `scripts/build-ipa.sh` and `scripts/publish-preview.mjs` remain optional unsigned AltStore utilities; AltStore is not required. Never create a public release tag from an unmerged branch.
 
-This branch's private AltStore installation is a development preview, not a tagged release. Production releases must still originate from `origin/main`. No release tags or release workflow guards are changed.
+## Setup and recovery
 
-## First use with an existing vault
+1. Provision your backend with `sickrat login` and `sickrat vault create default`.
+2. Install the signed native app and enter the printed HTTPS vault origin.
+3. In Settings → Vault recovery, create a key **only for an empty vault**, or restore a recovery file using its password. For an existing key on another iPhone, use Settings → Transfer vault key instead.
+4. Save an encrypted recovery backup with a unique password of at least 16 characters. Keep the password separately in your password manager. Files and passwords must both be retained; Sickrat cannot reset them. Backups are not uploaded to the Worker and have no expiry.
+5. Enable notifications in Settings. Approve its enrollment code on the owner Mac with `sickrat notifications approve <CODE> --setup-file <private-owner-setup.json>`. The APNs private key and owner credential stay on the Mac/Worker, never in the app.
+6. Run `sickrat pair <vault-origin>` and review the pairing code in Settings → Paired devices. A native pairing notification opens that review. Approve access requests from Requests.
 
-1. Install **Sickrat Preview** from the private AltStore source while connected to the Tailnet.
-2. Enter the HTTPS origin of your existing vault.
-3. Go to Settings → Transfer vault key → Start encrypted transfer. Copy/share the public transfer request.
-4. Open the updated PWA's Settings → Native iOS transfer. Paste that request and choose **Unlock and export encrypted transfer**. Approve the fresh passkey ceremony.
-5. Save/share the encrypted JSON file to Files on the iPhone. In Sickrat, choose **Import encrypted file** within ten minutes.
-6. Use Requests to review and approve CLI requests. The app locks on background; use Unlock to authenticate with Face ID/device passcode.
+The Keychain key requires device passcode/user presence, is `WhenPasscodeSetThisDeviceOnly`, and is cleared from app memory on background. Existing keys are never overwritten. Native creation refuses any vault with secrets, OAuth connections, or browser sessions; failures and malformed responses are not treated as an empty vault. Restoring a backup verifies its encrypted origin and never creates a replacement for an existing key.
 
-Keep the existing PWA passkey recovery record. The native app deliberately does not overwrite an existing Keychain root key, export plaintext keys, or create a replacement key for a populated vault. Transfer requests contain public information only; their private keys remain in app memory until import or process exit. An app termination during transfer requires starting a new transfer.
+Recovery uses AES-256-GCM and PBKDF2-HMAC-SHA256 with a random 32-byte salt and 600,000 fixed iterations. Password derivation runs off the UI actor. Wrong-password, tamper, wrong-origin, and oversized/unsupported file checks fail before Keychain storage. A transfer file expires after ten minutes and is not a durable backup. Keep a tested backup before deleting your source phone/app.
 
-## Implemented
+## Native capabilities and intentional boundaries
 
-- Requests, Vault, Settings: system lists/forms, tabs, navigation, search, sheets, destructive confirmations, Dynamic Type and VoiceOver labels.
-- URLSession API client with HTTPS-only origins, ephemeral caching, timeouts and redirects rejected.
-- Keychain storage with user-presence access control and `WhenPasscodeSetThisDeviceOnly`; in-memory key cleared on background. Revealed/entered secrets cleared when backgrounded.
-- Secret inspection, encryption, creation, editing, generation; missing secrets can be created atomically with approval.
-- Secret, OAuth-token and browser-session grant encryption compatible with the existing CLI.
-- OAuth account connection via `ASWebAuthenticationSession`, PKCE, encrypted callback handoff, scope checks and encrypted refresh-token rotation.
-- Account inspection/revocation; device review/pairing/revocation; browser-session inspection/revocation.
-- PWA-to-native encrypted vault-key transfer with recipient binding, encrypted origin binding, ten-minute expiry, and a fresh passkey ceremony.
+Requests show pending decisions, three recent items, and on-demand history. Approval is one tap after review, with device authentication when locked and action-local progress. Secrets, OAuth tokens and browser sessions retain existing envelope compatibility. Accounts support connect/reauthorize, naming, scope repair and provider configuration using ASWebAuthenticationSession. The app supports native APNs approval and device-pairing alerts; the icon badge counts unexpired access requests, not pairing requests.
 
-## Remaining migration work / intentional exceptions
+CLI browser links open a small HTTPS handoff page; its button passes only public navigation to the native app. The app only accepts links for its already-connected vault. No link starts consent or approves access automatically. Browser OAuth callbacks remain necessary for provider redirects, but no PWA console or web-key handling ships.
 
-- **Background push:** approval alerts use native APNs when configured, alongside existing PWA push. Pairing alerts still use the PWA; the native app can review devices while open. The owner confirmed enrollment and background delivery on the direct signed 0.1.7 preview using a paid-team development profile. Pairing alerts still need native support.
-- **Provisioning and deployment:** use the CLI/web console to create/update Cloudflare infrastructure. This preview connects to existing vaults.
-- **Cloudflare Access:** redirects are intentionally rejected. Interactive Access-protected endpoints need a separate native authentication design; do not paste Access tokens into the app.
-- **Recovery/export:** existing PWA retains recovery duties. Native key removal and key replacement are intentionally absent from the preview to avoid stranding existing encrypted records.
-- **CLI root-key parity exception:** CLI devices must never receive a vault root key. Root-key transfer is available only in unlocked owner clients; ordinary CLI resource management and grant envelopes remain unchanged.
-- Passkey reuse in native apps needs associated domains tied to the signed app identity. This personal AltStore preview uses explicit encrypted transfer and device Keychain authentication instead.
+Only owner clients may hold the root key. CLI/MCP clients never receive it or provider refresh tokens. Cloudflare provisioning/deployment and owner APNs configuration remain CLI operations. Native notifications require suitable signing and configured Worker credentials. Cloudflare Access redirects remain intentionally rejected until a native authentication design exists.
 
-## Validation and limits
+## Migration
 
-XCTest checks Web Crypto AES-GCM ciphertext, ECDH/HKDF parity, tamper rejection, wrong-recipient rejection, HTTPS origin validation and JWK metadata decoding. Worker/Vitest tests verify encrypted transfer and the existing backend. Simulator builds and the device Release build are checked. Actual Face ID, AltStore installation, provider consent and end-to-end grants with the owner's vault key still require on-device testing; these are not claimed as verified.
+Read [native migration](../../docs/native-ios-migration.md) before updating an old PWA-only vault. Upgrade the native app and transfer the existing key before removing the old browser console. Legacy passkey records alone cannot be imported as native recovery files. Browser recovery records are not erased by retirement.
 
-## Transfer-screen deployment
+## Validation
 
-The development helper `node apps/ios/scripts/deploy-transfer-preview.mjs --dry-run` (from the repo root) uses the existing CLI local-artifact path and a temporary, clearly marked preview version. Build with `npm run web:build` first. After owner approval, pass `--yes`. It reuses the CLI's deployment lock, D1/R2 migration checks and existing VAPID keys. It does not change the production release resolver or generate tags. A later normal `sickrat vault update` returns the vault to a published release, which may remove the experimental transfer screen.
+Unit tests cover encryption parity, key transfer, recovery vectors/tamper rejection, origin-bound links, OAuth policy and loading state. DEBUG fixtures never contact a vault or change real notifications. UI tests cover request decisions, loading, account repair, recovery and settings in light/dark and larger Dynamic Type. Real Keychain prompts, APNs delivery and provider consent still require device verification after a change; simulator checks do not establish those.
 
-After building and committing a preview, publish it to an existing private source:
+## Historical preview notes
 
-```sh
-node scripts/publish-preview.mjs /path/to/existing/altstore https://your-private-server/altstore
-```
-
-The publisher backs up and atomically replaces `source.json`, preserves other apps, verifies built bundle metadata, includes a checksum and source commit, and refuses to overwrite an existing app version. Increment `CURRENT_PROJECT_VERSION` for the next preview; the package filename is derived from the built app metadata.
+The following notes document earlier builds and their then-current PWA dependencies. They are historical, not current setup instructions.
 
 ## Preview 0.1.1 (build 2)
 

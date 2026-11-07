@@ -9,16 +9,6 @@ import {
 	refreshOAuthAccessToken,
 } from "./oauth";
 
-type PushSubscriptionRecord = {
-	id: string;
-	endpoint: string;
-	keys: {
-		p256dh: string;
-		auth: string;
-	};
-	created_at: string;
-};
-
 type ApprovalRequestRecord = {
 	id: string;
 	subscription_id: string;
@@ -243,7 +233,6 @@ const oauthHandoffWrapInfo = new TextEncoder().encode("sickrat:oauth-handoff:v1"
 const browserSessionLeaseTtlMs = 5 * 60 * 1000;
 const maxBrowserSessionArtifactBytes = 32 * 1024 * 1024 + 64 * 1024;
 
-const vapidJwtCache = new Map<string, { token: string; expiresAt: number }>();
 
 export class ApprovalHub {
 	private sessions = new Set<WebSocket>();
@@ -395,78 +384,6 @@ function getApprovalHub(env: EnvWithBindings, subscriptionId: string) {
 	if (!env.APPROVAL_HUB) throw new Error("APPROVAL_HUB Durable Object binding is not configured.");
 	const id = env.APPROVAL_HUB.idFromName(subscriptionId);
 	return env.APPROVAL_HUB.get(id);
-}
-
-async function publishNotification(subscriptionId: string, payload: unknown, env: EnvWithBindings) {
-	if (!env.APPROVAL_HUB) return null;
-	const hub = getApprovalHub(env, subscriptionId);
-	const response = await hub.fetch("https://approval-hub/publish", {
-		method: "POST",
-		body: JSON.stringify(payload),
-	});
-	return response.ok ? ((await response.json()) as { ok: true; delivered: number }) : null;
-}
-
-async function publishApproval(subscriptionId: string, approval: ReturnType<typeof mapApproval>, env: EnvWithBindings) {
-	return publishNotification(
-		subscriptionId,
-		{
-			type: "approval.requested",
-			approval,
-			url: `/approve/${encodeURIComponent(approval.id)}`,
-		},
-		env,
-	);
-}
-
-async function publishPairing(subscriptionId: string, pairing: ReturnType<typeof mapPairing>, env: EnvWithBindings) {
-	return publishNotification(
-		subscriptionId,
-		{
-			type: "pairing.requested",
-			pairing,
-			url: "/devices",
-		},
-		env,
-	);
-}
-
-async function getLatestNotification(subscriptionId: string, env: EnvWithBindings) {
-	if (!env.DB) return null;
-	const approval = await env.DB.prepare(
-		`${approvalSelect}
-		 WHERE subscription_id = ? AND status = 'pending'
-		 ORDER BY created_at DESC
-		 LIMIT 10`,
-	)
-		.bind(subscriptionId)
-		.all<ApprovalRequestRecord>();
-	const latestApproval = approval.results.find((row) => !isExpiredPendingApproval(row));
-	if (latestApproval) {
-		const mapped = mapApproval(latestApproval);
-		return {
-			type: "approval.requested",
-			approval: mapped,
-			url: `/approve/${encodeURIComponent(mapped.id)}`,
-		};
-	}
-
-	const pairing = await env.DB.prepare(
-		`SELECT code, device_id, label, public_key, expires_at, approved_at
-		 FROM pairing_codes
-		 WHERE approved_at IS NULL AND expires_at > ?
-		 ORDER BY expires_at DESC
-		 LIMIT 1`,
-	)
-		.bind(new Date().toISOString())
-		.first<PairingCodeRecord>();
-	if (!pairing) return null;
-	const mapped = mapPairing(pairing);
-	return {
-		type: "pairing.requested",
-		pairing: mapped,
-		url: "/devices",
-	};
 }
 
 async function ensureSchema(env: EnvWithBindings) {
@@ -745,131 +662,6 @@ async function handleOAuthCallback(request: Request, env: EnvWithBindings) {
 	);
 }
 
-function trimLeadingZeroes(bytes: Uint8Array) {
-	let index = 0;
-	while (index < bytes.length - 1 && bytes[index] === 0) index += 1;
-	return bytes.slice(index);
-}
-
-function leftPad(bytes: Uint8Array, length: number) {
-	if (bytes.length === length) return bytes;
-	if (bytes.length > length) return bytes.slice(bytes.length - length);
-	const output = new Uint8Array(length);
-	output.set(bytes, length - bytes.length);
-	return output;
-}
-
-function normalizeEcdsaSignature(signature: ArrayBuffer) {
-	const bytes = new Uint8Array(signature);
-	if (bytes.length === 64) return bytes;
-
-	if (bytes[0] !== 0x30) {
-		throw new Error(`Unexpected ECDSA signature format length=${bytes.length}`);
-	}
-
-	let offset = 2;
-	if (bytes[1] === 0x81) offset = 3;
-	if (bytes[offset] !== 0x02) throw new Error("Invalid DER signature: missing r marker");
-	const rLength = bytes[offset + 1];
-	const r = bytes.slice(offset + 2, offset + 2 + rLength);
-	offset = offset + 2 + rLength;
-	if (bytes[offset] !== 0x02) throw new Error("Invalid DER signature: missing s marker");
-	const sLength = bytes[offset + 1];
-	const s = bytes.slice(offset + 2, offset + 2 + sLength);
-
-	const output = new Uint8Array(64);
-	output.set(leftPad(trimLeadingZeroes(r), 32), 0);
-	output.set(leftPad(trimLeadingZeroes(s), 32), 32);
-	return output;
-}
-
-async function signVapidJwt(audience: string, env: EnvWithBindings) {
-	if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
-		throw new Error("VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY are required.");
-	}
-
-	const publicKey = base64UrlToBytes(env.VAPID_PUBLIC_KEY);
-	if (publicKey.length !== 65 || publicKey[0] !== 4) {
-		throw new Error("VAPID_PUBLIC_KEY must be an uncompressed P-256 public key.");
-	}
-
-	const jwk: JsonWebKey = {
-		kty: "EC",
-		crv: "P-256",
-		x: bytesToBase64Url(publicKey.slice(1, 33)),
-		y: bytesToBase64Url(publicKey.slice(33, 65)),
-		d: env.VAPID_PRIVATE_KEY,
-		ext: false,
-		key_ops: ["sign"],
-	};
-
-	const key = await crypto.subtle.importKey(
-		"jwk",
-		jwk,
-		{ name: "ECDSA", namedCurve: "P-256" },
-		false,
-		["sign"],
-	);
-
-	const header = bytesToBase64Url(new TextEncoder().encode(JSON.stringify({ typ: "JWT", alg: "ES256" })));
-	const payload = bytesToBase64Url(
-		new TextEncoder().encode(
-			JSON.stringify({
-				aud: audience,
-				exp: Math.floor(Date.now() / 1000) + 60 * 60 * 2,
-				sub: "mailto:netanelgilad@gmail.com",
-			}),
-		),
-	);
-	const unsigned = `${header}.${payload}`;
-	const signature = await crypto.subtle.sign(
-		{ name: "ECDSA", hash: "SHA-256" },
-		key,
-		new TextEncoder().encode(unsigned),
-	);
-
-	return `${unsigned}.${bytesToBase64Url(normalizeEcdsaSignature(signature))}`;
-}
-
-async function getVapidJwt(audience: string, env: EnvWithBindings) {
-	const cacheKey = `${audience}:${env.VAPID_PUBLIC_KEY ?? ""}`;
-	const cached = vapidJwtCache.get(cacheKey);
-	if (cached && cached.expiresAt > Date.now()) return cached.token;
-
-	const token = await signVapidJwt(audience, env);
-	vapidJwtCache.set(cacheKey, { token, expiresAt: Date.now() + 60 * 60 * 1000 });
-	return token;
-}
-
-async function sendEmptyWebPush(subscription: PushSubscriptionRecord, env: EnvWithBindings) {
-	const endpoint = new URL(subscription.endpoint);
-	const audience = `${endpoint.protocol}//${endpoint.host}`;
-	const jwt = await getVapidJwt(audience, env);
-
-	const response = await fetch(subscription.endpoint, {
-		method: "POST",
-		headers: {
-			Authorization: `vapid t=${jwt}, k=${env.VAPID_PUBLIC_KEY}`,
-			TTL: "60",
-			Urgency: "high",
-		},
-	});
-
-	if (!response.ok && response.status !== 201) {
-		const responseText = await response.text();
-		const staleSubscription =
-			response.status === 404 ||
-			response.status === 410 ||
-			(response.status === 400 && responseText.includes("VapidPkHashMismatch"));
-		if (staleSubscription && env.DB) {
-			await env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(subscription.endpoint).run();
-		}
-		throw new Error(`Push service returned ${response.status}: ${responseText}`);
-	}
-
-	return response.status;
-}
-
 function apnsConfig(env: EnvWithBindings): APNsConfig | null {
 	if (!env.APNS_TEAM_ID || !env.APNS_KEY_ID || !env.APNS_PRIVATE_KEY || !env.APNS_TOPIC || !env.APNS_ENROLLMENT_SECRET ||
 		(env.APNS_ENVIRONMENT !== "sandbox" && env.APNS_ENVIRONMENT !== "production")) return null;
@@ -895,7 +687,7 @@ async function pendingApprovalCount(env: EnvWithBindings): Promise<number> {
 	return result?.count ?? 0;
 }
 
-async function notifyNative(requestId: string | null, env: EnvWithBindings, schedule = true) {
+async function notifyNative(requestId: string | null, env: EnvWithBindings, schedule = true, pairingCode?: string) {
 	const config = apnsConfig(env);
 	if (!config || !env.DB) return;
 	if (schedule && env.APPROVAL_HUB) {
@@ -909,7 +701,7 @@ async function notifyNative(requestId: string | null, env: EnvWithBindings, sche
 	const devices = await env.DB.prepare("SELECT id, token FROM native_push_devices ORDER BY updated_at DESC LIMIT 20").all<{id: string; token: string}>();
 	await Promise.all(devices.results.map(async device => {
 		try {
-			const result = await sendAPNs(config, device.token, requestId, badgeCount);
+			const result = await sendAPNs(config, device.token, requestId, badgeCount, fetch, pairingCode);
 			if (result.stale) await env.DB!.prepare("DELETE FROM native_push_devices WHERE id = ? AND token = ?").bind(device.id, device.token).run();
 		} catch { /* A failed notification must never prevent an approval request. */ }
 	}));
@@ -1328,28 +1120,6 @@ function mapDevice(row: DeviceRecord) {
 		createdAt: row.created_at,
 		revokedAt: row.revoked_at,
 	};
-}
-
-async function createDemoApproval(subscriptionId: string, env: EnvWithBindings) {
-	if (!env.DB) throw new Error("D1 binding is not configured.");
-	const id = crypto.randomUUID();
-	const createdAt = new Date().toISOString();
-	await env.DB.prepare(
-		`INSERT INTO approval_requests
-			(id, subscription_id, device, command, message, secret_refs, status, created_at, decided_at)
-		 VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL)`,
-	)
-		.bind(
-			id,
-			subscriptionId,
-			"mac-mini.local",
-			"sickrat run --env-file .env -- npm test",
-			"Run the test suite with the same API access the agent will use in CI.",
-			JSON.stringify(["openai/api-key", "prod/database/url"]),
-			createdAt,
-		)
-		.run();
-	return id;
 }
 
 async function handleApi(request: Request, env: EnvWithBindings, ctx?: ExecutionContext) {
@@ -1905,11 +1675,7 @@ async function handleApi(request: Request, env: EnvWithBindings, ctx?: Execution
 	if (url.pathname === "/api/capabilities" && request.method === "GET") {
 		return json({
 			ok: true,
-			push: {
-				supported: true,
-				configured: Boolean(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY),
-				vapidPublicKey: env.VAPID_PUBLIC_KEY ?? null,
-			},
+			push: { supported: false, configured: false, vapidPublicKey: null },
 			nativePush: { configured: Boolean(apnsConfig(env)) },
 			database: {
 				configured: Boolean(env.DB),
@@ -1962,32 +1728,9 @@ async function handleApi(request: Request, env: EnvWithBindings, ctx?: Execution
 				)
 					.bind(code, deviceId, body.label, JSON.stringify(body.publicKey), expiresAt)
 					.run();
-				let pushStatus: number | null = null;
-				const subscription = await env.DB.prepare("SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions ORDER BY created_at DESC LIMIT 1")
-					.first<PushSubscriptionRecord & { p256dh: string; auth: string }>();
-				let realtime: { ok: true; delivered: number } | null = null;
-				if (subscription) {
-					const pairing = await env.DB.prepare(
-						"SELECT code, device_id, label, public_key, expires_at, approved_at FROM pairing_codes WHERE code = ?",
-					)
-						.bind(code)
-						.first<PairingCodeRecord>();
-					if (pairing) realtime = await publishPairing(subscription.id, mapPairing(pairing), env);
-					try {
-						pushStatus = await sendEmptyWebPush(
-							{
-								id: subscription.id,
-								endpoint: subscription.endpoint,
-								keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-								created_at: subscription.created_at,
-							},
-							env,
-						);
-					} catch {
-						// The CLI still shows the pairing code and polls for approval.
-					}
-				}
-				return json({ code, deviceId, expiresAt, realtime, pushStatus });
+
+				try { await notifyNative(null, env, false, code); } catch { /* Pairing remains available in the app. */ }
+				return json({ code, deviceId, expiresAt, realtime: null, pushStatus: null });
 			} catch (error) {
 				if (attempt === 4) throw error;
 				code = randomPairingCode();
@@ -2132,10 +1875,6 @@ async function handleApi(request: Request, env: EnvWithBindings, ctx?: Execution
 			return json({ error: "Approval timeout must be between 1 minute and 8 hours." }, { status: 400 });
 		}
 
-		const subscription = await env.DB.prepare("SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions ORDER BY created_at DESC LIMIT 1")
-			.first<PushSubscriptionRecord & { p256dh: string; auth: string }>();
-		const native = apnsConfig(env) ? await env.DB.prepare("SELECT id FROM native_push_devices LIMIT 1").first<{id: string}>() : null;
-		if (!subscription && !native) return json({ error: "No push subscription is registered. Enable notifications in Sickrat first." }, { status: 409 });
 
 		const id = crypto.randomUUID();
 		const createdAt = new Date().toISOString();
@@ -2146,7 +1885,7 @@ async function handleApi(request: Request, env: EnvWithBindings, ctx?: Execution
 		)
 			.bind(
 				id,
-				subscription?.id ?? `native:${native!.id}`,
+				"native:inbox",
 				device.label,
 				body.command,
 				body.message ?? null,
@@ -2159,24 +1898,9 @@ async function handleApi(request: Request, env: EnvWithBindings, ctx?: Execution
 				JSON.stringify(body.ephemeralPublicKey),
 			)
 			.run();
-		const approval = await env.DB.prepare(`${approvalSelect} WHERE id = ?`).bind(id).first<ApprovalRequestRecord>();
-		const realtime = approval && subscription ? await publishApproval(subscription.id, mapApproval(approval), env) : null;
-		let pushStatus: number | null = null;
-		try {
-			if (subscription) pushStatus = await sendEmptyWebPush(
-				{
-					id: subscription.id,
-					endpoint: subscription.endpoint,
-					keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-					created_at: subscription.created_at,
-				},
-				env,
-			);
-		} catch {
-			// Realtime delivery may still have succeeded; the CLI will keep polling either way.
-		}
+
 		try { await notifyNative(id, env); } catch { /* Approval remains pending if notification delivery fails. */ }
-		return json({ requestId: id, status: "pending", realtime, pushStatus });
+		return json({ requestId: id, status: "pending", realtime: null, pushStatus: null });
 	}
 
 	if (url.pathname === "/api/native-push/enroll" && request.method === "POST") {
@@ -2271,77 +1995,8 @@ async function handleApi(request: Request, env: EnvWithBindings, ctx?: Execution
 		return json({ ok: true });
 	}
 
-	if (url.pathname === "/api/push/subscribe" && request.method === "POST") {
-		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
-		const body = (await request.json()) as {
-			subscription?: {
-				endpoint?: string;
-				keys?: {
-					p256dh?: string;
-					auth?: string;
-				};
-			};
-		};
-		const subscription = body.subscription;
-		if (!subscription?.endpoint || !subscription.keys?.p256dh || !subscription.keys.auth) {
-			return json({ error: "Invalid PushSubscription JSON." }, { status: 400 });
-		}
-		const id = crypto.randomUUID();
-		const createdAt = new Date().toISOString();
-		await env.DB.prepare(
-			`INSERT INTO push_subscriptions (id, endpoint, p256dh, auth, created_at)
-			 VALUES (?, ?, ?, ?, ?)
-			 ON CONFLICT(endpoint) DO UPDATE SET
-				id = excluded.id,
-				p256dh = excluded.p256dh,
-				auth = excluded.auth,
-				created_at = excluded.created_at`,
-		)
-			.bind(id, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth, createdAt)
-			.run();
-		return json({ id, endpoint: subscription.endpoint, createdAt });
-	}
-
-	if (url.pathname === "/api/push/test" && request.method === "POST") {
-		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
-		const body = (await request.json()) as { id?: string };
-		if (!body.id) return json({ error: "Subscription id is required." }, { status: 400 });
-		const result = await env.DB.prepare(
-			"SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions WHERE id = ?",
-		)
-			.bind(body.id)
-			.first<PushSubscriptionRecord & { p256dh: string; auth: string }>();
-		if (!result) return json({ error: "Subscription not found." }, { status: 404 });
-		const requestId = await createDemoApproval(result.id, env);
-		const approvalRow = await env.DB.prepare(`${approvalSelect} WHERE id = ?`)
-			.bind(requestId)
-			.first<ApprovalRequestRecord>();
-		const realtime = approvalRow ? await publishApproval(result.id, mapApproval(approvalRow), env) : null;
-		try {
-			const status = await sendEmptyWebPush(
-				{
-					id: result.id,
-					endpoint: result.endpoint,
-					keys: {
-						p256dh: result.p256dh,
-						auth: result.auth,
-					},
-					created_at: result.created_at,
-				},
-				env,
-			);
-			return json({ ok: true, status, requestId, realtime });
-		} catch (error) {
-			return json(
-				{
-					ok: false,
-					requestId,
-					realtime,
-					error: error instanceof Error ? error.message : "Push delivery failed.",
-				},
-				{ status: 502 },
-			);
-		}
+	if (url.pathname.startsWith("/api/push/") || ["/api/approvals/latest", "/api/pairing/latest", "/api/notifications/latest"].includes(url.pathname)) {
+		return json({ error: "Web push is retired. Use the native iOS app and APNs." }, { status: 410 });
 	}
 
 	if (url.pathname === "/api/secrets" && request.method === "GET") {
@@ -2405,56 +2060,6 @@ async function handleApi(request: Request, env: EnvWithBindings, ctx?: Execution
 		return json({ secret: { id, ref: body.ref, label: body.label, kdf: body.kdf, createdAt, updatedAt: now } });
 	}
 
-	if (url.pathname === "/api/approvals/latest" && request.method === "POST") {
-		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
-		const body = (await request.json()) as { endpoint?: string };
-		if (!body.endpoint) return json({ error: "Subscription endpoint is required." }, { status: 400 });
-		const subscription = await env.DB.prepare("SELECT id FROM push_subscriptions WHERE endpoint = ?")
-			.bind(body.endpoint)
-			.first<{ id: string }>();
-		if (!subscription) return json({ error: "Subscription not found." }, { status: 404 });
-		const approval = await env.DB.prepare(
-			`${approvalSelect}
-			 WHERE subscription_id = ? AND status = 'pending'
-			 ORDER BY created_at DESC
-			 LIMIT 10`,
-		)
-			.bind(subscription.id)
-			.all<ApprovalRequestRecord>();
-		const latestApproval = approval.results.find((row) => !isExpiredPendingApproval(row));
-		return json({ approval: latestApproval ? mapApproval(latestApproval) : null });
-	}
-
-	if (url.pathname === "/api/pairing/latest" && request.method === "POST") {
-		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
-		const body = (await request.json()) as { endpoint?: string };
-		if (!body.endpoint) return json({ error: "Subscription endpoint is required." }, { status: 400 });
-		const subscription = await env.DB.prepare("SELECT id FROM push_subscriptions WHERE endpoint = ?")
-			.bind(body.endpoint)
-			.first<{ id: string }>();
-		if (!subscription) return json({ error: "Subscription not found." }, { status: 404 });
-		const pairing = await env.DB.prepare(
-			`SELECT code, device_id, label, public_key, expires_at, approved_at
-			 FROM pairing_codes
-			 WHERE approved_at IS NULL AND expires_at > ?
-			 ORDER BY expires_at DESC
-			 LIMIT 1`,
-		)
-			.bind(new Date().toISOString())
-			.first<PairingCodeRecord>();
-		return json({ pairing: pairing ? mapPairing(pairing) : null });
-	}
-
-	if (url.pathname === "/api/notifications/latest" && request.method === "POST") {
-		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });
-		const body = (await request.json()) as { endpoint?: string };
-		if (!body.endpoint) return json({ error: "Subscription endpoint is required." }, { status: 400 });
-		const subscription = await env.DB.prepare("SELECT id FROM push_subscriptions WHERE endpoint = ?")
-			.bind(body.endpoint)
-			.first<{ id: string }>();
-		if (!subscription) return json({ error: "Subscription not found." }, { status: 404 });
-		return json({ notification: await getLatestNotification(subscription.id, env) });
-	}
 
 	if (url.pathname === "/api/approvals" && request.method === "GET") {
 		if (!(await ensureSchema(env)) || !env.DB) return json({ error: "D1 binding is not configured." }, { status: 500 });

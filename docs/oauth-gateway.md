@@ -1,8 +1,11 @@
 # OAuth Gateway
 
-Sickrat supports agent-requested access to OAuth integrations with the same approval and passkey protection model used for secret refs. Cloudflare and X are the first provider implementations.
+See [native iOS migration](native-ios-migration.md) for the current owner app, key recovery, link handoff, and intentional CLI boundaries.
 
-The product goal is not to become a hosted connector platform. Each vault remains user-owned. Provider refresh tokens are stored as encrypted vault records in the user's D1 database, unlocked from the PWA with the vault key, and released to paired machines only as short-lived access-token grants after explicit approval.
+
+Sickrat supports agent-requested access to OAuth integrations with the same approval and device authentication model used for secret refs. Cloudflare and X are the first provider implementations.
+
+The product goal is not to become a hosted connector platform. Each vault remains user-owned. Provider refresh tokens are stored as encrypted vault records in the user's D1 database, unlocked from the iOS app with the vault key, and released to paired machines only as short-lived access-token grants after explicit approval.
 
 ## Product Shape
 
@@ -30,7 +33,7 @@ SHOW_BROWSER=true
 
 ### Provider Catalog
 
-The PWA should show a catalog of supported providers:
+The iOS app should show a catalog of supported providers:
 
 - GitHub
 - Cloudflare
@@ -55,7 +58,7 @@ Each provider definition should include:
 - account identity endpoint, if available
 - OAuth app setup requirements
 
-The catalog is non-sensitive config shipped with the Worker/PWA. A later version can add user-defined providers from the PWA.
+The catalog is non-sensitive config shipped with the Worker API. A later version can add user-defined providers from the iOS app.
 
 ### Connections
 
@@ -107,16 +110,16 @@ The complete generic flow is implemented for Cloudflare and X:
 
 - The CLI parses canonical `sickrat://oauth/...` descriptors from `--env` and env files.
 - Typed resources are covered by the paired-device signature and persisted with the approval.
-- The PWA manages provider client configuration and encrypted account connections.
+- The iOS app manages provider client configuration and encrypted account connections.
 - Authorization uses authorization code with PKCE; refresh is proxied through the user-owned Worker.
-- Refresh tokens are encrypted under the passkey-protected vault key before D1 storage.
+- Refresh tokens are encrypted under the device-protected vault key before D1 storage.
 - Approval shows the requested scopes and the connection's effective scope set.
-- When approval is blocked, the PWA names the missing OAuth scope IDs and shows connection-flow errors on the approval screen. The provider callback page only confirms that a response was received; it does not claim that all requested scopes were granted.
-- The PWA seals access tokens to the requesting CLI's ephemeral public key.
+- When approval is blocked, the iOS app names the missing OAuth scope IDs and shows connection-flow errors on the approval screen. The provider callback page only confirms that a response was received; it does not claim that all requested scopes were granted.
+- The iOS app seals access tokens to the requesting CLI's ephemeral public key.
 - The CLI validates provider, scopes, and expiry before environment injection.
 - Timed local grants cache the encrypted access-token grant only until the earlier of approval expiry or provider-token expiry.
 
-X uses OAuth 2.0 Authorization Code with PKCE as a public client. Its persistent connection requests `users.read`, `tweet.read`, and `offline.access`; identity comes from `GET https://api.x.com/2/users/me`. Personal-brand research and draft preparation use only `tweet.read` and `users.read`. Publishing is step-up authorization: the agent must explicitly request the sensitive `tweet.write` scope, and the PWA must show that permission in the approval rather than treating it as part of drafting.
+X uses OAuth 2.0 Authorization Code with PKCE as a public client. Its persistent connection requests `users.read`, `tweet.read`, and `offline.access`; identity comes from `GET https://api.x.com/2/users/me`. Personal-brand research and draft preparation use only `tweet.read` and `users.read`. Publishing is step-up authorization: the agent must explicitly request the sensitive `tweet.write` scope, and the iOS app must show that permission in the approval rather than treating it as part of drafting.
 
 Adding another standards-based provider is primarily a catalog entry in `apps/web/src/worker/oauth.ts`: endpoints, scope descriptions, identity response paths, and token endpoint authentication mode. The request, connection, refresh, approval, grant, and CLI injection paths are provider-independent.
 
@@ -166,25 +169,25 @@ For `sickrat run --env GITHUB_TOKEN='sickrat://oauth/github?scope=repo'`, the `o
 
 1. CLI creates an approval request with provider id, scopes, message, command, device id, and request public key.
 2. Worker verifies the paired device signature and stores a pending approval.
-3. Worker sends realtime and push notifications to the PWA.
-4. PWA displays provider, account, scopes, command, device, requested duration, and prior history.
-5. User unlocks the vault key with passkey.
-6. PWA decrypts the stored refresh token.
-7. PWA or Worker exchanges the refresh token for a new access token.
-8. PWA seals the access token into the same encrypted grant envelope used for secrets.
+3. Worker sends realtime and push notifications to the iOS app.
+4. iOS app displays provider, account, scopes, command, device, requested duration, and prior history.
+5. User unlocks the vault key with device authentication.
+6. iOS app decrypts the stored refresh token.
+7. iOS app or Worker exchanges the refresh token for a new access token.
+8. iOS app seals the access token into the same encrypted grant envelope used for secrets.
 9. CLI consumes the grant once and injects the token into the child process or returns it to the requesting agent.
 
 ### Just-In-Time Connection
 
 If no matching connection exists, approval becomes a connect-and-approve flow:
 
-1. PWA shows that the requested provider or scopes are not connected.
+1. iOS app shows that the requested provider or scopes are not connected.
 2. User taps Connect.
-3. PWA creates PKCE material and a short-lived encrypted callback handoff, then offers an authorization link that can open in the system browser.
+3. iOS app creates PKCE material and a short-lived encrypted callback handoff, then offers an authorization link that can open in the system browser.
 4. Provider redirects the browser back to the vault callback route.
-5. The user-owned Worker encrypts the one-time callback result for the waiting PWA without exchanging the code or receiving the PKCE verifier.
-6. When the user returns to the installed PWA, it retrieves and decrypts the callback, exchanges the code, and stores the refresh token encrypted as a new connection.
-7. PWA continues the original approval and seals a short-lived access token for the CLI.
+5. The user-owned Worker encrypts the one-time callback result for the waiting iOS app without exchanging the code or receiving the PKCE verifier.
+6. When the user returns to the installed iOS app, it retrieves and decrypts the callback, exchanges the code, and stores the refresh token encrypted as a new connection.
+7. iOS app continues the original approval and seals a short-lived access token for the CLI.
 
 This mirrors missing-secret creation: the user can create the missing credential during the approval, and the original request continues.
 
@@ -194,31 +197,31 @@ Static secret approvals currently keep plaintext away from the Worker. OAuth ref
 
 V1 should support a user-owned Worker token-exchange proxy:
 
-- PWA decrypts the refresh token only after passkey unlock and approval intent.
-- PWA sends the refresh token to its own Worker over HTTPS for the token exchange.
+- iOS app decrypts the refresh token only after device authentication and approval intent.
+- iOS app sends the refresh token to its own Worker over HTTPS for the token exchange.
 - Worker calls the provider token endpoint and returns the access token response.
 - Worker does not persist plaintext refresh tokens or access tokens.
-- PWA seals the access token to the CLI request public key.
+- iOS app seals the access token to the CLI request public key.
 
-This means the Worker may transiently see OAuth token material. The PWA should label these connections as "Worker-assisted refresh" in internal metadata, and the threat model should be updated accordingly. Where a provider supports browser-safe PKCE refresh with CORS and no client secret, the PWA can refresh directly and preserve the stronger "Worker never sees plaintext" property.
+This means the Worker may transiently see OAuth token material. The iOS app should label these connections as "Worker-assisted refresh" in internal metadata, and the threat model should be updated accordingly. Where a provider supports browser-safe PKCE refresh with CORS and no client secret, the iOS app can refresh directly and preserve the stronger "Worker never sees plaintext" property.
 
-The browser callback relay is separate from token exchange. Its D1 record expires after five minutes and contains only the callback result sealed to an ephemeral P-256 public key. The matching private key and PKCE verifier remain in the installed PWA. The Worker never stores either private value, a refresh token, or an access token in the handoff record. The handoff is marked consumed after retrieval.
+The browser callback relay is separate from token exchange. Its D1 record expires after five minutes and contains only the callback result sealed to an ephemeral P-256 public key. The matching private key and PKCE verifier remain in the installed iOS app. The Worker never stores either private value, a refresh token, or an access token in the handoff record. The handoff is marked consumed after retrieval.
 
 ## OAuth App Configuration
 
 Provider OAuth apps are a separate product concern from vault ownership.
 
-V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL shown by `sickrat provider show <provider>` or the PWA into that client, and stores the public client ID with `sickrat provider configure <provider> --client-id <id>` or the matching Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant. X requires OAuth 2.0 user authentication, a public client, the exact X callback URL shown by Sickrat, PKCE `S256`, and `offline.access` for refresh tokens. The X app needs read permission for drafting and should enable write permission only when the user intends to approve publishing requests.
+V1 supports provider definitions that work with public clients and PKCE. The user creates a provider OAuth client, copies the callback URL shown by `sickrat provider show <provider>` or the iOS app into that client, and stores the public client ID with `sickrat provider configure <provider> --client-id <id>` or the matching Connections screen. Cloudflare requires authorization code, PKCE `S256`, token endpoint authentication `none`, and the `refresh_token` grant. X requires OAuth 2.0 user authentication, a public client, the exact X callback URL shown by Sickrat, PKCE `S256`, and `offline.access` for refresh tokens. The X app needs read permission for drafting and should enable write permission only when the user intends to approve publishing requests.
 
 A proactive connection requests only the provider's minimum identity scopes. Operational scopes come from an agent request and are authorized just in time. If an existing connection does not cover the requested scopes, the approval flow performs step-up authorization and replaces the encrypted refresh credential with the newly granted scope set. The provider-side OAuth client must still allow every scope Sickrat may request; that allowlist defines the client's maximum capability, while each authorization request and user consent define the connection's actual capability.
 
 Providers that require a client secret need a later extension because that secret must be encrypted before storage and decrypted only for Worker-assisted exchange. The longer-term modes are:
 
-- **User-provided OAuth app:** the user enters client id and client secret in the PWA; client secret is encrypted in the vault and used only during connect/refresh.
+- **User-provided OAuth app:** the user enters client id and client secret in the iOS app; client secret is encrypted in the vault and used only during connect/refresh.
 - **Public Sickrat app:** acceptable only for providers that allow public clients, PKCE, and no client secret.
 - **Optional redirect broker:** a hosted Sickrat service may help with redirect URI limitations, but must not store tokens. This is a later decision because it weakens the current no-central-service story.
 
-Arbitrary user-owned `workers.dev` URLs are not accepted as redirect URIs by many OAuth providers. The PWA needs clear setup states when a provider requires a custom OAuth app.
+Arbitrary user-owned `workers.dev` URLs are not accepted as redirect URIs by many OAuth providers. The iOS app needs clear setup states when a provider requires a custom OAuth app.
 
 ## Scope UX
 
@@ -243,9 +246,9 @@ Risk grouping should be local catalog metadata:
 - High: write data, delete data, admin/account scopes
 - Sensitive: billing, security settings, user impersonation, broad offline access
 
-If an agent requests scopes wider than an existing connection, the PWA should require a fresh provider consent flow or make the user choose a narrower existing connection. It should not silently mint a token with scopes that were not previously granted.
+If an agent requests scopes wider than an existing connection, the iOS app should require a fresh provider consent flow or make the user choose a narrower existing connection. It should not silently mint a token with scopes that were not previously granted.
 
-## PWA UX
+## iOS app UX
 
 Add a `Connections` section to the app navigation.
 
@@ -277,9 +280,9 @@ sickrat run --env ENV='sickrat://oauth/provider?scope=scope-a&scope=scope-b' -- 
 sickrat run --env-file <file> -- <command...>
 ```
 
-`sickrat provider list/show` expose the same non-secret catalog, callback, configuration, and scope-risk metadata as the PWA. `provider configure` saves or replaces only the public client ID; it does not accept a client secret.
+`sickrat provider list/show` expose the same non-secret catalog, callback, configuration, and scope-risk metadata as the iOS app. `provider configure` saves or replaces only the public client ID; it does not accept a client secret.
 
-`sickrat connection list/show` expose provider/account/scope metadata. They do not require vault unlock because the metadata is non-secret, but a listed connection does not imply access without approval. `connection connect` and `connection reauthorize` hand off to the PWA because OAuth consent and refresh-token encryption require the passkey-unlocked vault key.
+`sickrat connection list/show` expose provider/account/scope metadata. They do not require vault unlock because the metadata is non-secret, but a listed connection does not imply access without approval. `connection connect` and `connection reauthorize` hand off to the iOS app because OAuth consent and refresh-token encryption require the device-authenticated vault key.
 
 Timed local grants should work like secret grants. The CLI may cache approved access tokens encrypted until either the approved access window or the provider token expiry, whichever comes first. It must not cache refresh tokens.
 
@@ -358,7 +361,7 @@ Audit should record metadata, not token values:
 - approved/denied
 - token expiry
 - access window expiry
-- whether refresh was direct PWA or Worker-assisted
+- whether refresh was direct iOS app or Worker-assisted
 
 ## Security Rules
 
@@ -391,5 +394,5 @@ Remaining follow-up work includes provider revocation calls, richer audit histor
 ## Open Decisions
 
 - Whether OAuth app client secrets are encrypted vault records, Worker secrets, or both depending on provider.
-- How much provider catalog metadata should ship statically versus be user-editable in the PWA.
+- How much provider catalog metadata should ship statically versus be user-editable in the iOS app.
 - Whether a central redirect broker is acceptable later for providers with rigid redirect URI rules.

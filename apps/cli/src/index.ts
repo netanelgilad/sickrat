@@ -21,6 +21,7 @@ import {
 import { canonicalApprovalPayload, isOAuthReferenceSegment, type ApprovalRequestCreate, type BrowserSessionGrant, type EncryptedGrant, type GrantPayload, type OAuthProvider, type PairingCodeResponse, type PairingCodeStatusResponse } from "@sickrat/protocol";
 import { parseBrowserSessionReference, parseSickratUri, resourceRequestForEnv, type ParsedEnvResource } from "./resource-requests.js";
 import QRCode from "qrcode";
+import { startMcp } from "./mcp.js";
 import { cloudflareProvisioningScopes } from "./cloudflare-scopes.js";
 import { isCloudflareAuthenticationError, refreshCloudflareOAuth, retryCloudflareAuthentication, shouldRefreshCloudflareOAuth, type CloudflareOAuthState } from "./cloudflare-auth.js";
 import { formatOAuthProvider, parseConnectionReference, parseProviderCommand, providerListLine, providerSetupUrl } from "./oauth-management.js";
@@ -372,6 +373,7 @@ Usage:
   sickrat vault update [name] [--dry-run] [--yes] [--force-unlock]
   sickrat self update [--yes]
   sickrat update [--yes]
+  sickrat mcp [--transport stdio|http] [--port 8789] [--token-file <path>] [--public-url https://host/mcp]
   sickrat pair <worker-url> [--label <name>]
   sickrat provider list [--json]
   sickrat provider show <provider> [--json]
@@ -412,6 +414,14 @@ Examples:
 }
 
 function commandHelp(command: string): never {
+	if (command === "mcp") printAndExit(`Usage: sickrat mcp [--transport stdio|http] [--port 8789] [--token-file <path>] [--public-url https://host/mcp]
+
+Uses the currently paired device. Default: stdio. HTTP binds only to 127.0.0.1;
+use a TLS reverse proxy for remote Executor access. HTTP requires a token file
+containing at least 32 random bytes encoded as base64url. Never put it in chat.
+Access requests require phone approval; collect_access returns plaintext once.
+See docs/mcp.md for setup, lifecycle, and security boundaries.
+`);
 	const help: Record<string, string> = {
 		login: `sickrat login
 
@@ -2221,7 +2231,8 @@ function uniqueRefs(refs: string[], allowEmpty = false) {
 	return unique;
 }
 
-async function requestGrant(input: { refs: string[]; resourceRequests?: ApprovalRequestCreate["resourceRequests"]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean }) {
+async function requestGrant(input: { refs: string[]; resourceRequests?: ApprovalRequestCreate["resourceRequests"]; message?: string; command: string; accessDurationSeconds?: number; approvalWaitSeconds?: number; allowCache?: boolean; signal?: AbortSignal; onCreated?: (requestId: string, approvalUrl: string) => void }) {
+	input.signal?.throwIfAborted();
 	validateRequestMessage(input.message);
 	const hasNonSecretRequests = input.resourceRequests?.some((request) => request.type !== "secret") ?? false;
 	const refs = uniqueRefs(input.refs, hasNonSecretRequests);
@@ -2255,7 +2266,9 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 	const created = await api<{ requestId: string; status: "pending" }>(config.workerUrl, "/api/approval-requests", {
 		method: "POST",
 		body: JSON.stringify({ ...unsigned, signature }),
+		signal: input.signal,
 	});
+	input.onCreated?.(created.requestId, `${config.workerUrl}/approve/${encodeURIComponent(created.requestId)}`);
 	console.error(
 		input.accessDurationSeconds
 			? `Timed access request ${created.requestId} sent for ${formatDuration(input.accessDurationSeconds)}. Waiting for phone approval...`
@@ -2277,12 +2290,14 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 	let lastHeartbeatAt = 0;
 	const approvalWaitMs = approvalWaitSeconds * 1000;
 	while (Date.now() - started < approvalWaitMs) {
+		input.signal?.throwIfAborted();
 		await new Promise((resolve) => setTimeout(resolve, 1500));
+		input.signal?.throwIfAborted();
 		const result = await api<{
 			status: "pending" | "approved" | "denied";
 			grantCiphertext: EncryptedGrant | null;
 			accessExpiresAt?: string | null;
-		}>(config.workerUrl, `/api/approvals/${created.requestId}/grant`);
+		}>(config.workerUrl, `/api/approvals/${created.requestId}/grant`, { signal: input.signal });
 		if (result.status === "denied") throw new Error("Request denied.");
 		if (result.status === "approved" && result.grantCiphertext) {
 			const grant = await decryptGrant(result.grantCiphertext, keyPair.privateKey);
@@ -2308,7 +2323,7 @@ async function requestGrant(input: { refs: string[]; resourceRequests?: Approval
 					if (Date.parse(session.expiresAt) <= Date.now()) throw new Error("Browser-session transaction grant is already expired.");
 				}
 			}
-			if (grant.accessExpiresAt && Date.parse(grant.accessExpiresAt) > Date.now()) {
+			if (input.allowCache !== false && grant.accessExpiresAt && Date.parse(grant.accessExpiresAt) > Date.now()) {
 				const providerExpiries = Object.values(grant.oauthTokens ?? {})
 					.map((token) => token.expiresAt ? Date.parse(token.expiresAt) : Number.POSITIVE_INFINITY)
 					.filter(Number.isFinite);
@@ -2819,6 +2834,7 @@ async function main() {
 			return;
 		}
 		if (hasHelpFlag(args)) {
+			if (command === "mcp") commandHelp("mcp");
 			if (command === "login") commandHelp("login");
 			if (command === "vault" && args[1] === "create") commandHelp("vault create");
 			if (command === "vault" && args[1] === "status") commandHelp("vault status");
@@ -2833,6 +2849,16 @@ async function main() {
 			if (command === "reveal" || command === "request") commandHelp("reveal");
 			unknownCommand(command);
 		}
+		if (command === "mcp") return await startMcp(args.slice(1), {
+			status: async () => {
+				const config = await readConfig();
+				if (!config.workerUrl || !config.deviceId || !config.signingPrivateKey) throw new Error("Run sickrat pair <worker-url> first.");
+				return { workerUrl: config.workerUrl, deviceId: config.deviceId, label: config.label, pairedAt: config.pairedAt };
+			},
+			providers: listOAuthProviders,
+			connections: () => listOAuthConnections(false),
+			request: requestGrant,
+		}, cliVersion);
 		if (command === "login") return await cloudflareLogin(args);
 		if (command === "provision") return await createVault(args);
 		if (command === "vault" && args[1] === "create") return await createVault(args.slice(1));

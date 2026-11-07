@@ -130,6 +130,14 @@ If the requested reference does not exist yet, the approval screen can collect t
 
 Planned commands include vault listing and safer delivery modes beyond environment variables. See [docs/cli.md](docs/cli.md).
 
+## MCP and Executor
+
+Run `sickrat mcp` for local stdio MCP clients, or `sickrat mcp --transport http
+--token-file <path>` for an authenticated HTTP endpoint on a paired host.
+The server supports OAuth metadata and phone-approved access to secrets and
+OAuth tokens. See [MCP setup and Executor integration](docs/mcp.md) for bearer
+credentials, HTTPS hosting, and single-use collection behavior.
+
 ## Install The CLI
 
 Sickrat CLI is distributed as compiled binaries from GitHub Releases.

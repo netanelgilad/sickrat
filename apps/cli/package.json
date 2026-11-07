@@ -13,9 +13,11 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.32.2",
 		"@sickrat/browser-session": "0.1.46",
 		"@sickrat/protocol": "0.0.0",
-		"qrcode": "^1.5.4"
+		"qrcode": "^1.5.4",
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
 		"@types/node": "^25.9.2",
